@@ -182,8 +182,12 @@ export {};
  *
  * card-export.js
  * @callback ExportCardJson            Card → 酒馆卡 JSON。以 card.raw 为底，只覆盖 card.worldEntries（→ data.character_book）
- *                                     和 card.regexScripts（→ data.extensions.regex_scripts，去掉 origin）；没改过的卡结果与 raw 相同。
- *                                     V1 卡只有在必须写世界书 / 正则时才升级成 V2。不修改 card.raw。
+ *                                     和 card.regexScripts（→ data.extensions.regex_scripts，去掉 origin），
+ *                                     以及和 raw 解析结果不同的文字字段（description / personality / scenario / mesExample →
+ *                                     顶层 + data.*；systemPrompt / postHistoryInstructions → data.*；depthPrompt.prompt →
+ *                                     data.extensions.depth_prompt.prompt，同酒馆 charaFormatData）；没改过的卡结果与 raw 相同。
+ *                                     V1 卡只有在必须写世界书 / 正则 / 只有 data 里才有的字段时才升级成 V2。不修改 card.raw。
+ *   卡的文字字段（description 等）存在 Card 上（从 raw 解析出来单存），「拼装」页就地编辑改的是它们，不改 raw。
  * @param {Card} card
  * @param {{stripPrivate?: boolean}} [options]  stripPrivate: 照酒馆导出时的 unsetPrivateFields（fav=false、删 chat），分享用
  * @returns {Object}
@@ -275,7 +279,9 @@ export {};
  * @property {string} after                  position 1
  * @property {WorldEntry[]} beforeEntries    组成 before 的条目，顺序与文本一致
  * @property {WorldEntry[]} afterEntries
- * @property {WorldInfoDepthGroup[]} depth   position 4
+ * @property {string[]} [beforeContents]     组成 before 的各条目宏替换之后的文字（与 beforeEntries 一一对应）；assemble.js 用它逐条对齐出处
+ * @property {string[]} [afterContents]      同上，after
+ * @property {WorldInfoDepthGroup[]} depth   position 4（每组另有 contents：各条目替换后的文字，与 entries 一一对应）
  * @property {string[]} examplesBefore       position 5，每个条目一项
  * @property {string[]} examplesAfter        position 6
  * @property {string[]} anTop                position 2「作者注释上」，每个条目一项，已是最终顺序（order 小的在上）
@@ -405,6 +411,9 @@ export {};
  * @property {string} label   给人看的名字
  * @property {number} chars   这一段的字符数
  * @property {number} [depth] 若是按深度注入的，注入深度
+ * @property {'system_prompt'|'post_history_instructions'} [cardField]  kind 'prompt' 且这段是角色卡覆盖 main / jailbreak 的内容时：
+ *   原文来自卡的哪个字段（「拼装」页就地编辑用，src/ui/prompt-edit.js）
+ * @property {string} [book]  kind 'worldinfo' 且能逐条对齐时：条目所在的书名（WorldEntry.book；和 id = uid 一起认出是哪一条）
  */
 
 /**

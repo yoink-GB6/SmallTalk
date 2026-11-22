@@ -237,6 +237,39 @@ export function scrollChatToEnd() {
 /** 这个操作还作数吗：不在切换中，而且发起时的存档还是当前存档 */
 const stillCurrent = epoch => !ui.switching && (epoch === undefined || epoch === persist.epoch);
 
+/**
+ * 把第 i 楼的原文改成 text：编辑消息（下面的 editMessage）和「拼装」页就地编辑（prompt-edit.js）共用这一条路。
+ * 只改 state，不存盘、不重画（调用方接着做）。
+ */
+function applyMessageEdit(i, text) {
+    const before = state.chat[i].content;
+    state.chat[i].content = permanentRegex(text, state.chat[i].role, true);
+    syncSwipeSlot(state.chat[i]);   // 改的是当前这个候选（酒馆 messageEditDone：mes.swipes[mes.swipe_id] = text）
+    // 原文改了，这一轮的摘要作废重压：改的是回复就是它自己，改的是用户输入就是紧跟着的那条回复（规则见 memory-fold.js）。
+    // 没改内容就点了保存：什么都不作废——这一楼要是在合并段里，作废会把整段拆掉、白白重压几十轮（复核实测 x=20 就是 20 轮）
+    if (state.chat[i].content !== before) {
+        invalidateTurnAt(state.chat, i);
+        setTimeout(ensureMemories, 0);
+    }
+}
+
+/**
+ * 「拼装」页就地改第 i 楼（prompt-edit.js）：和编辑消息的「保存」一样——改原文、候选同步、摘要作废，然后存盘、重画。
+ * 拦截条件由调用方先判断（chatWriteBlocked）。i 不是现有的楼时什么都不做，返回 false。
+ */
+export function editMessageText(i, text) {
+    if (!state.chat[i]) return false;
+    applyMessageEdit(i, text);
+    ui.rendered.delete(i);
+    save();
+    // 酒馆 messageEditDone（~8405 / ~8431）：保存编辑先发 MESSAGE_EDITED(楼层号)，重画完再发 MESSAGE_UPDATED(楼层号)；内容没变也发。
+    // 放在这里，聊天里的「保存」和拼装页就地改楼层两条路都会发给脚本
+    emitTavernEvent('message_edited', i);
+    renderAll();
+    emitTavernEvent('message_updated', i);
+    return true;
+}
+
 export function editMessage(i, epoch = persist.epoch) {
     const row = $('#chat').children[i];
     if (!row || ui.busy || !stillCurrent(epoch)) return;
@@ -248,23 +281,10 @@ export function editMessage(i, epoch = persist.epoch) {
     const done = (commit) => {
         row.classList.remove('editing');
         if (!stillCurrent(epoch)) return;   // 编辑期间切换了存档：这次编辑作废，不能写进新存档的第 i 楼
-        if (commit) {
-            const before = state.chat[i].content;
-            state.chat[i].content = permanentRegex(ta.value, state.chat[i].role, true);
-            syncSwipeSlot(state.chat[i]);   // 改的是当前这个候选（酒馆 messageEditDone：mes.swipes[mes.swipe_id] = text）
-            // 原文改了，这一轮的摘要作废重压：改的是回复就是它自己，改的是用户输入就是紧跟着的那条回复（规则见 memory-fold.js）。
-            // 没改内容就点了保存：什么都不作废——这一楼要是在合并段里，作废会把整段拆掉、白白重压几十轮（复核实测 x=20 就是 20 轮）
-            if (state.chat[i].content !== before) {
-                invalidateTurnAt(state.chat, i);
-                setTimeout(ensureMemories, 0);
-            }
-        }
-        ui.rendered.delete(i);
+        if (commit) { editMessageText(i, ta.value); return; }   // 保存：改原文、存盘、发事件、重画都在 editMessageText
+        ui.rendered.delete(i);   // 取消：只重画，不发事件
         save();
-        // 酒馆 messageEditDone（~8405 / ~8431）：保存编辑先发 MESSAGE_EDITED(楼层号)，重画完再发 MESSAGE_UPDATED(楼层号)；内容没变也发。取消不发
-        if (commit) emitTavernEvent('message_edited', i);
         renderAll();
-        if (commit) emitTavernEvent('message_updated', i);
     };
     body.replaceChildren(h('div', { class: 'mes_edit' }, ta,
         h('div', { class: 'row' },
