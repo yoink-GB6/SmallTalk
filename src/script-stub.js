@@ -1083,7 +1083,8 @@ export function buildScriptSrcdoc({ frameId, assetBase, colorScheme = 'light' })
         .map(l => (assetBase === undefined ? frameLibTag(l) : frameLibTag(l, assetBase))).join('\n');
     return `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n`
         // 覆盖层：透明（color-scheme 和主页面一致，否则 Chromium 给 iframe 画不透明的底）；body 的背景强制透明——脚本 $('body').css('background', …)
-        // 在酒馆里改的是酒馆页面的背景，到这里会铺满整个聊天区，拖动时（裁剪放开）会闪一下。默认文字色跟主题，脚本没设颜色的字也看得见
-        + `<style>:root{color-scheme:${scheme};}html,body{margin:0;padding:0;background:transparent!important;}body{color:var(--smalltalk-text,CanvasText);font-family:var(--smalltalk-font,system-ui,sans-serif);}</style>\n${stub}\n${libs}\n`
+        // 在酒馆里改的是酒馆页面的背景，到这里会铺满整个聊天区，拖动时（裁剪放开）会闪一下。默认文字色跟主题，脚本没设颜色的字也看得见。
+        // html / body 撑满（height:100%）：有的脚本启动时用 document.body.clientHeight > 0 判断「这个文档能不能挂界面」（真卡里的播放器就是），空 body 的高度是 0 会被判成不能用
+        + `<style>:root{color-scheme:${scheme};}html,body{margin:0;padding:0;height:100%;background:transparent!important;}body{color:var(--smalltalk-text,CanvasText);font-family:var(--smalltalk-font,system-ui,sans-serif);}</style>\n${stub}\n${libs}\n`
         + `<script>window.__smalltalkLibsReady && window.__smalltalkLibsReady();</script>\n</head>\n<body></body>\n</html>\n`;
 }

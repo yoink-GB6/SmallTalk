@@ -1104,6 +1104,6 @@ details[open] > .scr-head::before { content: '▾'; }
    弹框、模型下拉、提示条之下。高度由宿主算（到输入区上沿为止），不盖输入框和按钮排 */
 #chat-pane { position: relative; isolation: isolate; }
 .script-sandbox { position: absolute; left: 0; top: 0; width: 100%; height: 0; border: 0; margin: 0; padding: 0; z-index: 1;
-  background: transparent; pointer-events: none; clip-path: polygon(0 0, 0 0, 0 0); }
+  background: transparent; pointer-events: none; clip-path: inset(0 calc(100% - 1px) calc(100% - 1px) 0); }
 /* 卡 / 脚本发来的提示条：标明来源（文字里），中性样式（虚线色条），和系统自己的成功 / 错误提示区分开 */
 .toast.from-card { border-left-style: dashed; border-left-color: var(--dim); }

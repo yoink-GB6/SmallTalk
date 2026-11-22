@@ -138,6 +138,11 @@ function build(list) {
     // 拖动中（沙箱报了整块区域）在 iframe 外面松开鼠标：沙箱收不到 pointerup（见「悬浮区」的原型结论），由宿主告诉它
     window.addEventListener('pointerup', () => { if (me === rec && me.dragOpen) post(me, { kind: 'release' }); }, { signal: ac.signal, capture: true });
     window.addEventListener('blur', () => { if (me === rec && me.dragOpen) post(me, { kind: 'release' }); }, { signal: ac.signal });
+    // 系统深浅切换 / 「杂项」页换主题：把新的 color-scheme 和主题变量推过去（不一致时浏览器会给覆盖层画不透明的底）
+    try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (me === rec) flushScripts(); }, { signal: ac.signal }); } catch { /* ignore */ }
+    const themeMo = new MutationObserver(() => { if (me === rec) flushScripts(); else themeMo.disconnect(); });
+    themeMo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    ac.signal.addEventListener('abort', () => themeMo.disconnect());
     iframe.srcdoc = buildScriptSrcdoc({ frameId, colorScheme: scheme });
     host.append(iframe);
     applyClip(me);
@@ -187,7 +192,9 @@ function applyClip(r) {
     const f = r.iframe;
     const hide = floatHidden(r.cardId);
     f.style.visibility = hide ? 'hidden' : '';
-    if (hide || !r.rects.length) { f.style.pointerEvents = 'none'; f.style.clipPath = 'polygon(0 0, 0 0, 0 0)'; f.dataset.regions = '0'; return; }
+    // 没有区域：只留左上角 1 像素（透明、不拦点击）。不裁成完全空：浏览器会把完全看不见的跨源 iframe 当成不可见，暂停它的 requestAnimationFrame，
+    // 脚本的动画、靠 rAF 的初始化就停了（实测）。iframe 的布局尺寸始终等于聊天区（脚本启动时读 innerWidth / innerHeight / body.clientHeight 定位）
+    if (hide || !r.rects.length) { f.style.pointerEvents = 'none'; f.style.clipPath = 'inset(0 calc(100% - 1px) calc(100% - 1px) 0)'; f.dataset.regions = '0'; return; }
     f.style.pointerEvents = 'auto';
     f.style.clipPath = r.dragOpen ? 'none' : regionsClipPath(r.rects);
     f.dataset.regions = String(r.rects.length);
