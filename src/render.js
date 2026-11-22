@@ -563,15 +563,45 @@ const RESET_STYLE = '<style>*,*::before,*::after{box-sizing:border-box;}html,bod
 export const STUB_MARKER = 'data-smalltalk-stub';
 
 /**
+ * 酒馆主题变量的别名（定义在 style.css 的「酒馆主题变量的别名」那一组）。
+ * iframe 是独立文档，读不到主页面 :root 上的变量，而卡的整页 HTML 里常写 var(--SmartThemeEmColor)。
+ * 生成 srcdoc 时把这些变量在主页面上的**当前计算值**抄成一段 :root 规则放进去（只读的外观信息，没有敏感内容）。
+ * 放在卡自己的内容之前，所以卡如果自己在 :root 里定义了同名变量，仍以卡的为准。已渲染的 iframe 不会随换主题实时更新。
+ */
+export const THEME_ALIAS_VARS = [
+    '--SmartThemeBodyColor', '--SmartThemeEmColor', '--SmartThemeUnderlineColor', '--SmartThemeQuoteColor',
+    '--SmartThemeBlurTintColor', '--SmartThemeChatTintColor', '--SmartThemeUserMesBlurTintColor', '--SmartThemeBotMesBlurTintColor',
+    '--SmartThemeBorderColor', '--SmartThemeShadowColor', '--SmartThemeBlurStrength',
+    '--SmartThemeCheckboxBgColorR', '--SmartThemeCheckboxBgColorG', '--SmartThemeCheckboxBgColorB', '--SmartThemeCheckboxBgColorA',
+    '--SmartThemeCheckboxTickColorValue', '--SmartThemeCheckboxTickColor',
+    '--mainFontFamily', '--monoFontFamily', '--mainFontSize', '--fontScale', '--blurStrength', '--shadowWidth',
+    '--transparent', '--black30a', '--black50a', '--black60a', '--black70a', '--black90a', '--black100',
+    '--white20a', '--white30a', '--white50a', '--white60a', '--white70a', '--white100',
+    '--grey10', '--grey30', '--grey50', '--grey5020a', '--grey5050a', '--grey70', '--grey75', '--grey30a', '--grey7070a',
+    '--fullred', '--crimson70a', '--okGreen70a', '--cobalt30a', '--greyCAIbg', '--ivory', '--golden', '--warning', '--active', '--preferred',
+];
+
+/** 读主页面上的别名变量当前值，拼成 `<style>:root{…}</style>`；取不到（没有 DOM）就是空串。 */
+export function themeVarsStyle(win = globalThis.window) {
+    try {
+        const cs = win.getComputedStyle(win.document.documentElement);
+        const decls = THEME_ALIAS_VARS.map((n) => [n, cs.getPropertyValue(n).trim()]).filter(([, v]) => v)
+            // 值来自我们自己的样式表，不会含 `<`；保险起见仍把 `</` 打断，免得提前结束 <style>
+            .map(([n, v]) => `${n}:${v.replace(/<\//g, '<\\/')};`);
+        return decls.length ? `<style>:root{${decls.join('')}}</style>` : '';
+    } catch { return ''; }
+}
+
+/**
  * 生成 iframe 的 srcdoc。对应酒馆助手 createSrcContent，有一处改动：
  * 酒馆助手无论如何都把卡代码塞进自己外壳的 <body>（完整文档会被 HTML 解析器「压平」，卡的 <head> 内容落到 body 里）；
  * 我们对完整文档（<!doctype / <html）改为把 meta + 重置样式 + 桩 + 库注入到卡自己的 <head> 开头（没有 <head> 就放在 <html> 之后），
  * 保留卡的文档结构和 <html lang> 等属性。片段则包进我们自己的完整文档。
  * @param {string} code  卡代码（<pre> 的文本）
- * @param {{messageId: number, frameId: string, frameIndex?: number, context?: any, viewportHeight?: number, maxHeight?: number, assetBase?: string}} opts
+ * @param {{messageId: number, frameId: string, frameIndex?: number, context?: any, viewportHeight?: number, maxHeight?: number, assetBase?: string, themeStyle?: string}} opts
  *        assetBase：把 FRAME_LIBS 的相对地址算成绝对地址用的基准，默认是宿主页面的 document.baseURI（见 FRAME_LIBS 的注释）
  */
-export function buildSrcdoc(code, { messageId, frameId, frameIndex = 0, context = null, viewportHeight = 0, maxHeight = options.maxFrameHeight, assetBase = defaultAssetBase() }) {
+export function buildSrcdoc(code, { messageId, frameId, frameIndex = 0, context = null, viewportHeight = 0, maxHeight = options.maxFrameHeight, assetBase = defaultAssetBase(), themeStyle = '' }) {
     code = replaceVhInContent(String(code));
     const boot = {
         frameId: String(frameId),
@@ -585,7 +615,7 @@ export function buildSrcdoc(code, { messageId, frameId, frameIndex = 0, context 
     };
     const stub = `<script ${STUB_MARKER}>(${frameStubMain.toString()})(${embedJson(boot)});</script>`;
     const libs = FRAME_LIBS.filter((l) => l.when === 'always' || l.when.test(code)).map((l) => frameLibTag(l, assetBase)).join('\n');
-    const head = `<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n${RESET_STYLE}\n${stub}\n${libs}\n`;
+    const head = `<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n${themeStyle ? themeStyle + '\n' : ''}${RESET_STYLE}\n${stub}\n${libs}\n`;
 
     if (isFullDocument(code)) {
         const headTag = /<head(?:\s[^>]*)?>/i.exec(code);
@@ -811,6 +841,7 @@ function upgradePre(pre, code, { messageId, host, frameIndex }) {
             iframe.srcdoc = buildSrcdoc(code, {
                 messageId, frameId, frameIndex, context: context ?? null,
                 viewportHeight: win.innerHeight, maxHeight: options.maxFrameHeight,
+                themeStyle: themeVarsStyle(win),
             });
         });
 
