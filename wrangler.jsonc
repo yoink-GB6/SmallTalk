@@ -1,0 +1,11 @@
+// Cloudflare（Workers 静态站点）的发布配置。
+// 仓库连着 Cloudflare 的 Workers Builds：推到 main 后它先跑构建命令 `node scripts/pack-web.mjs`，
+// 再跑 `npx wrangler deploy`，按这里说的把 dist/web 整个目录当静态文件发布出去。
+// name 必须和 Cloudflare 后台里那个 Worker 的名字一模一样，否则构建会失败。
+{
+  "name": "still-snowflake-14c7",
+  "compatibility_date": "2026-11-22",
+  "assets": {
+    "directory": "./dist/web"
+  }
+}

@@ -34,3 +34,6 @@
 # 许可证；Cloudflare / 其它构建环境用的 Node 版本
 !/LICENSE
 !/.node-version
+
+# Cloudflare 的发布配置
+!/wrangler.jsonc
