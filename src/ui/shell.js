@@ -64,7 +64,8 @@ export function renderInspector(force = false) {
         if (vars) vars.textContent = JSON.stringify(ui.preview?.variables ?? state.variables, null, 2);
         return;
     }
-    ({ prompt: renderPromptTab, world: renderWorldTab, persona: renderPersonaTab, archive: renderArchiveTab, preset: renderPresetTab, regex: renderRegexTab, scripts: renderScriptsTab, memory: renderMemoryTab, provider: renderProviderTab, misc: renderMiscTab })[active](force === true);
+    ({ prompt: renderPromptTab, world: renderWorldTab, persona: renderPersonaTab, archive: renderArchiveTab, preset: renderPresetTab, regex: f => { renderRegexTab(f); renderScriptsTab(f); },   // 脚本区并在「正则」页下面（各画各的容器）
+         memory: renderMemoryTab, provider: renderProviderTab, misc: renderMiscTab })[active](force === true);
 }
 
 export function renderAll() {

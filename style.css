@@ -1107,3 +1107,5 @@ details[open] > .scr-head::before { content: '▾'; }
   background: transparent; pointer-events: none; clip-path: inset(0 calc(100% - 1px) calc(100% - 1px) 0); }
 /* 卡 / 脚本发来的提示条：标明来源（文字里），中性样式（虚线色条），和系统自己的成功 / 错误提示区分开 */
 .toast.from-card { border-left-style: dashed; border-left-color: var(--dim); }
+/* 「正则」页下面的脚本区（index.html #tab-scripts 并进 #tab-regex）：和上面的正则分开一点 */
+#tab-regex > .scripts-title { margin-top: 18px; }

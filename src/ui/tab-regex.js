@@ -201,7 +201,7 @@ function scriptEditor(s, nameEl, errBadge, locked) {
 }
 
 export function renderRegexTab() {
-    const tab = $('#tab-regex');
+    const tab = $('#regex-body');   // 「正则」页的上半部分；下半部分是脚本区（#tab-scripts，tab-scripts.js 自己画）
     const locked = !!regexBlocked();
     allScripts();   // 给每条脚本打上 origin 标签（导出时要去掉，见 regex-edit.js）
     const kids = [
