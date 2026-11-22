@@ -18,6 +18,7 @@ import { initTheme } from './ui/theme.js';
 import { bindPersonaTab } from './ui/tab-persona.js';
 import { initPwaUi } from './ui/pwa-ui.js';
 import { bindChatSearch } from './ui/chat-search.js';
+import { emitTavernEvent } from './ui/script-host.js';
 
 // ───────────────────────────── 事件绑定 ─────────────────────────────
 
@@ -76,6 +77,10 @@ function bind() {
         setTimeout(ensureMemories, 0);
         $('#manual-panel').hidden = true;
         save(); renderAll(); scrollChatToEnd();
+        // 手动模式贴回来的回复：和生成的回复一样发 MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED（第 3 期，chat.js generateReply）
+        const at = state.chat.length - 1;
+        emitTavernEvent('message_received', at, target && state.chat[at] === target ? 'swipe' : 'normal');
+        emitTavernEvent('character_message_rendered', at, target && state.chat[at] === target ? 'swipe' : 'normal');
     });
     $('#manual-cancel').addEventListener('click', () => { ui.manualTarget = null; $('#manual-panel').hidden = true; });
     $('#gen-error-close').addEventListener('click', () => { $('#gen-error').hidden = true; });

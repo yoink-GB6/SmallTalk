@@ -1076,8 +1076,6 @@ details[open] > .scr-head::before { content: '▾'; }
 .scr-empty-folder { font-size: var(--font-size-sm); padding: 2px 4px; }
 
 /* ── 酒馆助手脚本第 2 期：沙箱、运行状态、日志 ── */
-/* 脚本沙箱（ui/script-host.js）：挂在聊天区里，这一期完全不可见、不占位、不挡点击（第 5 期的悬浮区也只盖聊天区） */
-.script-sandbox { position: absolute; left: 0; top: 0; width: 0; height: 0; border: 0; visibility: hidden; pointer-events: none; }
 .scr-status { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .scr-status[data-status="running"] { background: var(--ok); }
 .scr-status[data-status="loading"] { background: var(--warn); }
@@ -1087,3 +1085,25 @@ details[open] > .scr-head::before { content: '▾'; }
 .scr-log-bar { padding: 0 8px 6px; gap: 8px; }
 .scr-log-box { max-height: 260px; overflow: auto; padding: 4px 8px 6px; border-top: var(--border-width) solid var(--line); }
 .log-line.unsupported { color: var(--warn); }
+/* ── 酒馆助手脚本第 4 / 5 期：按钮排、悬浮区、来自卡的提示条 ── */
+/* 脚本按钮排（src/ui/script-buttons.js）：输入框上方一行，小、不换行、放不下横向滚动；没有按钮时 hidden，不占地方 */
+#script-buttons { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+  padding: 4px 14px 0; background: var(--panel); border-top: var(--border-width) solid var(--line); }
+#script-buttons[hidden] { display: none; }
+#script-buttons + #composer { border-top: 0; }
+#script-buttons .sb-btn { flex: none; white-space: nowrap; font-size: var(--font-size-sm); }
+#script-buttons .sb-sep { flex: none; align-self: stretch; width: var(--border-width); margin: 4px 2px; background: var(--line); }
+/* 「脚本」页里的按钮编辑 */
+.scr-btns { display: flex; flex-direction: column; gap: 4px; }
+.scr-btn-head { display: flex; align-items: center; gap: 8px; }
+.scr-btn-row { display: flex; align-items: center; gap: 6px; padding-left: 18px; }
+.scr-btn-row .scr-btn-name { flex: 1; min-width: 0; }
+.scr-float { margin-bottom: 8px; font-size: var(--font-size-sm); }
+/* 悬浮区（ui/script-host.js「悬浮区」）：沙箱 iframe 盖在聊天区上，透明，按脚本画出的区域裁剪（clip-path 由脚本宿主设）。
+   #chat-pane 成为它的定位参照，并用 isolation 建自己的层叠上下文：iframe 的 z-index 关在聊天区里，永远在顶栏、右侧面板 / 窄屏抽屉、
+   弹框、模型下拉、提示条之下。高度由宿主算（到输入区上沿为止），不盖输入框和按钮排 */
+#chat-pane { position: relative; isolation: isolate; }
+.script-sandbox { position: absolute; left: 0; top: 0; width: 100%; height: 0; border: 0; margin: 0; padding: 0; z-index: 1;
+  background: transparent; pointer-events: none; clip-path: polygon(0 0, 0 0, 0 0); }
+/* 卡 / 脚本发来的提示条：标明来源（文字里），中性样式（虚线色条），和系统自己的成功 / 错误提示区分开 */
+.toast.from-card { border-left-style: dashed; border-left-color: var(--dim); }

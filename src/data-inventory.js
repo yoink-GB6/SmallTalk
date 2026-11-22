@@ -268,4 +268,8 @@ export const LOCAL_STORAGE_PREFS = {
         what: '界面主题的 id（src/themes.js 清单里的一项；默认主题不存这个键）',
         where: 'src/ui/theme.js；index.html <head> 里有一小段内联脚本在样式表之前读它，首屏就是对的主题', default: 'default（跟随系统的默认样式）',
     },
+    'smalltalk.scriptFloatHidden': {
+        what: '「脚本」页「隐藏悬浮界面」打了勾的卡 id 列表（JSON 数组，最多 200 个；都没勾时不存这个键）。只是这台设备上的显示偏好：脚本照常运行',
+        where: 'src/ui/script-host.js FLOAT_HIDE_KEY', default: '都显示',
+    },
 };

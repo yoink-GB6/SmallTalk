@@ -26,7 +26,7 @@ import { state, ui, save, persist, STOPPED_TEXT } from './state.js';
 import { restoreActive } from './backup.js';   // 循环依赖：只在函数体里调用
 import { cardScripts, newScript, parseScriptFile, scriptFileObject, flattenScripts } from '../scripts.js';
 import { safeFileName } from '../card-export.js';
-import { restartScripts, reconcileScripts, scriptStatus, scriptsRunState } from './script-host.js';   // 循环依赖：只在函数体里调用
+import { restartScripts, reconcileScripts, scriptStatus, scriptsRunState, floatHidden, setFloatHidden } from './script-host.js';   // 循环依赖：只在函数体里调用
 import { logLineText, renderMiscLog } from './tab-misc.js';   // 同上
 
 /** 每张卡（state.card 对象）一份的界面状态：展开的 id、草稿。换卡 / 重新读档换了对象，自然清掉 */
@@ -59,11 +59,12 @@ function guarded(fn) {
     };
 }
 
-/** 要改了：把现在的树写进 state.card.scripts（第一次改动时才写，之前一直跟着 raw） */
+/** 要改了：把现在的树写进 state.card.scripts（第一次改动时才写，之前一直跟着 raw）。script-host.js 写回脚本自己改的按钮时也用它 */
 function ownTree() {
     if (!Array.isArray(state.card.scripts)) state.card.scripts = structuredClone(cardScripts(state.card));
     return state.card.scripts;
 }
+export const ownScriptTree = ownTree;
 
 /** 在树里找一个条目：{item, list（它所在的数组）, folder（所在文件夹，顶层为 null）} */
 function locate(tree, id) {
@@ -84,6 +85,15 @@ const isDirty = (s, d) => !!d && (d.name !== s.name || d.info !== s.info || d.co
 const toggleEnabled = guarded((id, on) => {
     const hit = locate(ownTree(), id);
     if (hit) hit.item.enabled = on;
+    commit();
+});
+
+/** 改一个脚本的按钮设置（整体开关、每个按钮的名字 / 显示 / 删除 / 新增）：马上写进卡，不重建沙箱（script-host 只推过去、重画按钮排） */
+const setButtons = guarded((id, fn) => {
+    const hit = locate(ownTree(), id);
+    if (!hit) return;
+    const b = hit.item.button ?? {};
+    hit.item.button = fn({ ...b, enabled: b.enabled !== false, buttons: (Array.isArray(b.buttons) ? b.buttons : []).map(x => ({ ...x })) });
     commit();
 });
 
@@ -285,7 +295,7 @@ function scriptBox(s, locked) {
     const nBtn = s.button?.buttons?.length ?? 0;
     const head = h('summary', { class: `scr-head${batch.on ? ' batch-row' : ''}${batch.on && batch.picked.has(s.id) ? ' batch-picked' : ''}`, title: s.info ? s.info.slice(0, 200) : null },
         pickBox(s.id), enableBox(s, locked), statusDot(s.id), nameEl,
-        nBtn ? h('span', { class: 'badge', 'data-fk': 'scr-btn-count', title: '这个脚本带的按钮（以后运行脚本时显示在输入框上方）' }, `按钮 ${nBtn}`) : null,
+        nBtn ? h('span', { class: 'badge', 'data-fk': 'scr-btn-count', title: '这个脚本带的按钮（运行时显示在输入框上方）' }, `按钮 ${nBtn}`) : null,
         dot);
     batchHead(head, s.id);
     const box = h('details', { class: `pitem scr-item${s.enabled ? '' : ' off'}`, 'data-fk': 'scr-item', 'data-id': s.id, open: v.open.has(s.id) }, head);
@@ -329,6 +339,7 @@ function scriptBody(s, locked, nameEl, dot) {
     const body = h('div', { class: 'scr-body' },
         h('label', { class: 'inline scr-row' }, '名字', name),
         info,
+        buttonEditor(s, locked),
         code,
         h('div', { class: 'scr-actions' },
             saveBtn, revertBtn,
@@ -337,6 +348,31 @@ function scriptBody(s, locked, nameEl, dot) {
     );
     paint();
     return body;
+}
+
+/** 脚本按钮（第 4 期）：整体开关 + 每个按钮一行（名字、显示、删除）+「加一个按钮」。显示在输入框上方（只在脚本运行时） */
+function buttonEditor(s, locked) {
+    const b = s.button ?? {};
+    const list = Array.isArray(b.buttons) ? b.buttons : [];
+    const rows = list.map((btn, i) => {
+        const nameIn = h('input', { type: 'text', class: 'scr-btn-name', 'data-fk': 'scr-btn-name', readOnly: locked, 'aria-label': '按钮名字',
+            onchange: e => setButtons(s.id, x => { if (x.buttons[i]) x.buttons[i].name = e.target.value.slice(0, 100); return x; }) });
+        nameIn.value = String(btn?.name ?? '');
+        return h('div', { class: 'scr-btn-row', 'data-fk': 'scr-btn-row' }, nameIn,
+            h('label', { class: 'inline', title: '不勾 = 这个按钮先不显示（脚本可以之后再让它出来）' },
+                h('input', { type: 'checkbox', 'data-fk': 'scr-btn-visible', checked: btn?.visible !== false, disabled: locked,
+                    onchange: e => setButtons(s.id, x => { if (x.buttons[i]) x.buttons[i].visible = e.target.checked; return x; }) }), '显示'),
+            h('button', { type: 'button', class: 'ghost', 'data-fk': 'scr-btn-del', title: '删掉这个按钮', disabled: locked,
+                onclick: () => setButtons(s.id, x => { x.buttons.splice(i, 1); return x; }) }, '✕'));
+    });
+    return h('div', { class: 'scr-btns', 'data-fk': 'scr-btns' },
+        h('div', { class: 'scr-btn-head' },
+            h('label', { class: 'inline', title: '关掉 = 这个脚本的按钮都不显示' },
+                h('input', { type: 'checkbox', 'data-fk': 'scr-btn-enabled', checked: b.enabled !== false, disabled: locked,
+                    onchange: e => setButtons(s.id, x => ({ ...x, enabled: e.target.checked })) }), '按钮'),
+            h('button', { type: 'button', class: 'ghost', 'data-fk': 'scr-btn-add', disabled: locked,
+                onclick: () => setButtons(s.id, x => { x.buttons.push({ name: '新按钮', visible: true }); return x; }) }, '＋ 加一个')),
+        ...rows);
 }
 
 /** 一个文件夹的框：头部开关 + 名字 + 脚本数；展开后是它的脚本 */
@@ -393,7 +429,7 @@ function viewSig() {
     if (!state.card) return 'none';
     if (!cardIds.has(state.card)) cardIds.set(state.card, ++cardSeq);
     const v = cardView();
-    return JSON.stringify([cardIds.get(state.card), scriptsBlocked() ?? '', batch.on, [...batch.picked], [...v.open], cardScripts(state.card)]);
+    return JSON.stringify([cardIds.get(state.card), scriptsBlocked() ?? '', batch.on, [...batch.picked], [...v.open], cardScripts(state.card), floatHidden()]);
 }
 
 /** @param {boolean} [force]  true = 不管签名，一定重建（本页自己的操作之后） */
@@ -420,6 +456,10 @@ export function renderScriptsTab(force = false) {
         // 安全告知（用户定的：一行灰字，不弹窗）
         h('div', { class: 'dim scr-note', 'data-fk': 'scr-note' }, '脚本是卡作者写的代码，能读到这张卡的聊天并联网。'),
         persist.readOnly ? h('div', { class: 'dim scr-note', 'data-fk': 'scr-readonly' }, '只读标签页不运行脚本') : null,
+        // 「隐藏悬浮界面」（第 5 期）：脚本照常运行，只是它画在聊天区上的东西不显示（防止挡住聊天又关不掉）。这台设备上按卡记，不进存储
+        tree.length ? h('label', { class: 'inline scr-float', title: '脚本照常运行，只是它画在聊天区上的界面不显示、不挡点击（只记在这台设备上）' },
+            h('input', { type: 'checkbox', 'data-fk': 'scr-float-hide', checked: floatHidden(),
+                onchange: e => { setFloatHidden(e.target.checked); lastSig = viewSig(); } }), '隐藏悬浮界面') : null,
         tree.length
             ? h('div', { class: 'plist scr-list', 'data-fk': 'scr-list' }, tree.map(t => (t.type === 'folder' ? folderBox(t, locked) : scriptBox(t, locked))))
             : h('div', { class: 'empty', 'data-fk': 'scr-empty' }, '这张卡没有脚本。'),

@@ -26,7 +26,7 @@ import { generateReply, scrollChatToEnd, chatWriteBlocked } from './chat.js';   
 import { renderAll, renderInspector } from './shell.js';
 import { renderMiscLog } from './tab-misc.js';
 import { ensureMemories } from './memory.js';   // 循环依赖（memory.js 经 pipeline.js 间接导入本文件）：只在函数体里调用
-import { forwardFrameEvent } from './script-host.js';   // 循环依赖：只在函数体里调用
+import { forwardFrameEvent, emitTavernEvent } from './script-host.js';   // 循环依赖：只在函数体里调用
 import { renderScriptLog } from './tab-scripts.js';      // 同上
 import { invalidateTurnAt, invalidateAfterDelete, isHidden, setHidden } from '../memory-fold.js';
 import { resolveMessageId } from '../frame-args.js';
@@ -86,7 +86,9 @@ export async function runSlash(command, ctx = ANON) {
         if ((name === 'send' || name === 'trigger') && writeBlocked(ctx, `斜杠命令 /${name}`)) return '';
         if (name === 'send') {
             state.chat.push({ role: 'user', name: state.persona.name || 'User', content: arg });
+            emitTavernEvent('message_sent', state.chat.length - 1);   // 酒馆 /send（slash-commands.js ~6107）：MESSAGE_SENT、画出来、USER_MESSAGE_RENDERED
             save(); renderAll(); scrollChatToEnd();
+            emitTavernEvent('user_message_rendered', state.chat.length - 1);
         } else if (name === 'trigger') {
             await generateReply();
         } else if (name === 'setinput') {
@@ -330,7 +332,7 @@ const hostImpl = {
     deleteVariable: (ctx, path, option) => varWrite(ctx, option, 'deleteVariable', cur => {
         const r = varOps.unset(cur, path);
         if (r.bad) hostLog(ctx, 'warn', `deleteVariable：路径 ${safeJson(path)} 不合法（或含 __proto__ / constructor / prototype），没有删`);
-        return { next: r.deleted ? r.value : undefined, result: { variables: vclone(r.value), delete_occurred: r.deleted } };
+        return { next: r.deleted ? r.value : undefined, result: { variables: vclone(r.value), delete_occurred: r.occurred } };   // 照 lodash unset：没有的路径也是 true
     }),
     /** 酒馆助手 getAllVariables：全局 → 角色卡 →（脚本里）脚本 → 聊天 →（前端卡里）0 楼到本楼的楼层变量，后面的同名变量盖前面的（浅合并） */
     getAllVariables: (ctx) => {
@@ -380,12 +382,24 @@ const hostImpl = {
         invalidateAfterDelete(state.chat, drop); setTimeout(ensureMemories, 0);
         state.chat = state.chat.filter((_, i) => !drop.has(i));
         ui.rendered.clear(); $('#chat').replaceChildren(); save(); renderAll();
+        emitTavernEvent('message_deleted', state.chat.length);   // 酒馆：删完之后的楼数
     },
     getCharAvatarPath: () => state.avatar || null,   // data URL，本身就是绝对地址
     // 前端卡之间的转发 render.js 已经做了；这里再转给脚本沙箱（脚本发的事件由 script-host.js 转给前端卡，不经过这里）
     eventEmit: (ctx, name, ...args) => { if (ctx?.kind !== 'script' && typeof name === 'string') forwardFrameEvent(name, args); },
-    toastr: (ctx, kind, text) => toast(String(text ?? ''), kind === 'error' ? 'error' : kind === 'success' ? 'ok' : ''),
+    // 卡 / 脚本的提示条（2026-11-23 安全复核）：文字前面标明来源、一律用中性样式（不用主页面「错误」的红），免得冒充「接口 key 失效，请重填」这类系统提示。
+    // 限频：脚本沙箱在 script-host.js 按沙箱限（10 秒 5 条）；前端卡在这里合起来限（10 秒 5 条）；同屏条数 dom.js toast 另有上限
+    toastr: (ctx, kind, text) => {
+        const body = String(text ?? '').slice(0, 300);
+        if (ctx?.kind === 'script') return toast(`脚本「${ctx.scriptName ?? '?'}」：${body}`, 'from-card');
+        const now = Date.now();
+        while (frameToastTimes.length && now - frameToastTimes[0] > 10000) frameToastTimes.shift();
+        if (frameToastTimes.length >= 5) { hostLog(ctx, 'info', `提示条太多，没显示：${body.slice(0, 200)}`); return; }
+        frameToastTimes.push(now);
+        toast(`前端卡：${body}`, 'from-card');
+    },
 };
+const frameToastTimes = [];
 
 /** 宿主方法的名单（render.js 的前端卡白名单 BRIDGED_API、script-stub.js 的脚本白名单都是它的子集） */
 export const HOST_METHOD_NAMES = Object.freeze(Object.keys(hostImpl));

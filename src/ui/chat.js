@@ -13,7 +13,9 @@ import { frameHostFor } from './frame-host.js';
 import { readSwipes, swipeTarget, selectSwipe, appendSwipe, ensureSwipes, syncSwipeSlot } from '../chatfile.js';
 import { renderAll } from './shell.js';
 import { chatChanged } from './chat-search.js';
-import { emitScriptEvent } from './script-host.js';   // 循环依赖：只在函数体里调用
+import { emitTavernEvent, emitStreamToken, flushStreamToken } from './script-host.js';   // 循环依赖：只在函数体里调用
+// 酒馆事件（第 3 期）：事件名、参数、顺序照酒馆 1.19.0 public/script.js（行号是那个版本的）；都经 emitTavernEvent 发给脚本沙箱和消息前端卡，
+// 先推副本再发，所以回调里同步读到的是新值。酒馆助手对 MESSAGE_* 等的第一个参数做 parseInt，我们发的本来就是整数。
 
 export function startChat(greetingIndex = 0) {
     const c = card();
@@ -259,7 +261,10 @@ export function editMessage(i, epoch = persist.epoch) {
         }
         ui.rendered.delete(i);
         save();
+        // 酒馆 messageEditDone（~8405 / ~8431）：保存编辑先发 MESSAGE_EDITED(楼层号)，重画完再发 MESSAGE_UPDATED(楼层号)；内容没变也发。取消不发
+        if (commit) emitTavernEvent('message_edited', i);
         renderAll();
+        if (commit) emitTavernEvent('message_updated', i);
     };
     body.replaceChildren(h('div', { class: 'mes_edit' }, ta,
         h('div', { class: 'row' },
@@ -290,6 +295,8 @@ export function deleteFrom(i, epoch) {
     $('#chat').replaceChildren();
     save();
     renderAll();
+    // 酒馆删楼（删这一楼及之后，~11734）：MESSAGE_DELETED 的参数是删完之后的楼数（chat.length），不是楼层号
+    emitTavernEvent('message_deleted', state.chat.length);
 }
 
 export function setBusy(busy) {
@@ -317,14 +324,23 @@ export async function send() {
     // switching：archive.js 正在切换卡 / 存档（中间有异步读写）。这时发出的消息会落进即将被换掉的那个存档，干脆不让发
     if (ui.busy || ui.switching) return;
     const text = $('#input').value.trim();
+    // 酒馆 Generate('normal')：第一件事就发 GENERATION_STARTED（~4299），然后 sendMessageAsUser 把用户消息放进聊天、
+    // 发 MESSAGE_SENT(楼层号)、画出来、发 USER_MESSAGE_RENDERED(楼层号)（~5917）
+    emitGenerationStarted('normal');
     if (text) {
         state.chat.push({ role: 'user', name: state.persona.name || 'User', content: permanentRegex(text, 'user') });
         $('#input').value = '';
         fitInput();   // 发出去了：输入框缩回一行
-        // 酒馆助手脚本的 MESSAGE_SENT(楼层号)：酒馆在用户消息进了聊天之后发（script-host.js 先把新楼推给沙箱再发事件）
-        emitScriptEvent('message_sent', state.chat.length - 1);
+        emitTavernEvent('message_sent', state.chat.length - 1);
+        renderChat();
+        emitTavernEvent('user_message_rendered', state.chat.length - 1);
     }
-    await generateReply();
+    await generateReply({ started: true });
+}
+
+/** GENERATION_STARTED(type, options, dry_run)。酒馆的 options 里还有 signal（不能跨窗口传），这里只给那几个都是 undefined 的键 */
+function emitGenerationStarted(type) {
+    emitTavernEvent('generation_started', type, { automatic_trigger: undefined, force_name2: undefined, quiet_prompt: undefined, quietToLoud: undefined, skipWIAN: undefined, force_chid: undefined, quietImage: undefined }, false);
 }
 
 /** 生成失败时在聊天区下方留一条不会自己消失的说明（小提示一闪而过，容易以为「没回复」） */
@@ -362,11 +378,17 @@ export function showGenError(message) {
  *   失败或中断且一个字都没收到：什么都不加，界面画回原来的候选（酒馆 endSwipe 把越界的 swipe_id 夹回去，~10052）。
  *   中断时已经收到一部分：和普通生成一样留下这部分（酒馆停止流式时也是把已收到的存成新候选）。
  */
-export async function generateReply({ swipe = false } = {}) {
+export async function generateReply({ swipe = false, type = null, started = false } = {}) {
     if (ui.busy || ui.switching) return;
     const target = swipe ? state.chat.at(-1) : null;
     if (swipe && !canSwipe(state.chat.length - 1)) return;
     if (swipe && isHidden(target)) return;   // 隐藏的回复不生成新候选（见 swipe()）
+    // 酒馆事件的类型：'normal' | 'swipe'（给最后一楼加候选 = 酒馆滑到头生成新候选）| 'regenerate'（最后一楼是用户输入时的「重新生成」）
+    const genType = swipe ? 'swipe' : (type ?? 'normal');
+    // 酒馆滑到头生成新候选（swipe() 的 animateSwipe，~10315）：先 MESSAGE_SWIPED(楼层号)，再 Generate('swipe')。
+    // 差别：酒馆这时这一楼已经换成了空的新候选，我们这里生成完之前这一楼不动（见上面的说明），所以回调里读到的还是旧回复
+    if (swipe) emitTavernEvent('message_swiped', state.chat.length - 1);
+    if (!started) emitGenerationStarted(genType);
     $('#gen-error').hidden = true;
     const context = swipe ? state.chat.slice(0, -1) : state.chat;
     let prompt;
@@ -406,6 +428,7 @@ export async function generateReply({ swipe = false } = {}) {
     let streamed = '';
     let received = false; // 回复（或中断时收到的那部分）写进了聊天：结束时给脚本发 MESSAGE_RECEIVED
     let removedAt = -1;   // 失败后删掉的占位原来在第几楼（finally 里决定渲染缓存作废多少）
+    let aborted = false, errored = false;
     if (target) { unmountMessage(body); body.innerHTML = '…'; }   // 旧候选里可能有前端卡 iframe，先释放；酒馆这时也先显示「...」
     try {
         const wire = prompt.messages.map(({ role, content, name }) => (name ? { role, content, name } : { role, content }));
@@ -418,6 +441,7 @@ export async function generateReply({ swipe = false } = {}) {
             promptCache: state.promptCache !== false,     // 「拼装」页的开关；只有 OpenRouter + anthropic/ 模型才真的加标记
             onDelta: (soFar) => {
                 streamed = soFar;
+                emitStreamToken(soFar);   // STREAM_TOKEN_RECEIVED(到目前为止的全文)，最多 100ms 一次（script-host.js）
                 if (!target) msg.content = soFar;   // 新候选在生成完之前不碰 msg（见函数说明）
                 // 流式期间只做 markdown，不挂 iframe；结束后再完整渲染一次
                 try { body.innerHTML = formatMessage(soFar); } catch { body.textContent = soFar; }
@@ -437,6 +461,8 @@ export async function generateReply({ swipe = false } = {}) {
         received = true;
         setTimeout(ensureMemories, 0);   // 回复写完后，后台把这一轮压成一句话
     } catch (e) {
+        aborted = e.name === 'AbortError';
+        errored = !aborted;
         if (e.name !== 'AbortError') showGenError(e.message);
         if (target) {
             if (streamed) { appendSwipe(target, streamed); swipedTurn(target); setTimeout(ensureMemories, 0); received = true; }
@@ -459,9 +485,17 @@ export async function generateReply({ swipe = false } = {}) {
         save();
         renderAll();
         scrollChatToEnd();
-        // 酒馆助手脚本的 MESSAGE_RECEIVED(楼层号, 类型)：回复写进聊天之后（失败 / 中断但留下了一部分时也发，同酒馆）。
-        // 先推副本再发（script-host.js），所以脚本在回调里 getChatMessages(id) 读到的就是这条回复
-        if (received && at >= 0) emitScriptEvent('message_received', at, target ? 'swipe' : 'normal');
+        // 结束时的事件，照酒馆流式生成的顺序（StreamingProcessor：先解锁界面 → hideStopButton 发 GENERATION_ENDED(chat.length)，
+        // 再 MESSAGE_RECEIVED(楼层号, 类型)、CHARACTER_MESSAGE_RENDERED(楼层号, 类型)，~3536 / ~3799）：
+        //   停止：stopGeneration 发 GENERATION_STOPPED（~5618），留下的那部分照样 RECEIVED；
+        //   出错：onErrorStreaming 对 swipe 类型不发 RECEIVED（~3826）；一个字都没收到、占位被删掉时也不发。
+        flushStreamToken();
+        emitTavernEvent('generation_ended', state.chat.length);
+        if (aborted) emitTavernEvent('generation_stopped');
+        if (received && at >= 0 && !(errored && target)) {
+            emitTavernEvent('message_received', at, genType);
+            emitTavernEvent('character_message_rendered', at, genType);
+        }
     }
 }
 
@@ -490,7 +524,7 @@ export function regenerate(i, epoch) {
         generateReply({ swipe: true });
         return;
     }
-    generateReply();
+    generateReply({ type: 'regenerate' });
 }
 
 // ───────────────────────────── swipe ─────────────────────────────
@@ -572,4 +606,5 @@ export function swipe(i, dir, epoch) {
     ui.previewIsSent = false;
     save();
     renderAll();
+    emitTavernEvent('message_swiped', i);   // 酒馆 swipe() 切到已有的候选：MESSAGE_SWIPED(楼层号)（~10315）
 }

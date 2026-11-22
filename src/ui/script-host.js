@@ -2,10 +2,11 @@
 // 沙箱里的桩在 src/script-stub.js，副本的比对 / 补丁在 src/script-sync.js，宿主方法（和消息里的前端卡共用）在 ui/frame-host.js。
 //
 // ── 沙箱 ──
-//   一张卡一个：<iframe sandbox="allow-scripts allow-popups allow-forms allow-modals">（和前端卡的 FRAME_SANDBOX 一样，【绝不】给 allow-same-origin：
-//   opaque origin，读不到我们的 IndexedDB / localStorage、碰不到主页面的 DOM 和 JS 对象），srcdoc 里只有桩和库，脚本代码走 postMessage 进去、用 Blob URL 加载。
-//   iframe 挂在聊天区（#chat-pane）里、这一期完全不可见（.script-sandbox：零尺寸、不接收指针）。第 5 期的悬浮区只盖聊天区（用户定的：
-//   脚本不能在右侧面板 / 顶栏上画东西，免得画一个假的「接口」页骗人填 key），所以位置现在就定在这里。
+//   一张卡一个：<iframe sandbox="allow-scripts">（render.js SCRIPT_SANDBOX；【绝不】给 allow-same-origin：opaque origin，读不到我们的
+//   IndexedDB / localStorage、碰不到主页面的 DOM 和 JS 对象；也不给 modals / popups / forms：原生 prompt 能骗人输 key，见 render.js），
+//   srcdoc 里只有桩和库，脚本代码走 postMessage 进去、用 Blob URL 加载。
+//   iframe 是盖在聊天区（#chat-pane）上的透明覆盖层，按脚本画出的区域裁剪（第 5 期，见下面「悬浮区」）。只盖聊天区（用户定的：
+//   脚本不能在右侧面板 / 顶栏上画东西，免得画一个假的「接口」页骗人填 key）。
 //
 // ── 通信（都带 smalltalk: true 和这个沙箱的随机 frameId；宿主收到的每条都先核对 event.source === 沙箱的 window 且 frameId 对得上）──
 //   沙箱 → 宿主：ready（库加载完）、call（RPC，方法白名单 SCRIPT_BRIDGED、脚本 id 只认登记过的，见 script-args.js）、log、status（某个脚本跑起来了 / 出错了）
@@ -37,15 +38,16 @@
 //
 // UI 模块之间有循环依赖：这个文件顶层不调用任何从兄弟 ui 模块导入的函数。
 
-import { FRAME_SANDBOX, emitFrameEvent } from '../render.js';
+import { SCRIPT_SANDBOX, emitFrameEvent } from '../render.js';
 import { buildScriptSrcdoc } from '../script-stub.js';
 import { diffChat } from '../script-sync.js';
-import { parseSandboxMessage, scrubSecrets } from '../script-args.js';
-import { cardScripts, enabledScriptsOf, stripCodeFence } from '../scripts.js';
-import { state, ui, persist, card, cardVarsReady } from './state.js';
+import { parseSandboxMessage, scrubSecrets, cleanButtonList, parseRegions, regionsClipPath } from '../script-args.js';
+import { cardScripts, enabledScriptsOf, stripCodeFence, flattenScripts } from '../scripts.js';
+import { state, ui, persist, card, cardVarsReady, save } from './state.js';
 import { callHost, frameHost, readScope } from './frame-host.js';   // 循环依赖：只在函数体里调用
 import { restoreActive } from './backup.js';                        // 同上
-import { paintScriptStatus } from './tab-scripts.js';               // 同上
+import { paintScriptStatus, ownScriptTree, renderScriptsTab } from './tab-scripts.js';   // 同上
+import { renderScriptButtons } from './script-buttons.js';          // 同上
 
 const UNSAFE_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 // ───────────────────────────── 状态 ─────────────────────────────
@@ -95,8 +97,14 @@ function teardown() {
     const r = rec;
     rec = null;
     r.ac.abort();
+    r.ro?.disconnect();
     r.iframe.remove();
+    pendingOpen = null;
+    paintButtons();
 }
+
+/** 主页面现在的深浅（沙箱文档的 color-scheme 必须和它一致，不然浏览器会给 iframe 画一块不透明的底色，见下面「悬浮区」） */
+const pageScheme = () => (getComputedStyle(document.documentElement).colorScheme.includes('dark') ? 'dark' : 'light');
 
 /** 建一个新沙箱装 list 里的脚本（先拆旧的） */
 function build(list) {
@@ -104,13 +112,13 @@ function build(list) {
     const host = document.querySelector('#chat-pane') ?? document.body;
     const frameId = randomToken();
     const iframe = document.createElement('iframe');
-    iframe.setAttribute('sandbox', FRAME_SANDBOX);
+    iframe.setAttribute('sandbox', SCRIPT_SANDBOX);
     iframe.setAttribute('referrerpolicy', 'no-referrer');
-    iframe.setAttribute('title', '酒馆助手脚本');
-    iframe.setAttribute('aria-hidden', 'true');
-    iframe.tabIndex = -1;
+    iframe.setAttribute('title', '酒馆助手脚本的悬浮界面');
     iframe.className = 'script-sandbox';
     iframe.dataset.fk = 'script-sandbox';
+    const scheme = pageScheme();
+    iframe.style.colorScheme = scheme;
     const ac = new AbortController();
     const scripts = new Map(list.map(s => [s.id, { id: s.id, name: s.name || '(未命名)' }]));
     rec = {
@@ -118,13 +126,98 @@ function build(list) {
         status: new Map(list.map(s => [s.id, { status: 'loading', text: '' }])),
         booted: false, epoch: persist.epoch, shadow: null, pushed: new Map(), cardRef: null, avatarRef: null, ctxJson: null,
         logTimes: [], logMuted: false,
+        pushedButtons: new Map(), themeJson: null,
+        rects: [], dragOpen: false, regionsQueued: null, ro: null,
+        rate: { sec: 0, n: 0, said: false }, toastTimes: [],
     };
     const me = rec;
     window.addEventListener('message', e => onMessage(me, e), { signal: ac.signal });
-    iframe.srcdoc = buildScriptSrcdoc({ frameId });
+    // 拖动中（沙箱报了整块区域）在 iframe 外面松开鼠标：沙箱收不到 pointerup（见「悬浮区」的原型结论），由宿主告诉它
+    window.addEventListener('pointerup', () => { if (me === rec && me.dragOpen) post(me, { kind: 'release' }); }, { signal: ac.signal, capture: true });
+    window.addEventListener('blur', () => { if (me === rec && me.dragOpen) post(me, { kind: 'release' }); }, { signal: ac.signal });
+    iframe.srcdoc = buildScriptSrcdoc({ frameId, colorScheme: scheme });
     host.append(iframe);
+    applyClip(me);
+    watchLayout(me);
     runState = 'running';
     paintTab();
+    paintButtons();
+}
+
+// ───────────────────────────── 悬浮区（第 5 期，方案 §3.2 / §3.3）─────────────────────────────
+// 酒馆里脚本的 $ 是酒馆主页面的，`$('body').append(浮窗)` 画到酒馆页面上；我们这里 $ 是沙箱自己的文档，所以让沙箱 iframe 本身成为一块
+// 盖在聊天区上的透明覆盖层，脚本画的东西就显示出来了。
+//
+// 边界（用户定的，安全上不能松）：只盖聊天区。iframe 挂在 #chat-pane 里、position:absolute，尺寸由这里算（从聊天区顶到输入区 / 按钮排的上沿），
+//   #chat-pane 是 position:relative + isolation:isolate（style.css 末尾）：iframe 的 z-index 被关在聊天区自己的层叠上下文里，
+//   永远在顶栏、右侧面板、窄屏抽屉（z 16）和遮罩（15）、弹框（25）、模型下拉（28）、提示条（30）之下；iframe 的内容浏览器保证画不出它自己的框。
+//   脚本改不了 iframe 元素本身的样式（跨源）。所以它画的任何东西都落不到面板、顶栏、弹框上——在那上面画假的「接口」页骗 key 做不到。
+// 底部留给输入区：覆盖层不盖输入框、发送按钮和脚本按钮排（浮球贴「页面右下角」时会落在输入框上方，不会挡住发送）。
+//
+// 点击穿透（5a 原型，2026-11-23 无头 Edge 158 / Chrome 实测；Firefox 没跑通驱动，没验）：
+//   - 沙箱里的桩量出脚本画的东西占的矩形（最多 32 个，见 script-stub.js measureRegions），这里拼成 clip-path: path(...) 设到 iframe 上。
+//     clip-path 同时裁掉命中测试：区域外的点击、滚轮落到下面的聊天区（elementFromPoint 和真实点击都验过），区域内的进脚本。
+//   - 没有任何区域（纯逻辑脚本、还没画）：pointer-events:none + 空的 clip-path，完全不可见、不拦任何操作。
+//   - 拖动：鼠标按下后指针一下子移出裁剪区域，iframe 就收不到后续的 pointermove / pointerup（同进程的 iframe 没有跨裁剪区的鼠标捕获；
+//     setPointerCapture 也不管用；触摸没问题）。每次移动后再量区域跟不上（每步 40px 就断）。所以：沙箱里一按下（pointerdown）
+//     桩立刻报「整块」（drag: true），这里把裁剪放开、整个覆盖层接收指针，松开后桩再报真实区域。按下后 30ms 内一下子跳 300px 也跟得上。
+//     在覆盖层外（输入区、面板）松开时沙箱收不到 pointerup：这里在主页面捕获 pointerup / 失焦，发 {kind:'release'} 让桩收尾。
+//   - 透明：沙箱文档的 color-scheme 必须和主页面一致（原型：不一致时 Chromium 给 iframe 画不透明的白 / 黑底），所以建沙箱时带上、主题变化时推。
+//   - 区域上报：桩用 requestAnimationFrame 合并、变了才发；这里也只在下一帧处理最新的一条。动画时约每秒几十次，宿主每次不到 0.1 毫秒。
+
+/** 「隐藏悬浮界面」开关：按卡记在这台设备的 localStorage（界面偏好，不进存储 / 备份；data-inventory.js LOCAL_STORAGE_PREFS 登记过） */
+export const FLOAT_HIDE_KEY = 'smalltalk.scriptFloatHidden';
+function hiddenCards() {
+    try { const v = JSON.parse(localStorage.getItem(FLOAT_HIDE_KEY) || '[]'); return Array.isArray(v) ? v.filter(x => typeof x === 'string') : []; } catch { return []; }
+}
+export const floatHidden = (cardId = persist.cardId) => !!cardId && hiddenCards().includes(cardId);
+export function setFloatHidden(on, cardId = persist.cardId) {
+    if (!cardId) return;
+    const list = hiddenCards().filter(x => x !== cardId);
+    if (on) list.push(cardId);
+    try { if (list.length) localStorage.setItem(FLOAT_HIDE_KEY, JSON.stringify(list.slice(-200))); else localStorage.removeItem(FLOAT_HIDE_KEY); } catch { /* 存不了就只在这次有效 */ }
+    if (rec) applyClip(rec);
+}
+
+/** 按现在的区域设 iframe 的裁剪和能不能点 */
+function applyClip(r) {
+    const f = r.iframe;
+    const hide = floatHidden(r.cardId);
+    f.style.visibility = hide ? 'hidden' : '';
+    if (hide || !r.rects.length) { f.style.pointerEvents = 'none'; f.style.clipPath = 'polygon(0 0, 0 0, 0 0)'; f.dataset.regions = '0'; return; }
+    f.style.pointerEvents = 'auto';
+    f.style.clipPath = r.dragOpen ? 'none' : regionsClipPath(r.rects);
+    f.dataset.regions = String(r.rects.length);
+}
+
+/** 覆盖层的高度：聊天区顶到输入区（手动模式的粘贴框 / 脚本按钮排 / 输入框，取最上面那个看得见的）的上沿 */
+function layoutOverlay(r) {
+    const pane = r.iframe.parentElement;
+    if (!pane) return;
+    const top = pane.getBoundingClientRect().top;
+    let stop = pane.getBoundingClientRect().bottom;
+    for (const sel of ['#manual-panel', '#script-buttons', '#composer']) {
+        const el = document.querySelector(sel);
+        if (el && !el.hidden && el.offsetParent !== null) stop = Math.min(stop, el.getBoundingClientRect().top);
+    }
+    const h = Math.max(0, Math.round(stop - top));
+    if (r.iframe.style.height !== `${h}px`) r.iframe.style.height = `${h}px`;
+}
+function watchLayout(r) {
+    layoutOverlay(r);
+    if (typeof ResizeObserver !== 'function') return;
+    r.ro = new ResizeObserver(() => { if (r === rec) layoutOverlay(r); });
+    for (const sel of ['#chat-pane', '#manual-panel', '#script-buttons', '#composer']) { const el = document.querySelector(sel); if (el) r.ro.observe(el); }
+    window.addEventListener('resize', () => { if (r === rec) layoutOverlay(r); }, { signal: r.ac.signal });
+}
+/** 输入区那几块显示 / 隐藏之后（ResizeObserver 对 hidden 切换不一定报）：shell.js renderAll 经 reconcileScripts 调到这里 */
+function relayout() { if (rec) layoutOverlay(rec); }
+
+/** 推给沙箱的主题（只读的展示信息：深浅、几个颜色和字体。没有任何接口 / key / 地址） */
+function themeNow() {
+    const cs = getComputedStyle(document.documentElement);
+    const v = n => cs.getPropertyValue(n).trim().slice(0, 200);
+    return { scheme: pageScheme(), vars: { bg: v('--bg'), panel: v('--panel'), text: v('--text'), dim: v('--dim'), accent: v('--accent'), 'accent-text': v('--accent-text'), line: v('--line'), font: v('--font-ui'), radius: v('--radius-control') } };
 }
 
 /** 停掉（恢复备份开始时 ui/backup.js 调；结束后 reconcileScripts 按当前卡重建） */
@@ -148,8 +241,10 @@ export function reconcileScripts({ force = false } = {}) {
     const sameCard = rec && rec.cardId === persist.cardId && rec.cardObj === state.card;
     if (sameCard && !force && !persist.readOnly && !persist.stopped && !persist.paused && !restoreActive()) {
         // 同一张卡：只看是不是换了存档（换了就整份重推并发 CHAT_CHANGED，见 syncEpoch）
-        if (rec.booted && rec.epoch !== persist.epoch) syncEpoch(rec);
+        if (rec.booted && (rec.epoch !== persist.epoch || pendingOpen)) syncEpoch(rec);
         else flushScripts();
+        relayout();
+        paintButtons();
         return;
     }
     const w = wanted();
@@ -157,12 +252,23 @@ export function reconcileScripts({ force = false } = {}) {
     build(w.list);
 }
 
+/**
+ * 存档操作告诉这里「刚开了一个存档」（archive.js）：下一次 reconcile 整份重推并发酒馆的那组事件（见 syncEpoch）。
+ * created：新对话（酒馆里新对话就是新聊天文件，发 CHAT_CREATED）；「原地换开场白」时存档 id 不变，也靠这个触发。
+ * deleted：删掉了当前存档（先发 CHAT_DELETED(它的 id)）
+ */
+let pendingOpen = null;
+export function noteChatOpened({ created = false, deleted = null } = {}) {
+    if (!rec) return;
+    pendingOpen = { created: created || pendingOpen?.created === true, deleted: deleted ?? pendingOpen?.deleted ?? null };
+}
+
 /** 「脚本」页改了脚本（开关、代码、名字、增删）：启用的脚本或它们的代码变了才重建 */
 export function restartScripts() {
     enabledCache = { cardObj: null, scriptsRef: undefined, list: [] };
     const w = wanted();
     if (typeof w === 'string') { teardown(); runState = w; paintTab(); return; }
-    if (rec && rec.cardId === persist.cardId && rec.cardObj === state.card && rec.sig === signature(w.list)) return;
+    if (rec && rec.cardId === persist.cardId && rec.cardObj === state.card && rec.sig === signature(w.list)) { flushScripts(); paintButtons(); return; }   // 只改了按钮之类：推过去、重画按钮排，不重建
     if (ui.switching) { reconcileScripts({ force: true }); return; }
     build(w.list);
 }
@@ -204,11 +310,27 @@ function collectOps(r) {
     const ctx = ctxNow();
     const ctxJson = JSON.stringify(ctx);
     if (ctxJson !== r.ctxJson) ops.push({ op: 'ctx', value: ctx });
+    // 脚本按钮（第 4 期）：卡里这几个脚本现在的 button（「脚本」页改了、或宿主拒绝了脚本的改动时，把权威值推回去）
+    const btnPushed = [];
+    const tree = flattenScripts(cardScripts(state.card));
+    for (const id of r.ids) {
+        const s = tree.find(x => x.id === id);
+        const value = { enabled: s?.button?.enabled !== false, buttons: cleanButtonList(s?.button?.buttons ?? []) };
+        const j = JSON.stringify(value);
+        if (r.pushedButtons.get(id) === j) continue;
+        ops.push({ op: 'buttons', id, value });
+        btnPushed.push([id, j]);
+    }
+    const theme = themeNow();
+    const themeJson = JSON.stringify(theme);
+    if (themeJson !== r.themeJson) { ops.push({ op: 'theme', value: theme }); r.iframe.style.colorScheme = theme.scheme; }
     const commit = () => {
         r.shadow = chat.shadow;
         for (const [k, j] of pushed) r.pushed.set(k, j);
+        for (const [k, j] of btnPushed) r.pushedButtons.set(k, j);
         if (cardChanged) { r.cardRef = state.card; r.avatarRef = state.avatar; }
         r.ctxJson = ctxJson;
+        r.themeJson = themeJson;
     };
     return { ops, commit };
 }
@@ -252,8 +374,8 @@ function invalidateVars(r, scriptId) {
 }
 
 /**
- * 给沙箱发一个事件（先推副本）。还没 boot 的沙箱收不到（那时脚本还没开始监听）。
- * 第 2 期只发：CHAT_CHANGED（换存档，reconcileScripts）、MESSAGE_SENT、MESSAGE_RECEIVED（chat.js）。完整的酒馆事件是第 3 期
+ * 只给脚本沙箱发一个事件（先推副本）。还没 boot 的沙箱收不到（那时脚本还没开始监听）。
+ * 宿主自己的酒馆事件用 emitTavernEvent（沙箱 + 消息前端卡都发）；这个只给「前端卡 eventEmit 转过来的」用（前端卡那边 render.js 已经转发过）
  */
 export function emitScriptEvent(name, ...args) {
     const r = rec;
@@ -263,13 +385,55 @@ export function emitScriptEvent(name, ...args) {
     post(r, { kind: 'event', name: String(name), args });
 }
 
-/** 同一张卡换了存档：整份新聊天（和新的聊天变量、上下文）推过去，然后 CHAT_CHANGED(存档 id) */
+/**
+ * 宿主发一个酒馆事件（第 3 期，方案 §1.4；事件名、参数照酒馆 1.19.0 public/script.js）：脚本沙箱和消息里的前端卡【统一从这里发】。
+ * 沙箱先推副本再发（回调里同步读到新值）；前端卡只发给 eventOn 订阅了这个名字的 iframe（render.js emitFrameEvent），
+ * 前端卡读数据本来就是 RPC 到宿主现取，所以读到的也是新值。发事件不碰 DOM，前端卡不会因此重画。
+ */
+export function emitTavernEvent(name, ...args) {
+    emitScriptEvent(name, ...args);
+    try { emitFrameEvent(String(name), args); } catch (e) { console.error(e); }
+}
+
+/**
+ * STREAM_TOKEN_RECEIVED(到目前为止的全文)：酒馆每收到一段就发一次；我们最多 100ms 一次（流式时每秒可能几十段，
+ * 每次都要推一遍最后一楼的副本），最后一段一定发（generateReply 结束时 flushStreamToken）
+ */
+let streamLast = 0, streamTimer = null, streamPending = null;
+export function emitStreamToken(text) {
+    streamPending = String(text);
+    const wait = 100 - (Date.now() - streamLast);
+    if (wait <= 0) { flushStreamToken(); return; }
+    if (!streamTimer) streamTimer = setTimeout(flushStreamToken, wait);
+}
+export function flushStreamToken() {
+    clearTimeout(streamTimer); streamTimer = null;
+    if (streamPending === null) return;
+    const t = streamPending;
+    streamPending = null;
+    streamLast = Date.now();
+    emitTavernEvent('stream_token_received', t);
+}
+/** 生成没走到结尾就被换走（切存档等）时丢掉还没发的那段 */
+export function dropStreamToken() { clearTimeout(streamTimer); streamTimer = null; streamPending = null; }
+
+/**
+ * 同一张卡换了存档 / 开了新对话：整份新聊天（和新的聊天变量、上下文）推过去，然后照酒馆 getChatResult 的顺序发：
+ *   [CHAT_DELETED(旧存档 id)]、CHAT_CHANGED(存档 id)、[新对话：CHAT_CREATED]、[聊天只有 1 楼：MESSAGE_RECEIVED(0,'first_message')、CHARACTER_MESSAGE_RENDERED(0,'first_message')]
+ * （酒馆每次打开聊天、只有一楼时都发 first_message 那两个，不只是新对话）
+ */
 function syncEpoch(r) {
     r.epoch = persist.epoch;
     r.shadow = null;
+    const p = pendingOpen;
+    pendingOpen = null;
     const { ops, commit } = collectOps(r);
     if (post(r, { kind: 'sync', ops })) commit();
-    post(r, { kind: 'event', name: 'chat_id_changed', args: [persist.chatId] });
+    const send = (name, ...args) => { post(r, { kind: 'event', name, args }); try { emitFrameEvent(name, args); } catch { /* ignore */ } };
+    if (p?.deleted) send('chat_deleted', p.deleted);
+    send('chat_id_changed', persist.chatId);
+    if (p?.created) send('chat_created');
+    if (state.chat.length === 1) { send('message_received', 0, 'first_message'); send('character_message_rendered', 0, 'first_message'); }
 }
 
 /** 消息里的前端卡 eventEmit 了一个事件：也发给脚本（frame-host.js eventEmit 调） */
@@ -298,17 +462,76 @@ function scriptLog(r, scriptId, level, text) {
     frameHost.log({ scriptId, scriptName: name, cardId: r.cardId, level, text: scrubSecrets(text) });
 }
 
+/** 每个沙箱每秒最多处理 200 条消息（RPC、日志、区域上报……），多的直接丢掉并记一条（去重）：写坏的脚本用循环狂发时主页面不能被拖死 */
+function rateOk(r, kind) {
+    if (kind === 'regions') return true;   // 区域上报另有合并（只处理每帧最新的一条），不占这个额度
+    const sec = Math.floor(Date.now() / 1000);
+    if (r.rate.sec !== sec) { r.rate.sec = sec; r.rate.n = 0; }
+    if (++r.rate.n <= 200) return true;
+    if (!r.rate.said) { r.rate.said = true; frameHost.log({ scriptId: null, scriptName: '脚本沙箱', cardId: r.cardId, level: 'warn', text: '脚本 1 秒内发来的调用超过 200 次，多出来的已丢弃（这条只记一次）' }); }
+    return false;
+}
+
 function onMessage(r, event) {
     // 两道校验：来源必须是这个沙箱的窗口（不是它打开的弹窗、不是它里面嵌的 iframe、不是别的卡的），且带着只有它的 srcdoc 里才有的随机 frameId
     if (r !== rec || event.source !== r.iframe.contentWindow) return;
     const raw = event.data;
     if (!raw || typeof raw !== 'object' || raw.smalltalk !== true || raw.frameId !== r.frameId) return;
     const d = parseSandboxMessage(raw, r.ids);
-    if (!d) return;
+    if (!d || !rateOk(r, d.kind)) return;
     if (d.kind === 'ready') void sendBoot(r);
     else if (d.kind === 'log') scriptLog(r, d.scriptId, d.level, d.text);
     else if (d.kind === 'status') { r.status.set(d.scriptId, { status: d.status, text: d.text }); paintTab(); }
     else if (d.kind === 'call') void handleCall(r, d);
+    else if (d.kind === 'regions') {
+        // 只在下一帧处理最新的一条（动画时桩每帧都可能报一次）
+        const first = r.regionsQueued === null;
+        r.regionsQueued = d;
+        if (first) requestAnimationFrame(() => {
+            if (r !== rec || !r.regionsQueued) return;
+            const q = r.regionsQueued;
+            r.regionsQueued = null;
+            const box = r.iframe.getBoundingClientRect();
+            r.rects = parseRegions(q.rects, box.width, box.height);
+            r.dragOpen = q.drag === true && r.rects.length > 0;
+            applyClip(r);
+        });
+    }
+}
+
+/**
+ * 脚本想打开一个链接（沙箱没有 allow-popups，桩把 window.open 和 <a target> 的点击换成了这个）：
+ * 只认 http(s)，宿主自己先确认（写明是哪个脚本、完整网址），再用 noopener 打开。一次只问一个
+ */
+let openAsking = false;
+function openUrl(r, scriptId, url) {
+    let u;
+    try { u = new URL(String(url)); } catch { throw new Error('网址不对'); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('只能打开 http / https 链接');
+    if (openAsking) throw new Error('上一个打开链接的确认还没答');
+    const name = scriptId === null ? '某个脚本' : (r.scripts.get(scriptId)?.name ?? scriptId);
+    openAsking = true;
+    try {
+        if (!confirm(`脚本「${name}」想在新窗口打开：\n${u.href}\n\n要打开吗？`)) return false;
+    } finally { openAsking = false; }
+    window.open(u.href, '_blank', 'noopener,noreferrer');
+    return true;
+}
+
+/** 脚本改了自己的按钮（replaceScriptButtons 等）：写回卡里的脚本（card.scripts，第一次改时整棵树拷进去），存盘，重画按钮排。不重建沙箱 */
+function setScriptButtons(r, scriptId, list) {
+    if (typeof scriptId !== 'string') throw new Error('SmallTalk 没法确定是哪个脚本在调用');
+    const why = r.cardId !== persist.cardId ? '角色卡已经换了' : ui.switching ? '正在切换存档' : restoreActive() ? '正在恢复，请稍等'
+        : persist.stopped ? '已停止保存' : persist.readOnly ? '这个标签页是只读的' : null;
+    if (why) throw new Error(`按钮没有改：${why}`);
+    const buttons = cleanButtonList(Array.isArray(list) ? list : []);
+    const s = flattenScripts(ownScriptTree()).find(x => x.id === scriptId);
+    if (!s) throw new Error('这个脚本已经不在卡里了');
+    if (JSON.stringify(cleanButtonList(s.button?.buttons ?? [])) === JSON.stringify(buttons)) return;   // 酒馆助手：一样就不改
+    s.button = { ...(s.button ?? { enabled: true }), buttons };
+    save();
+    paintButtons();
+    try { renderScriptsTab(); } catch { /* 页签没开 */ }
 }
 
 async function sendBoot(r) {
@@ -358,6 +581,28 @@ async function handleCall(r, d) {
         if (typeof name === 'string') { try { emitFrameEvent(name, rest); } catch { /* 前端卡收不到就算了 */ } }
         return reply(true, undefined);
     }
+    if (d.method === 'replaceScriptButtons' || d.method === 'openUrl') {
+        try {
+            const v = d.method === 'openUrl' ? openUrl(r, d.scriptId, d.args[0]) : setScriptButtons(r, d.scriptId, d.args[0]);
+            if (d.method === 'openUrl') scriptLog(r, d.scriptId, 'call', `打开链接 ${String(d.args[0]).slice(0, 200)}：${v ? '用户同意了' : '用户没同意'}`);
+            flushScripts();
+            reply(true, v);
+        } catch (err) {
+            const text = String(err?.message ?? err);
+            scriptLog(r, d.scriptId, 'warn', `${d.method === 'openUrl' ? '打开链接' : '改按钮'}没有执行：${text}`);
+            r.pushedButtons.delete(d.scriptId);   // 把权威的按钮推回去（沙箱里先改了的要换回来）
+            flushScripts();
+            reply(false, text);
+        }
+        return;
+    }
+    if (d.method === 'toastr') {
+        // 提示条按沙箱限频：10 秒最多 5 条，多的只记日志
+        const now = Date.now();
+        r.toastTimes = r.toastTimes.filter(t => now - t < 10000);
+        if (r.toastTimes.length >= 5) { scriptLog(r, d.scriptId, 'info', `提示条太多，没显示：${String(d.args[1] ?? '').slice(0, 200)}`); return reply(true, undefined); }
+        r.toastTimes.push(now);
+    }
     if (LOGGED_CALLS.has(d.method)) scriptLog(r, d.scriptId, 'call', `${d.method}(${shortArgs(d.args)})`);
     try {
         const value = await callHost(d.method, d.args, ctx);
@@ -393,8 +638,28 @@ export function scriptStatus(id) {
 /** 测试 / 调试用：现在有没有沙箱、属于哪张卡、装了哪些脚本 */
 export function scriptSandboxInfo() {
     return { live: !!rec, cardId: rec?.cardId ?? null, ids: rec ? [...rec.ids] : [], booted: !!rec?.booted, runState,
-        frames: document.querySelectorAll('iframe.script-sandbox').length };
+        frames: document.querySelectorAll('iframe.script-sandbox').length, rects: rec ? rec.rects.map(x => [...x]) : [], dragOpen: !!rec?.dragOpen };
 }
+
+/** 按钮排要画的：沙箱在跑时，按「脚本」页的顺序，每个运行中的脚本 {id, name, buttons: 看得见的按钮名}（button.enabled 关着的整组不要） */
+export function runningButtons() {
+    if (!rec || rec.cardId !== persist.cardId || runState !== 'running') return [];
+    const tree = flattenScripts(cardScripts(state.card));
+    const out = [];
+    for (const s of rec.list) {
+        const cur = tree.find(x => x.id === s.id);
+        if (!cur || cur.button?.enabled === false) continue;
+        const names = cleanButtonList(cur.button?.buttons ?? []).filter(b => b.visible).map(b => b.name);
+        if (names.length) out.push({ id: s.id, name: cur.name || '(未命名)', buttons: names });
+    }
+    return out;
+}
+/** 点了脚本按钮：发事件（酒馆助手：eventSource.emit(按钮事件名)，不带参数、不管有没有人订阅） */
+export function clickScriptButton(scriptId, eventName) {
+    if (!rec || !rec.ids.has(scriptId)) return;
+    emitTavernEvent(eventName);
+}
+function paintButtons() { try { renderScriptButtons(); } catch (e) { console.error(e); } if (rec) layoutOverlay(rec); }
 
 let paintQueued = false;
 function paintTab() {

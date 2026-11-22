@@ -30,7 +30,10 @@ export function h(tag, props, ...kids) {
 
 export function toast(text, kind = '') {
     const el = h('div', { class: `toast ${kind}` }, text);
-    $('#toasts').append(el);
+    const box = $('#toasts');
+    box.append(el);
+    // 同屏最多 6 条：多出来的把最早的挪走（卡 / 脚本用循环狂弹提示时，页面不能堆几万个节点卡死；见 frame-host.js toastr 的限频）
+    while (box.children.length > 6) box.firstElementChild.remove();
     setTimeout(() => el.remove(), kind === 'error' ? 8000 : 3500);
 }
 

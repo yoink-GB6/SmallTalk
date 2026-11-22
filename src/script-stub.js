@@ -50,7 +50,7 @@ export function scriptStubMain(BOOT, LIB) {
     var SCRIPTS = Object.create(null);   // 脚本 id → {id, name, info, button, code, url, status}
     var ORDER = [];
     var URL2ID = Object.create(null);    // blob 地址 → 脚本 id
-    var booted = false, libsReady = false, bootData = null;
+    var booted = false, libsReady = false, bootData = null, appReadyFired = false;
 
     function post(msg) {
         msg.smalltalk = true;
@@ -155,6 +155,162 @@ export function scriptStubMain(BOOT, LIB) {
         } catch (e2) { /* 放弃 */ }
     }
 
+    // ───────── 原生对话框 / 新窗口 / 表单：沙箱只有 allow-scripts（render.js SCRIPT_SANDBOX）─────────
+    // 原生的 alert / confirm / prompt 看起来像主页面自己弹的，能骗用户输入 key，所以沙箱不给 allow-modals；这里换成「记一条日志、返回空」，
+    // 免得调用它们的脚本直接报错。window.open 和链接的点击改走宿主（宿主只认 http(s)、自己先问用户、noopener 打开）；表单提交不支持。
+    function noDialog(name, ret) {
+        return function () { logOnce(caller(), 'unsupported', '脚本想弹出原生对话框（' + name + '），SmallTalk 不支持：可以用 toastr 或在自己的界面里显示'); return ret; };
+    }
+    try { W.alert = noDialog('alert', undefined); W.confirm = noDialog('confirm', false); W.prompt = noDialog('prompt', null); W.print = noDialog('print', undefined); } catch (e) { /* ignore */ }
+    function openViaHost(url) {
+        var href;
+        try { href = new URL(String(url), 'https://invalid.invalid/').href; } catch (e) { return null; }
+        if (!/^https?:/i.test(href) || /^https:\/\/invalid\.invalid\//.test(href)) { logOnce(caller(), 'unsupported', '脚本想打开 ' + String(url).slice(0, 200) + '：只能打开完整的 http / https 链接'); return null; }
+        rpc('openUrl', [href], caller()).then(null, function () {});
+        return null;
+    }
+    try { W.open = function (url) { return openViaHost(url); }; } catch (e) { /* ignore */ }
+    document.addEventListener('click', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+        if (!a || e.defaultPrevented) return;
+        var raw = a.getAttribute('href') || '';
+        if (raw.charAt(0) === '#' || /^javascript:/i.test(raw)) return;
+        e.preventDefault();   // 不让沙箱自己导航走（那样这张卡的脚本全没了），也开不了新窗口
+        openViaHost(a.href);
+    });
+    document.addEventListener('submit', function (e) {
+        e.preventDefault();
+        logOnce(caller(), 'unsupported', '脚本的表单想提交，SmallTalk 不支持（沙箱里不能提交表单；脚本可以自己监听 submit 处理）');
+    });
+
+    // ───────── 悬浮区：量脚本画的东西占的矩形，报给宿主裁剪（第 5 期，宿主一侧见 ui/script-host.js「悬浮区」）─────────
+    // 遍历 body 下所有元素：看得见（不是 display:none / visibility:hidden / 透明度 0）、有尺寸的，取 getBoundingClientRect（已含 transform），
+    // 四周加边距（4px + 阴影的大小，最多 40px）——宁可多裁进来一点，也别把按钮的边裁掉。完全落在已经量过的祖先矩形里的不重复记。
+    // 合并：先去掉被包含的、把重叠的并起来，还多于 32 个就反复合并「并起来面积增加最少」的一对。元素超过 4000 个时只取 body 子元素的外接矩形。
+    // 什么时候量：DOM 变了（MutationObserver）、窗口尺寸变了、过渡 / 动画开始结束、有动画在跑时每 32ms 一次、图片等加载完、每 500ms 兜底一次；
+    //   都合并到一个 16ms 的定时器里（不用 rAF，见 scheduleRegions），变了才发。
+    // 已知漏量：::before / ::after 伪元素超出元素本身的部分、超过 40px 的阴影 / 滤镜、overflow 裁掉的部分（多量，不是漏量）、
+    //   嵌套 iframe 里面的东西超出 iframe 框的部分（浏览器本来也画不出来）；没有显示出来但能接收点击的（opacity:0 的透明遮罩）不算区域。
+    // 拖动：按下（pointerdown）时立刻报「整块」（drag: true），宿主放开裁剪，松开 / 取消 / 宿主说在外面松开了（release）后再量真实区域。
+    var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, LINK: 1, META: 1, TEMPLATE: 1, NOSCRIPT: 1, TITLE: 1, BASE: 1 };
+    function shadowPad(cs) {
+        var t = (cs.boxShadow && cs.boxShadow !== 'none' ? cs.boxShadow : '') + ' ' + (cs.filter && cs.filter !== 'none' ? cs.filter : '');
+        var m = t.match(/-?\d+(\.\d+)?px/g);
+        if (!m) return 0;
+        var sum = 0;
+        m.forEach(function (x) { sum += Math.abs(parseFloat(x)); });
+        return Math.min(40, sum);
+    }
+    function measureRegions() {
+        var body = document.body;
+        if (!body) return [];
+        var vw = W.innerWidth, vh = W.innerHeight, out = [], count = 0, tooMany = false;
+        function inside(r, list) {
+            for (var i = 0; i < list.length; i++) { var a = list[i]; if (r[0] >= a[0] && r[1] >= a[1] && r[0] + r[2] <= a[0] + a[2] && r[1] + r[3] <= a[1] + a[3]) return true; }
+            return false;
+        }
+        function walk(el, anc) {
+            for (var c = el.firstElementChild; c; c = c.nextElementSibling) {
+                if (++count > 4000) { tooMany = true; return; }
+                if (SKIP_TAGS[c.tagName]) continue;
+                var cs = getComputedStyle(c);
+                if (cs.display === 'none') continue;
+                if (Number(cs.opacity) === 0) continue;   // 整棵子树都看不见
+                var mine = anc;
+                if (cs.display !== 'contents' && cs.visibility !== 'hidden' && cs.visibility !== 'collapse') {
+                    var b = c.getBoundingClientRect();
+                    if (b.width > 0 && b.height > 0) {
+                        var p = 4 + shadowPad(cs);
+                        var r = [Math.floor(b.left - p), Math.floor(b.top - p), Math.ceil(b.width + 2 * p), Math.ceil(b.height + 2 * p)];
+                        if (r[0] < vw && r[1] < vh && r[0] + r[2] > 0 && r[1] + r[3] > 0 && !inside(r, anc)) { out.push(r); mine = anc.concat([r]); }
+                    }
+                }
+                if (c.firstElementChild) walk(c, mine);
+                if (tooMany) return;
+            }
+        }
+        walk(body, []);
+        if (tooMany) {
+            out = [];
+            for (var t = body.firstElementChild; t; t = t.nextElementSibling) {
+                if (SKIP_TAGS[t.tagName]) continue;
+                var bb = t.getBoundingClientRect();
+                if (bb.width > 0 && bb.height > 0) out.push([Math.floor(bb.left - 8), Math.floor(bb.top - 8), Math.ceil(bb.width + 16), Math.ceil(bb.height + 16)]);
+            }
+        }
+        return mergeRects(out.map(function (r) {
+            var x1 = Math.max(0, r[0]), y1 = Math.max(0, r[1]), x2 = Math.min(vw, r[0] + r[2]), y2 = Math.min(vh, r[1] + r[3]);
+            return [x1, y1, x2 - x1, y2 - y1];
+        }).filter(function (r) { return r[2] > 0 && r[3] > 0; }));
+    }
+    function union(a, b) { var x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]); return [x, y, Math.max(a[0] + a[2], b[0] + b[2]) - x, Math.max(a[1] + a[3], b[1] + b[3]) - y]; }
+    function overlap(a, b) { return a[0] <= b[0] + b[2] && b[0] <= a[0] + a[2] && a[1] <= b[1] + b[3] && b[1] <= a[1] + a[3]; }
+    function mergeRects(list) {
+        var changed = true;
+        while (changed && list.length > 1 && list.length <= 400) {
+            changed = false;
+            for (var i = 0; i < list.length && !changed; i++) for (var j = i + 1; j < list.length; j++) {
+                if (overlap(list[i], list[j])) { list[i] = union(list[i], list[j]); list.splice(j, 1); changed = true; break; }
+            }
+        }
+        while (list.length > 32) {
+            var best = null, bi = 0, bj = 1;
+            for (var a = 0; a < list.length; a++) for (var b = a + 1; b < list.length; b++) {
+                var u = union(list[a], list[b]), cost = u[2] * u[3] - list[a][2] * list[a][3] - list[b][2] * list[b][3];
+                if (best === null || cost < best) { best = cost; bi = a; bj = b; }
+                if (list.length > 200) break;   // 太多时不求最优，先粗合并
+            }
+            list[bi] = union(list[bi], list[bj]); list.splice(bj, 1);
+        }
+        return list;
+    }
+    var lastRegions = '', regionQueued = false, dragging = false, dragTarget = null, dragPointer = null;
+    function postRegions(rects, drag) {
+        var j = JSON.stringify(rects) + (drag ? 'd' : '');
+        if (j === lastRegions) return;
+        lastRegions = j;
+        try { post({ kind: 'regions', rects: rects, drag: !!drag }); } catch (e) { /* ignore */ }
+    }
+    function scheduleRegions() {
+        if (regionQueued) return;
+        regionQueued = true;
+        // 不用 requestAnimationFrame：覆盖层被裁成空（还没画东西）时浏览器认为这个跨源 iframe 看不见，会暂停它的 rAF（实测），区域就永远报不上来
+        setTimeout(function () {
+            regionQueued = false;
+            if (dragging) return;
+            try { postRegions(measureRegions(), false); } catch (e) { logOnce(null, 'warn', '量悬浮界面的区域出错：' + toText(e)); }
+        }, 16);
+    }
+    function startDrag(e) {
+        if (dragging || (e.pointerType === 'mouse' && e.button !== 0)) return;
+        dragging = true; dragTarget = e.target; dragPointer = e.pointerId;
+        postRegions([[0, 0, W.innerWidth, W.innerHeight]], true);
+    }
+    /** 松开了。fromHost：宿主说指针在覆盖层外面松开了——沙箱没收到 pointerup，替脚本补发一个，免得它的拖动状态卡住 */
+    function endDrag(fromHost) {
+        if (!dragging) return;
+        dragging = false;
+        if (fromHost && dragTarget && dragTarget.isConnected) {
+            try { dragTarget.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true, pointerId: dragPointer, isPrimary: true, pointerType: 'mouse' })); } catch (e2) { /* ignore */ }
+            try { dragTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true })); } catch (e3) { /* ignore */ }
+        }
+        dragTarget = null;
+        lastRegions = '';
+        scheduleRegions();
+    }
+    W.addEventListener('pointerdown', startDrag, true);
+    W.addEventListener('pointerup', function () { endDrag(false); }, true);
+    W.addEventListener('pointercancel', function () { endDrag(false); }, true);
+    function watchRegions() {
+        try { new MutationObserver(scheduleRegions).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true }); } catch (e) { /* ignore */ }
+        W.addEventListener('resize', scheduleRegions);
+        ['transitionrun', 'transitionend', 'transitioncancel', 'animationstart', 'animationend', 'animationcancel', 'load'].forEach(function (n) { document.addEventListener(n, scheduleRegions, true); });
+        // 有动画 / 过渡在跑时每 32ms 量一次（同上，不用 rAF）
+        setInterval(function () { if (document.getAnimations && document.getAnimations().length) scheduleRegions(); }, 32);
+        setInterval(scheduleRegions, 500);
+        scheduleRegions();
+    }
+
     // ───────── 错误归属 ─────────
 
     function hint(msg) {
@@ -237,9 +393,30 @@ export function scriptStubMain(BOOT, LIB) {
         var k = rec && rec.varKey;
         if (!k) return;
         pendingVar[k] = Math.max(0, (pendingVar[k] || 0) - 1);
-        if (pendingVar[k] === 0 && stashed[k]) { var op = stashed[k]; delete stashed[k]; applyOps(M, [op]); }
+        if (pendingVar[k] === 0 && stashed[k]) { var op = stashed[k]; delete stashed[k]; applyAll([op]); }
     }
-    var varKeyOf = function (op) { return op.scope === 'script' ? 's:' + op.id : op.scope; };
+    var varKeyOf = function (op) { return op.op === 'buttons' ? 'b:' + op.id : op.scope === 'script' ? 's:' + op.id : op.scope; };
+    /** 补丁：按钮、主题是桩自己的东西，别的交给 script-sync.js 的 applyOps */
+    function applyAll(ops) {
+        var rest = [];
+        ops.forEach(function (op) {
+            if (op && op.op === 'buttons') {
+                var sc = SCRIPTS[String(op.id)], v = op.value || {};
+                if (sc) sc.button = { enabled: v.enabled !== false, buttons: cleanButtons(Array.isArray(v.buttons) ? v.buttons : []) };
+            } else if (op && op.op === 'theme') applyTheme(op.value);
+            else rest.push(op);
+        });
+        applyOps(M, rest);
+    }
+    /** 主页面的深浅和几个主题变量（只读的展示信息）：color-scheme 必须和主页面一致，不然浏览器给覆盖层画不透明的底 */
+    var THEME_VARS = ['bg', 'panel', 'text', 'dim', 'accent', 'accent-text', 'line', 'font', 'radius'];
+    function applyTheme(t) {
+        if (!t || typeof t !== 'object') return;
+        var root = document.documentElement;
+        if (t.scheme === 'dark' || t.scheme === 'light') root.style.colorScheme = t.scheme;
+        var v = t.vars && typeof t.vars === 'object' ? t.vars : {};
+        THEME_VARS.forEach(function (k) { if (typeof v[k] === 'string') root.style.setProperty('--smalltalk-' + k, v[k].slice(0, 200)); });
+    }
 
     // ───────── 事件（本地分发；宿主推 {kind:'event'}）─────────
 
@@ -253,6 +430,8 @@ export function scriptStubMain(BOOT, LIB) {
         if (!exists) {
             var entry = { fn: fn, once: !!(opts && opts.once), sid: sid };
             if (opts && opts.first) list.unshift(entry); else list.push(entry);
+            // 酒馆的 eventSource 对 APP_READY 是「发过之后再注册的也立刻调一次」（autoFireAfterEmit）
+            if (name === 'app_ready' && appReadyFired) { if (entry.once) off(name, fn); try { fn(); } catch (err) { log(sid, 'error', '事件 app_ready 的监听器出错：' + toText(err)); } }
         }
         return { stop: function () { off(name, fn); } };
     }
@@ -292,12 +471,14 @@ export function scriptStubMain(BOOT, LIB) {
             var ops = Array.isArray(d.ops) ? d.ops : [];
             var now = [];
             ops.forEach(function (op) {
-                if (op && op.op === 'vars' && pendingVar[varKeyOf(op)] > 0) stashed[varKeyOf(op)] = op;
+                if (op && (op.op === 'vars' || op.op === 'buttons') && pendingVar[varKeyOf(op)] > 0) stashed[varKeyOf(op)] = op;
                 else now.push(op);
             });
-            applyOps(M, now);
+            applyAll(now);
         } else if (d.kind === 'event') {
             fire(String(d.name), Array.isArray(d.args) ? d.args : []);
+        } else if (d.kind === 'release') {
+            endDrag(true);
         } else if (d.kind === 'boot' && !booted) {
             bootData = d;
             maybeStart();
@@ -391,35 +572,40 @@ export function scriptStubMain(BOOT, LIB) {
             if (s == null) throw new Error(fn + '：SmallTalk 没法确定是哪个脚本在调用（请直接在脚本里调，不要经过别的库）');
             return s;
         };
-        var buttonsNote = function (s, fn) { logOnce(s, 'unimplemented', fn + '：脚本按钮将在后续版本支持（现在按钮不会显示，改动只在这一次运行里有效）'); };
         var api = {};
         api.getScriptId = function () { return need('getScriptId'); };
         api.getScriptName = function () { return SCRIPTS[need('getScriptName')].name; };
         api.getScriptInfo = function () { return SCRIPTS[need('getScriptInfo')].info; };
         api.replaceScriptInfo = function (info) { var s = need('replaceScriptInfo'); SCRIPTS[s].info = String(info === undefined ? '' : info).slice(0, 10000); logOnce(s, 'unimplemented', 'replaceScriptInfo：改动只在这一次运行里有效（不写回卡里）'); };
         api.getIframeName = function () { var s = need('getIframeName'); return 'TH-script--' + SCRIPTS[s].name + '--' + s; };
-        api.getButtonEvent = function (name) { var s = need('getButtonEvent'); buttonsNote(s, 'getButtonEvent'); return s + '_' + cyrb53(String(name)); };
+        // 脚本按钮（第 4 期）。事件名照酒馆助手：脚本 id + '_' + getStringHash(按钮名)（非字符串 → 0）。
+        // 改按钮：先改本地、立刻返回，同时告诉宿主写回卡里（card.scripts）；宿主拒绝时把权威的按钮推回来（同变量写）。
+        // replaceScriptButtons / appendInexistentScriptButtons 的第一个参数可以是脚本 id（旧写法），酒馆助手也忽略它、永远改调用者自己的
+        api.getButtonEvent = function (name) { return need('getButtonEvent') + '_' + (typeof name === 'string' ? cyrb53(name) : 0); };
         api.getScriptButtons = function () { var s = need('getScriptButtons'); return clone(SCRIPTS[s].button.buttons); };
+        function setButtons(s, list, method) {
+            var next = cleanButtons(list);
+            if (JSON.stringify(next) === JSON.stringify(SCRIPTS[s].button.buttons)) return;
+            SCRIPTS[s].button.buttons = next;
+            rpc('replaceScriptButtons', [next], s, 'b:' + s).then(null, function (err) { log(s, 'warn', method + ' 没有生效：' + (err && err.message)); });
+        }
         api.replaceScriptButtons = function (a, b) {
             var s = need('replaceScriptButtons');
-            var list = Array.isArray(a) ? a : b;
-            if (!Array.isArray(list)) return;
-            buttonsNote(s, 'replaceScriptButtons');
-            SCRIPTS[s].button.buttons = cleanButtons(list);
+            var list = typeof a === 'string' ? b : a;
+            if (!Array.isArray(list)) throw new TypeError('replaceScriptButtons：按钮必须是数组');
+            setButtons(s, list, 'replaceScriptButtons');
         };
         api.appendInexistentScriptButtons = function (a, b) {
             var s = need('appendInexistentScriptButtons');
-            var list = Array.isArray(a) ? a : b;
-            if (!Array.isArray(list)) return;
-            buttonsNote(s, 'appendInexistentScriptButtons');
+            var list = typeof a === 'string' ? b : a;
+            if (!Array.isArray(list)) throw new TypeError('appendInexistentScriptButtons：按钮必须是数组');
             var cur = SCRIPTS[s].button.buttons;
-            cleanButtons(list).forEach(function (x) { if (!cur.some(function (y) { return y.name === x.name; })) cur.push(x); });
+            setButtons(s, cur.concat(list.filter(function (x) { return x && !cur.some(function (y) { return y.name === String(x.name); }); })), 'appendInexistentScriptButtons');
         };
         api.updateScriptButtonsWith = function (fn) {
             var s = need('updateScriptButtonsWith');
-            buttonsNote(s, 'updateScriptButtonsWith');
             var r = fn(clone(SCRIPTS[s].button.buttons));
-            var done = function (list) { if (Array.isArray(list)) SCRIPTS[s].button.buttons = cleanButtons(list); return clone(SCRIPTS[s].button.buttons); };
+            var done = function (list) { if (Array.isArray(list)) setButtons(s, list, 'updateScriptButtonsWith'); return list; };
             return r && typeof r.then === 'function' ? r.then(done) : done(r);
         };
         api.eventOn = function (n, fn) { return on(sidOf(), n, fn); };
@@ -459,7 +645,7 @@ export function scriptStubMain(BOOT, LIB) {
             var s = sidOf();
             return varWrite(s, 'deleteVariable', option, [path], function (cur) {
                 var r = V.unset(cur, path);
-                return { next: r.deleted ? r.value : undefined, result: { variables: clone(r.value), delete_occurred: r.deleted } };
+                return { next: r.deleted ? r.value : undefined, result: { variables: clone(r.value), delete_occurred: r.occurred } };   // 照 lodash unset：没有的路径也是 true
             });
         };
         api.updateVariablesWith = function (fn, option) {
@@ -657,7 +843,8 @@ export function scriptStubMain(BOOT, LIB) {
         var out = {};
         ORDER.forEach(function (id) {
             var b = SCRIPTS[id].button;
-            if (b && b.enabled) out[id] = b.buttons.filter(function (x) { return x.visible; }).map(function (x) { return { button_id: id + '_' + cyrb53(x.name), button_name: x.name }; });
+            var vis = b && b.enabled ? b.buttons.filter(function (x) { return x.visible; }) : [];
+            if (vis.length) out[id] = vis.map(function (x) { return { button_id: id + '_' + cyrb53(x.name), button_name: x.name }; });
         });
         return out;
     };
@@ -667,13 +854,7 @@ export function scriptStubMain(BOOT, LIB) {
         STREAM_TOKEN_RECEIVED_FULLY: 'js_stream_token_received_fully', STREAM_TOKEN_RECEIVED_INCREMENTALLY: 'js_stream_token_received_incrementally',
         GENERATION_ENDED: 'js_generation_ended',
     };
-    impl.tavern_events = {
-        APP_READY: 'app_ready', MESSAGE_SWIPED: 'message_swiped', MESSAGE_SENT: 'message_sent', MESSAGE_RECEIVED: 'message_received',
-        MESSAGE_EDITED: 'message_edited', MESSAGE_DELETED: 'message_deleted', MESSAGE_UPDATED: 'message_updated', CHAT_CHANGED: 'chat_id_changed',
-        CHAT_CREATED: 'chat_created', CHAT_DELETED: 'chat_deleted', GENERATION_STARTED: 'generation_started', GENERATION_STOPPED: 'generation_stopped',
-        GENERATION_ENDED: 'generation_ended', STREAM_TOKEN_RECEIVED: 'stream_token_received', USER_MESSAGE_RENDERED: 'user_message_rendered',
-        CHARACTER_MESSAGE_RENDERED: 'character_message_rendered', CHARACTER_FIRST_MESSAGE_SELECTED: 'character_first_message_selected',
-    };
+    impl.tavern_events = Object.assign({}, BOOT.tavernEvents);   // 酒馆 event_types 的全集（名字 → 值）；SmallTalk 真的会发的见 script-host.js emitTavernEvent 的调用方
     function toast(type) {
         return function (message, title) { rpc('toastr', [type, toText(message), title === undefined ? '' : toText(title)], caller()).then(null, function () {}); };
     }
@@ -729,7 +910,7 @@ export function scriptStubMain(BOOT, LIB) {
             ORDER.push(id);
         });
         var left = ORDER.length;
-        var doneOne = function () { left--; if (left === 0) fire('app_ready', []); };
+        var doneOne = function () { left--; if (left === 0) { appReadyFired = true; fire('app_ready', []); } };
         if (!left) return;
         ORDER.forEach(function (id) {
             var s = SCRIPTS[id];
@@ -754,6 +935,7 @@ export function scriptStubMain(BOOT, LIB) {
         if (libsReady) return;
         libsReady = true;
         JQ = typeof W.jQuery === 'function' ? W.jQuery : null;
+        watchRegions();
         if (JQ) { define('$', jqFor(null)); define('jQuery', jqFor(null)); }
         try { post({ kind: 'ready' }); } catch (e) { /* ignore */ }
         maybeStart();
@@ -792,7 +974,31 @@ export const SCRIPT_UNIMPLEMENTED = Object.freeze({
 
 /** 脚本能 RPC 到宿主的方法（白名单）。变量的读、聊天的读都在沙箱里同步做，不在这里 */
 export const SCRIPT_BRIDGED = Object.freeze(['setChatMessages', 'setChatMessage', 'createChatMessages', 'deleteChatMessages',
-    'replaceVariables', 'insertOrAssignVariables', 'insertVariables', 'deleteVariable', 'triggerSlash', 'substitudeMacros', 'eventEmit', 'toastr', 'reloadIframe']);
+    'replaceVariables', 'insertOrAssignVariables', 'insertVariables', 'deleteVariable', 'triggerSlash', 'substitudeMacros', 'eventEmit', 'toastr', 'reloadIframe', 'replaceScriptButtons', 'openUrl']);
+
+/** 酒馆 1.19.0 public/scripts/events.js 的 event_types 全集（只是名字 → 值；脚本里 tavern_events.X 要拿到对的字符串）。SmallTalk 真的会发哪些见 ui/script-host.js emitTavernEvent 的调用方 */
+export const TAVERN_EVENTS = Object.freeze({
+    APP_INITIALIZED: 'app_initialized', APP_READY: 'app_ready', EXTRAS_CONNECTED: 'extras_connected', MESSAGE_SWIPED: 'message_swiped', MESSAGE_SENT: 'message_sent',
+    MESSAGE_RECEIVED: 'message_received', MESSAGE_EDITED: 'message_edited', MESSAGE_DELETED: 'message_deleted', MESSAGE_UPDATED: 'message_updated', MESSAGE_FILE_EMBEDDED: 'message_file_embedded',
+    MESSAGE_REASONING_EDITED: 'message_reasoning_edited', MESSAGE_REASONING_DELETED: 'message_reasoning_deleted', MESSAGE_SWIPE_DELETED: 'message_swipe_deleted', MORE_MESSAGES_LOADED: 'more_messages_loaded', IMPERSONATE_READY: 'impersonate_ready',
+    CHAT_CHANGED: 'chat_id_changed', GENERATION_STARTED: 'generation_started', GENERATION_STOPPED: 'generation_stopped', GENERATION_ENDED: 'generation_ended', SD_PROMPT_PROCESSING: 'sd_prompt_processing',
+    EXTENSIONS_FIRST_LOAD: 'extensions_first_load', EXTENSION_SETTINGS_LOADED: 'extension_settings_loaded', SETTINGS_LOADED: 'settings_loaded', SETTINGS_UPDATED: 'settings_updated', GROUP_UPDATED: 'group_updated',
+    MOVABLE_PANELS_RESET: 'movable_panels_reset', SETTINGS_LOADED_BEFORE: 'settings_loaded_before', SETTINGS_LOADED_AFTER: 'settings_loaded_after', CHATCOMPLETION_SOURCE_CHANGED: 'chatcompletion_source_changed', CHATCOMPLETION_MODEL_CHANGED: 'chatcompletion_model_changed',
+    OAI_PRESET_CHANGED_BEFORE: 'oai_preset_changed_before', OAI_PRESET_CHANGED_AFTER: 'oai_preset_changed_after', OAI_PRESET_EXPORT_READY: 'oai_preset_export_ready', OAI_PRESET_IMPORT_READY: 'oai_preset_import_ready', WORLDINFO_SETTINGS_UPDATED: 'worldinfo_settings_updated',
+    WORLDINFO_UPDATED: 'worldinfo_updated', CHARACTER_EDITOR_OPENED: 'character_editor_opened', CHARACTER_EDITED: 'character_edited', CHARACTER_PAGE_LOADED: 'character_page_loaded', CHARACTER_GROUP_OVERLAY_STATE_CHANGE_BEFORE: 'character_group_overlay_state_change_before',
+    CHARACTER_GROUP_OVERLAY_STATE_CHANGE_AFTER: 'character_group_overlay_state_change_after', USER_MESSAGE_RENDERED: 'user_message_rendered', CHARACTER_MESSAGE_RENDERED: 'character_message_rendered', FORCE_SET_BACKGROUND: 'force_set_background', CHAT_DELETED: 'chat_deleted',
+    CHAT_CREATED: 'chat_created', CHAT_RENAMED: 'chat_renamed', GROUP_CHAT_DELETED: 'group_chat_deleted', GROUP_CHAT_CREATED: 'group_chat_created', GENERATE_BEFORE_COMBINE_PROMPTS: 'generate_before_combine_prompts',
+    GENERATE_AFTER_COMBINE_PROMPTS: 'generate_after_combine_prompts', GENERATE_AFTER_DATA: 'generate_after_data', GROUP_MEMBER_DRAFTED: 'group_member_drafted', GROUP_WRAPPER_STARTED: 'group_wrapper_started', GROUP_WRAPPER_FINISHED: 'group_wrapper_finished',
+    WORLD_INFO_ACTIVATED: 'world_info_activated', TEXT_COMPLETION_SETTINGS_READY: 'text_completion_settings_ready', CHAT_COMPLETION_SETTINGS_READY: 'chat_completion_settings_ready', CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready', CHARACTER_FIRST_MESSAGE_SELECTED: 'character_first_message_selected',
+    CHARACTER_DUPLICATED: 'character_duplicated', CHARACTER_RENAMED: 'character_renamed', CHARACTER_RENAMED_IN_PAST_CHAT: 'character_renamed_in_past_chat', SMOOTH_STREAM_TOKEN_RECEIVED: 'stream_token_received', STREAM_TOKEN_RECEIVED: 'stream_token_received',
+    STREAM_REASONING_DONE: 'stream_reasoning_done', FILE_ATTACHMENT_DELETED: 'file_attachment_deleted', WORLDINFO_FORCE_ACTIVATE: 'worldinfo_force_activate', OPEN_CHARACTER_LIBRARY: 'open_character_library', ONLINE_STATUS_CHANGED: 'online_status_changed',
+    IMAGE_SWIPED: 'image_swiped', CONNECTION_PROFILE_LOADED: 'connection_profile_loaded', CONNECTION_PROFILE_CREATED: 'connection_profile_created', CONNECTION_PROFILE_DELETED: 'connection_profile_deleted', CONNECTION_PROFILE_UPDATED: 'connection_profile_updated',
+    TOOL_CALLS_PERFORMED: 'tool_calls_performed', TOOL_CALLS_RENDERED: 'tool_calls_rendered', SECRET_WRITTEN: 'secret_written', SECRET_DELETED: 'secret_deleted', SECRET_ROTATED: 'secret_rotated',
+    SECRET_EDITED: 'secret_edited', PRESET_CHANGED: 'preset_changed', PRESET_DELETED: 'preset_deleted', PRESET_RENAMED: 'preset_renamed', PRESET_RENAMED_BEFORE: 'preset_renamed_before',
+    MAIN_API_CHANGED: 'main_api_changed', WORLDINFO_ENTRIES_LOADED: 'worldinfo_entries_loaded', WORLDINFO_SCAN_DONE: 'worldinfo_scan_done', MEDIA_ATTACHMENT_DELETED: 'media_attachment_deleted', PERSONA_CHANGED: 'persona_changed',
+    PERSONA_CREATED: 'persona_created', PERSONA_UPDATED: 'persona_updated', PERSONA_RENAMED: 'persona_renamed', PERSONA_DELETED: 'persona_deleted', TTS_JOB_STARTED: 'tts_job_started',
+    TTS_AUDIO_READY: 'tts_audio_ready', TTS_JOB_COMPLETE: 'tts_job_complete', ITEMIZED_PROMPTS_LOADED: 'itemized_prompts_loaded', ITEMIZED_PROMPTS_SAVED: 'itemized_prompts_saved', ITEMIZED_PROMPTS_DELETED: 'itemized_prompts_deleted',
+});
 
 /** 兼容版本号（脚本常用来判断版本）：照着学的酒馆助手 / 酒馆版本 */
 export const COMPAT_VERSIONS = Object.freeze({ helper: '4.12.2', tavern: '1.19.0' });
@@ -804,13 +1010,16 @@ const SCRIPT_LIBS = ['fontawesome', 'jquery', 'lodash', 'vue'];
  * 沙箱的 srcdoc（纯函数，Node 里可测）。只有桩和库，【没有】脚本代码——代码在 boot 消息里，用 Blob URL 加载（见 script-stub.js 文件头）。
  * @param {{frameId: string, assetBase?: string}} opts
  */
-export function buildScriptSrcdoc({ frameId, assetBase }) {
-    const boot = { frameId: String(frameId), unimplemented: SCRIPT_UNIMPLEMENTED, versions: COMPAT_VERSIONS };
+export function buildScriptSrcdoc({ frameId, assetBase, colorScheme = 'light' }) {
+    const boot = { frameId: String(frameId), unimplemented: SCRIPT_UNIMPLEMENTED, versions: COMPAT_VERSIONS, tavernEvents: TAVERN_EVENTS };
+    const scheme = colorScheme === 'dark' ? 'dark' : 'light';
     const lib = `{varOps: (${varOpsFactory.toString()})(), sync: (${chatSyncFactory.toString()})()}`;
     const stub = `<script data-smalltalk-script-stub>(${scriptStubMain.toString()})(${embedJson(boot)}, ${lib});</script>`;
     const libs = SCRIPT_LIBS.map(n => FRAME_LIBS.find(l => l.name === n)).filter(Boolean)
         .map(l => (assetBase === undefined ? frameLibTag(l) : frameLibTag(l, assetBase))).join('\n');
     return `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n`
-        + `<style>html,body{margin:0;padding:0;background:transparent;}</style>\n${stub}\n${libs}\n`
+        // 覆盖层：透明（color-scheme 和主页面一致，否则 Chromium 给 iframe 画不透明的底）；body 的背景强制透明——脚本 $('body').css('background', …)
+        // 在酒馆里改的是酒馆页面的背景，到这里会铺满整个聊天区，拖动时（裁剪放开）会闪一下。默认文字色跟主题，脚本没设颜色的字也看得见
+        + `<style>:root{color-scheme:${scheme};}html,body{margin:0;padding:0;background:transparent!important;}body{color:var(--smalltalk-text,CanvasText);font-family:var(--smalltalk-font,system-ui,sans-serif);}</style>\n${stub}\n${libs}\n`
         + `<script>window.__smalltalkLibsReady && window.__smalltalkLibsReady();</script>\n</head>\n<body></body>\n</html>\n`;
 }

@@ -469,3 +469,24 @@ export function parseScriptFile(json, newId) {
     }
     return out;
 }
+
+/**
+ * 酒馆 public/scripts/utils.js getStringHash 的行为（cyrb53，公有领域的 53 位字符串哈希，按算法自己写的）：非字符串 → 0，seed 默认 0。
+ * 酒馆助手的脚本按钮事件名 = `${脚本 id}_${它}`（getButtonEvent / getAllEnabledScriptButtons 的 button_id；script-stub.js 里内联了同一个算法，
+ * test/scripts.test.mjs 对几组字符串核对过和酒馆算出来的一样）
+ */
+export function stringHash(str, seed = 0) {
+    if (typeof str !== 'string') return 0;
+    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0; i < str.length; i++) {
+        const ch = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+/** 脚本按钮被点时发的事件名（酒馆助手 getButtonId） */
+export const buttonEventName = (scriptId, buttonName) => `${scriptId}_${stringHash(buttonName)}`;

@@ -11,8 +11,8 @@
 //   deleteVariable(path) = lodash unset(旧表, path)，返回 {variables, delete_occurred}。
 // 和酒馆助手不一样的地方（有意的）：
 //   - 任何一层的 __proto__ / constructor / prototype 键都丢掉（lodash 的 merge 自己挡了 __proto__，但我们的数据要进 IndexedDB、进备份，统一在入口洗干净）；
-//   - delete_occurred：lodash unset 对「本来就没有的路径」也返回 true（它只看 delete 运算符的结果），我们只在【真的删掉了一个已有的键】时才是 true，
-//     这才是这个字段名字的意思（脚本拿它判断删没删）。
+//   - （2026-11-23 改回忠实）delete_occurred 照抄 lodash unset：它只看 delete 运算符的结果，所以「本来就没有的路径」也是 true（unset 返回的 occurred）；
+//     deleted 另外表示「真的删掉了一个已有的键」，只给宿主判断要不要存盘用。
 //   - 路径里有危险键（'a.__proto__.b'）→ 整个不删，delete_occurred = false。
 
 /**
@@ -103,25 +103,25 @@ export function varOpsFactory() {
         return out;
     }
 
-    /** 按路径删（不改输入，返回新表）。bad = 路径不合法 / 有危险键（没删）；deleted = 真的删掉了一个已有的键 */
+    /** 按路径删（不改输入，返回新表）。bad = 路径不合法 / 有危险键（没删）；deleted = 真的删掉了一个已有的键；occurred = lodash unset 的返回值（不是 bad 就是 true） */
     function unset(obj, path) {
         var segs = parsePath(path);
         var base = isPlain(obj) ? obj : {};
-        if (!segs) return { value: base, deleted: false, bad: true };
+        if (!segs) return { value: base, deleted: false, bad: true, occurred: false };
         // 只复制路径上的那几层，别的原样共用（调用方拿到的是新表，不会改到旧表）
         var root = Object.assign({}, base);
         var node = root;
         for (var i = 0; i < segs.length - 1; i++) {
             var nx = node[segs[i]];
-            if (nx === null || typeof nx !== 'object' || !hasOwn.call(node, segs[i])) return { value: base, deleted: false, bad: false };
+            if (nx === null || typeof nx !== 'object' || !hasOwn.call(node, segs[i])) return { value: base, deleted: false, bad: false, occurred: true };
             nx = Array.isArray(nx) ? nx.slice() : Object.assign({}, nx);
             put(node, segs[i], nx);
             node = nx;
         }
         var last = segs[segs.length - 1];
-        if (!hasOwn.call(node, last)) return { value: base, deleted: false, bad: false };
+        if (!hasOwn.call(node, last)) return { value: base, deleted: false, bad: false, occurred: true };
         delete node[last];   // 数组也照 lodash unset 用 delete（留一个空位，存成 JSON 是 null），不挪后面的元素
-        return { value: root, deleted: true, bad: false };
+        return { value: root, deleted: true, bad: false, occurred: true };
     }
 
     return { isPlain: isPlain, sanitize: sanitize, merge: merge, insert: insert, parsePath: parsePath, unset: unset };

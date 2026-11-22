@@ -23,6 +23,7 @@ import {
 } from './state.js';
 import { unbindCardFromBooks } from '../books.js';
 import { startChat, scrollChatToEnd } from './chat.js';
+import { noteChatOpened, emitTavernEvent } from './script-host.js';   // 循环依赖：只在函数体里调用（酒馆事件：CHAT_CHANGED / CHAT_CREATED / CHAT_DELETED，见 script-host.js syncEpoch）
 import { renderAll, renderTopbar } from './shell.js';
 import { invalidateArchiveTab } from './tab-archive.js';
 import { askRegexFate, moveAndFlush, undoMove, refreshRegexViews, moveSummary } from './regex-delete.js';
@@ -474,6 +475,8 @@ export const newChat = (greetingIndex = 0, cardId = persist.cardId) => op(async 
         if (!rec) throw new Error('这张卡已经不在了');
         await activateCard(rec);
     }
+    // 酒馆里新对话就是一个新聊天文件：CHAT_CHANGED、CHAT_CREATED、（只有开场白时）first_message。「原地换开场白」时存档 id 不变，也照这样发
+    noteChatOpened({ created: true });
     if (untouched()) {
         $('#chat').replaceChildren();
         startChat(greetingIndex);
@@ -551,6 +554,7 @@ export const deleteChat = (cardId = persist.cardId, chatId = persist.chatId) => 
         });
     }
     toast(`已删除存档「${entry.name}」`, 'ok');
+    if (cardId === persist.cardId) emitTavernEvent('chat_deleted', chatId);   // 酒馆删别的聊天文件也发 CHAT_DELETED(名字)；别的卡的存档脚本看不到，不发
 });
 
 async function deleteCurrentChat() {
@@ -567,6 +571,7 @@ async function deleteCurrentChat() {
     if (persist.index) delete persist.index.chats[oldId];
     queueDelete(chatKey(persist.cardId, oldId));
     if (!await flushNow()) throw new Error('删除没能保存');
+    noteChatOpened({ deleted: oldId, created: !next });   // 酒馆：CHAT_DELETED(被删的)，再按打开了另一个存档发 CHAT_CHANGED …
     redraw();
     toast(next ? `已删除，切到「${persist.chatMeta.name}」` : '已删除；这张卡没有别的存档了，开了一个新的', 'ok');
 }

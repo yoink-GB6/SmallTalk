@@ -519,6 +519,12 @@ export function frameLibTag(lib, assetBase = defaultAssetBase()) {
 
 /** 前端卡 iframe 的 sandbox。没有 allow-same-origin（见文件头），也没有 allow-top-navigation / allow-popups-to-escape-sandbox。 */
 export const FRAME_SANDBOX = 'allow-scripts allow-popups allow-forms allow-modals';
+/**
+ * 酒馆助手脚本沙箱（ui/script-host.js）只给 allow-scripts（2026-11-23 安全复核）：没有 allow-modals，脚本就弹不出浏览器原生的
+ * alert / confirm / prompt（原生弹框看起来像主页面自己弹的，能骗用户输入 key）；没有 allow-popups / allow-forms，开不了新窗口、提交不了表单。
+ * 打开外部链接改走宿主（script-host.js openUrl：只认 http(s)、宿主自己先确认、noopener）。消息里的前端卡仍用上面的 FRAME_SANDBOX（要不要收紧由用户定）。
+ */
+export const SCRIPT_SANDBOX = 'allow-scripts';
 
 /**
  * iframe 里提供的 API 一览（集成方要实现 bridged 那一组的宿主侧）。
