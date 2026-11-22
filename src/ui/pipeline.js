@@ -125,7 +125,7 @@ export function computePrompt(chat, { commit }) {
 
     // 3. 拼装：预设条目 + 角色卡 + 世界书 + 聊天记录 → messages
     // 3'. 外置记忆：把较早的楼层从聊天记录里拿掉（世界书扫描和宏仍然看得到完整记录），稍后换成一块摘要
-    //     切点 fold.cut 是完整记录里的楼层号（foldCut 只数可见的楼，规则见 memory-fold.js），然后再去掉切点之后的隐藏楼层
+    //     切点 fold.cut 是完整记录里的楼层号（foldCut 数所有楼，规则见 memory-fold.js 文件头「隐藏楼层」），然后再去掉切点之后的隐藏楼层
     const fold = foldChat(chat);
     const hiddenFloors = chat.length - floors.length;
     let sendChat, sendFloors = null;

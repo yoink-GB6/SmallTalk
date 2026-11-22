@@ -196,7 +196,8 @@ export const STORE_KEYS = {
             + '角色卡专属注释、默认作者注释（酒馆 settings.json 里）没做，不存。'
             + '外置记忆的摘要（ChatMessage.memory）和再压缩的合并段 / 覆盖标记（memoryMerged / memoryIn，2026-11-23 加，规则见 memory-fold.js 文件头「合并段」）'
             + '都挂在消息上：跟着存档进整体备份、参与 chatSig 判重（只差合并状态的两个存档不算重复）、跟着 .jsonl 的 extra.smalltalk 往返；'
-            + '会发给模型（记忆块）；前端卡读不到（getChatMessages / getContextSnapshot 不给 memory 一类字段）。读档时 normalizeMerged 清掉坏段和孤儿标记',
+            + '会发给模型（记忆块）；前端卡读不到（getChatMessages / getContextSnapshot 不给 memory 一类字段）。读档时 normalizeMerged 清掉坏段和孤儿标记'
+            + '（按旧规矩存下的、成员跳过隐藏回复的已换上的段先升级再判断）。隐藏标记（hidden）不碰记忆：隐藏的楼已有的摘要照旧发',
     },
     index: {
         key: 'index:<cardId>', what: '每张卡的存档目录（名字、楼数、时间），切换时只读它',

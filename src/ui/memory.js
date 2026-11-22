@@ -2,14 +2,16 @@
 
 import { substitute } from '../macros.js';
 import { foldCut, memorySystem, MEMORY_SKIP, MEMORY_BATCH_DEFAULT, MEMORY_SUMMARY_LEN_DEFAULT, MEMORY_SUMMARY_LEN_MAX, summaryLenOf, turnInputs, isHidden,
-    mergeEveryOf, MERGE_EVERY_MIN, MERGE_EVERY_MAX, mergeLenOf, mergeSystem, mergeBody, mergedSegments, segmentStart, coveredByMerge,
-    normalizeMerged, commitMerged, nextMergeGroup, mergeFingerprint, applyMerge, dissolveMerged } from '../memory-fold.js';
+    turnFullyHidden, turnPending, mergeEveryOf, MERGE_EVERY_MIN, MERGE_EVERY_MAX, mergeLenOf, mergeSystem, mergeBody, mergedSegments, segmentStart, coveredByMerge,
+    normalizeMerged, commitMerged, nextMergeGroup, mergeGroups, mergeFingerprint, applyMerge, dissolveMerged } from '../memory-fold.js';
+import { createMemoryQueue, MEMORY_REQUEST_GAP_MS, MEMORY_MAX_FAILS } from '../memory-queue.js';
 import { runRegexScripts } from '../regex.js';
 import { complete, backendKind } from '../llm.js';
 import { $, h } from './dom.js';
 import { state, ui, save, persist, idsOfEpoch, patchStoredChat } from './state.js';
 import { renderModelPicker, refUnpicked, endpointById, endpointsLoading, onEndpointsChange } from './model-picker.js';
 import { allScripts, macroContext, placementOf, displayText, refreshPreview } from './pipeline.js';
+import { restoreActive } from './backup.js';   // 循环依赖（backup.js 经 archive.js 间接导入本文件）：只在函数体里调用
 
 // ───────────────────────────── 外置记忆 ─────────────────────────────
 // 思路：模型每次只看得到 prompt 里的东西，聊天越长 prompt 越大。这里在模型之外维护一份「记忆」：
@@ -57,24 +59,41 @@ export async function mergeRows(texts) {
 /** 合并失败的原因（只在这次打开页面期间记着，不存盘）：有值时不再自动合并，等用户点「补全 / 重试」，免得每轮都白花一次额度 */
 export const mergeWork = { error: null };
 
-/** 压缩第 i 楼（一条回复）所在的这一轮，返回一句话 */
-export async function summarizeTurn(i) {
-    const msg = state.chat[i];
+/** 压缩前先过一遍发送侧正则，把预设要求隐藏的东西（思考块之类）去掉再交给压缩模型 */
+function turnCleaner() {
     const scripts = allScripts();
     const ctx = macroContext(state.chat, structuredClone(state.variables));
-    // 先过一遍发送侧正则，把预设要求隐藏的东西（思考块之类）去掉再交给压缩模型
-    const clean = m => runRegexScripts(m.content, scripts, {
+    return m => runRegexScripts(m.content, scripts, {
         placement: placementOf(m), isPrompt: true, depth: 0, substitute: t => substitute(t, ctx),
     }).trim().slice(0, 8000);
+}
+
+/** 回复不到这么多字就不发请求，直接拿原文当摘要 */
+const SHORT_REPLY = 60;
+
+/** 压缩第 i 楼这一轮要不要真的发请求（队列据此决定要不要等间隔）。和 summarizeTurn 的判断一致 */
+function turnSends(i) {
+    try { return turnCleaner()(state.chat[i]).length >= SHORT_REPLY; } catch { return true; }
+}
+
+/** 压缩第 i 楼（一条回复）所在的这一轮，返回一句话 */
+export async function summarizeTurn(i) {
+    return (await summarizeTurnInfo(i)).line;
+}
+
+/** 同 summarizeTurn，另外告诉调用方有没有真的发请求（sent） */
+async function summarizeTurnInfo(i) {
+    const msg = state.chat[i];
+    const clean = turnCleaner();
     const reply = clean(msg);
-    if (reply.length < 60) {
+    if (reply.length < SHORT_REPLY) {
         // 本来就很短，不值得花一次调用。其中一种是「占位符」：原文只有几个字，显示时被正则换成一整张卡片
         // （比如开场白 【xxx的intro】 → 首页前端卡）。它没有剧情内容，记成 MEMORY_SKIP，不进记忆块。
         const shown = displayText(msg, i);
-        if (!reply || (shown !== msg.content && shown.length > msg.content.length * 5)) return MEMORY_SKIP;
-        return reply;
+        if (!reply || (shown !== msg.content && shown.length > msg.content.length * 5)) return { line: MEMORY_SKIP, sent: false };
+        return { line: reply, sent: false };
     }
-    // 这一轮的输入：紧挨在前面的可见用户输入（跳过隐藏楼层，规则见 memory-fold.js 文件头「隐藏楼层」）
+    // 这一轮的输入：紧挨在前面的那串用户输入。隐藏的也算（隐藏只管原文发不发，规则见 memory-fold.js 文件头「隐藏楼层」）
     const inputs = turnInputs(state.chat, i).map(j => clean(state.chat[j]));
     const body = (inputs.length ? `【${state.persona.name || 'User'} 的输入】\n${inputs.join('\n')}\n\n` : '')
         + `【${msg.name} 的回复】\n${reply}`;
@@ -89,10 +108,8 @@ export async function summarizeTurn(i) {
     const line = (lines.find(s => !/[:：]$/.test(s)) ?? lines[0] ?? '')
         .replace(/^(?:[-*•]|\d+[.、)])\s*/, '').replace(/^["“「]|["”」]$/g, '').slice(0, cap);
     if (!line) throw new Error('压缩模型返回了空内容');
-    return line;
+    return { line, sent: true };
 }
-
-export const memoryWork = { running: false };
 
 // ───────────── 压缩用的模型「现在能不能用」（只有网页版会拦；本地版照旧，失败就记失败） ─────────────
 // 网页版里压缩用的引用默认指向 claude-code（网页版没有它）、或指向被删的接口、或没填模型名：这些都是「还没选好」，
@@ -131,45 +148,122 @@ const STALE_CONFIG_ERR = /Claude Code|claude 可执行|Codex|还没选聊天用�
 const staleErr = msg => webMode === true && typeof msg.memoryError === 'string'
     && !msg.memoryError.includes('上游') && STALE_CONFIG_ERR.test(msg.memoryError);
 
-/** 后台把还没有摘要的回复逐条压缩。失败的会记下原因并跳过，不自动重试（免得反复烧额度）。 */
-export async function ensureMemories() {
-    if (!state.memory?.enabled || memoryWork.running) return;
-    // 压缩用的引用还指向内置接口、而列表里没有它（网页版：默认值是 Claude Code，网页版没有）→ 等于还没选接口：
-    // 不发请求，也不给每一轮记一条「失败」；「记忆」页的选择器上会标出「还没选接口」，选好后点「补全 / 重试」或等下一轮回复
-    if (refUnpicked(state.memory.modelRef ?? { endpoint: 'claude-code' })) return;
+// ───────────── 请求队列（规矩见 src/memory-queue.js 文件头） ─────────────
+// 逐轮压缩和合并都走同一个队列：一次只发一个，前一个结束后隔 2 秒再发下一个；连续失败 3 次整体停下，点「补全 / 重试」再继续。
+
+/** 队列的可调参数。测试里改小 gapMs（页面里 (await import('/src/ui/memory.js')).memoryTuning.gapMs = 50），不然浏览器测试要等很久 */
+export const memoryTuning = { gapMs: MEMORY_REQUEST_GAP_MS, maxFails: MEMORY_MAX_FAILS };
+export { MEMORY_REQUEST_GAP_MS, MEMORY_MAX_FAILS } from '../memory-queue.js';
+
+let runEpoch = -1;        // 这次运行开始时的存档 epoch：切走了就停（新存档的压缩等它自己的下一次触发）
+let lastMerge = null;     // 上一件做完的活是合并、并且写进去了：{objs: 成员的消息对象, fp: 指纹}。防同一组反复被挑中（见 nextJob）
+let paintQueue = null;    // 「记忆」页当前挂着的队列状态行的更新函数
+
+const queue = createMemoryQueue({
+    begin: () => { runEpoch = persist.epoch; if (canWrite()) tidyMerged(); },
+    end: () => { if (persist.epoch === runEpoch && state.memory?.enabled && canWrite()) tidyMerged(); ui.memoryPending = null; },
+    allowed: queueAllowed,
+    jobFor: msg => { const i = state.chat.indexOf(msg); return i >= 0 && pendingAt(i) ? turnJob(i) : null; },
+    nextJob,
+    exec: job => (job.kind === 'turn' ? summarizeOne(job) : mergeOne(job)),
+    gapMs: () => memoryTuning.gapMs,
+    maxFails: () => memoryTuning.maxFails,
+    onChange: () => paintQueue?.(),
+});
+
+/** 兼容旧名字：浏览器测试用 memoryWork.running 等「压缩做完」。running = 队列在跑（含等间隔）；queue 是队列本身的状态 */
+export const memoryWork = {
+    get running() { return queue.state.running; },
+    get queue() { return queue.state; },
+    idle: () => queue.idle(),
+};
+
+/** 这个标签页现在能不能写（只读、停止保存、恢复备份中都不行：结果反正存不下来，就不发请求） */
+const canWrite = () => !persist.readOnly && !persist.stopped && !restoreActive();
+
+/** 第 i 楼是不是一条要压缩的回复（memory-fold.js turnPending；正在流式输出的最后一楼先不碰） */
+const pendingAt = i => turnPending(state.chat, i) && !(ui.busy && i === state.chat.length - 1);
+
+const turnJob = i => ({ kind: 'turn', key: state.chat[i], msg: state.chat[i], sends: turnSends(i) });
+
+/** 队列每挑一件活之前问：还能不能接着发 */
+function queueAllowed() {
+    if (!state.memory?.enabled || !canWrite() || persist.epoch !== runEpoch) return false;
+    // 压缩用的引用还指向内置接口、而列表里没有它（网页版：默认值是 Claude Code，网页版没有）→ 等于还没选接口：不发请求、不记失败
+    if (refUnpicked(state.memory.modelRef ?? { endpoint: 'claude-code' })) return false;
     const status = memoryRefStatus();
-    if (status.state === 'wait') { retryWanted = true; return; }   // 后端 / 列表还没出结果：出了结果会补跑（settle）
-    if (status.state === 'no') return;                              // 没选好：不发请求，等用户选完（选择器的 onChange 会触发）
-    // 模型可用了：之前因为「没配好」记下的旧错误清掉，让它们和别的待压缩轮次一起重试
-    const stale = state.chat.filter(m => m.role === 'assistant' && !m.memory && staleErr(m));
-    if (stale.length) { for (const m of stale) delete m.memoryError; save(); renderMemoryIfActive(); }
-    memoryWork.running = true;
-    try {
-        tidyMerged();
-        // 先把还没有摘要的轮逐条压完；都压好了再看要不要合并（每次合并一组，合并完回来再看一遍，期间可能又有新的轮要压）
-        for (;;) {
-            const i = state.chat.findIndex((m, k) => m.role === 'assistant' && !m.memory && !m.memoryError
-                && !isHidden(m)                                   // 隐藏的回复不发给模型，也不压（取消隐藏后再压）
-                && !coveredByMerge(m)                             // 被合并段覆盖了：不再逐轮压（段作废时标记一起删掉，才回到待压缩）
-                && !(ui.busy && k === state.chat.length - 1));   // 正在流式输出的那条先不碰
-            if (i >= 0) {
-                if (await summarizeOne(i) === 'stop') break;
-                continue;
-            }
-            const group = mergeWork.error ? null : nextMergeGroup(state.chat, foldMem(), mergeEveryOf(state.memory));
-            if (!group || await mergeOne(group) === 'stop') break;
-        }
-        tidyMerged();
-    } finally {
-        memoryWork.running = false;
-        ui.memoryPending = null;
+    if (status.state === 'wait') { retryWanted = true; return false; }   // 后端 / 列表还没出结果：出了结果会补跑（settle）
+    return status.state === 'ok';                                        // 'no'：没选好，等用户选完（选择器的 onChange 会触发）
+}
+
+/** 下一件活：先把还没有摘要的轮逐条压完（从最老的开始），都压好了再看要不要合并 */
+function nextJob() {
+    const i = state.chat.findIndex((_, k) => pendingAt(k));
+    if (i >= 0) return turnJob(i);
+    if (mergeWork.error) return null;
+    const group = nextMergeGroup(state.chat, foldMem(), mergeEveryOf(state.memory));
+    if (!group) return null;
+    // 防御（复核提的）：上一件活就是合并这同一组、而且写进去了，这一组却又被挑中——说明写下的段没能被读出来（mergedSegments 不认它）。
+    // 有了队列也只是每 2 秒一个，但这种请求永远白发：停下合并、记日志，等用户点「补全 / 重试」
+    if (lastMerge && lastMerge.objs.length === group.length && group.every((k, n) => state.chat[k] === lastMerge.objs[n])
+        && mergeFingerprint(state.chat, group) === lastMerge.fp) {
+        console.error('外置记忆：同一组合并连续被选中两次（上一次写下的段没能被读出来），已停下合并', group);
+        mergeWork.error = '合并结果写下后没能读出来，已停下（详情见浏览器控制台）';
+        lastMerge = null;
+        renderMemoryIfActive();
+        return null;
     }
+    return { kind: 'merge', key: 'merge:' + group.join(','), members: group, sends: true };
+}
+
+/**
+ * 有要压的就开始（已经在跑就让它结束后再看一眼）。各处在「可能多了要压的东西」时调：回复写完、换候选、编辑、开开关、选好模型……
+ * 连续失败停下之后不会自己继续，要点「补全 / 重试」（resumeMemories）。
+ */
+export function ensureMemories() {
+    if (!state.memory?.enabled || !canWrite()) return Promise.resolve();
+    // 模型可用了：之前因为「没配好」记下的旧错误清掉，让它们和别的待压缩轮次一起重试
+    if (memoryRefStatus().state === 'ok') {
+        const stale = state.chat.filter(m => m.role === 'assistant' && !m.memory && staleErr(m));
+        if (stale.length) { for (const m of stale) delete m.memoryError; save(); renderMemoryIfActive(); }
+    }
+    return queue.kick();
+}
+
+/** 「补全 / 重试」：清掉失败记录和停下的状态，接着来 */
+export function resumeMemories() {
+    if (!canWrite()) return Promise.resolve();
+    for (const m of state.chat) if (m.role === 'assistant') delete m.memoryError;
+    mergeWork.error = null;
+    lastMerge = null;
+    save();
+    return queue.resume();
+}
+
+/** 「记忆」页某一行的「重压」：这一条排到最前 */
+function redoFirst(msg) {
+    lastMerge = null;
+    if (!canWrite()) return Promise.resolve();
+    const run = queue.prioritize(msg);
+    return queue.state.halted ? queue.resume() : run;   // 连续失败停下了：用户手动点了，就接着来（这一条在最前）
+}
+
+/** 队列状态行的数字：待压缩几轮、待合并几组（照现在的样子数） */
+export function memoryQueueCounts() {
+    let turns = 0;
+    for (let i = 0; i < state.chat.length; i++) {
+        const m = state.chat[i];
+        // 旧的「接口没配好」错误（staleErr）在列表里也显示成「待压缩」，这里一起数
+        if (pendingAt(i) || (m.role === 'assistant' && staleErr(m) && !m.memory && !coveredByMerge(m) && !turnFullyHidden(state.chat, i))) turns++;
+    }
+    const merges = mergeWork.error ? 0 : mergeGroups(state.chat, foldMem(), mergeEveryOf(state.memory)).length;
+    return { turns, merges };
 }
 
 /** 合并段的兜底和收尾：坏段 / 孤儿标记清掉（normalizeMerged），已经用上的段换上（commitMerged，不改发出去的内容） */
 function tidyMerged() {
     const bad = normalizeMerged(state.chat);
-    const n = commitMerged(state.chat, foldMem());
+    const n = state.memory?.enabled ? commitMerged(state.chat, foldMem()) : 0;
     if (!bad && !n) return;
     save();
     if (bad && !ui.busy && !ui.previewIsSent) refreshPreview();
@@ -177,12 +271,14 @@ function tidyMerged() {
 }
 
 /**
- * 合并一组（members = 楼层号，旧 → 新）。和 summarizeOne 一样核对迟到的结果：成员的原文、输入、摘要行、范围里的可见回复
+ * 合并一组（job.members = 楼层号，旧 → 新）。和 summarizeOne 一样核对迟到的结果：成员的原文、输入、摘要行、范围里的回复
  * 任何一样变了（mergeFingerprint），或者其中有楼已经进了别的段，就不写；切走存档后按「那时的卡 / 存档」写回存储（同样先核对）。
- * @returns {Promise<'next'|'stop'>}
+ * @returns {Promise<{sent: boolean, outcome: 'ok'|'fail'|'stop', error?: string}>}
  */
-async function mergeOne(members) {
+async function mergeOne({ members }) {
+    lastMerge = null;
     const snap = mergeFingerprint(state.chat, members);
+    const objs = members.map(k => state.chat[k]);
     const texts = members.map(k => state.chat[k].memory).filter(t => t !== MEMORY_SKIP);
     const epoch = persist.epoch;
     let text;
@@ -190,11 +286,12 @@ async function mergeOne(members) {
         text = await mergeRows(texts);
     } catch (e) {
         // 压缩期间用户把接口删了 / 清了模型：不算合并失败，停下（选好后会再触发）
-        if (memoryRefStatus().state !== 'no') mergeWork.error = String(e.message ?? e).slice(0, 300);
+        if (memoryRefStatus().state === 'no') { renderMemoryIfActive(); return { sent: true, outcome: 'stop' }; }
+        mergeWork.error = String(e.message ?? e).slice(0, 300);
         renderMemoryIfActive();
-        return 'stop';
+        return { sent: true, outcome: 'fail', error: mergeWork.error };
     }
-    if (!mergeEveryOf(state.memory) || !state.memory.enabled) { renderMemoryIfActive(); return 'stop'; }   // 等结果期间关掉了：不写
+    if (!mergeEveryOf(state.memory) || !state.memory.enabled) { renderMemoryIfActive(); return { sent: true, outcome: 'stop' }; }   // 等结果期间关掉了：不写
     const taken = chat => mergedSegments(chat).segs.some(s => s.members.some(k => members.includes(k)));
     const write = chat => {
         if (!Array.isArray(chat) || mergeFingerprint(chat, members) !== snap || taken(chat)) return false;
@@ -209,21 +306,31 @@ async function mergeOne(members) {
             await patchStoredChat(cardId, chatId, rec => write(rec.messages)).catch(e => console.error('补写合并段失败', e));
         }
         renderMemoryIfActive();
-        return 'stop';
+        return { sent: true, outcome: 'ok' };   // 队列下一圈问 allowed() 时发现换了存档，自己停下
     }
-    if (write(state.chat)) save();   // 对不上就不写：下一圈按现在的样子重新挑一组
+    if (write(state.chat)) {
+        save();
+        // 写下的段要能马上读出来（读不出来 = 这一组下一圈还会被挑中，见 nextJob 的防御）
+        if (!mergedSegments(state.chat).segs.some(s => s.anchor === members.at(-1) && s.members.length === members.length)) {
+            console.error('外置记忆：合并段写下后读不出来', members, state.chat[members.at(-1)]?.memoryMerged);
+        }
+        lastMerge = { objs, fp: mergeFingerprint(state.chat, members) };
+    }
+    // 对不上就不写：下一圈按现在的样子重新挑一组
     renderMemoryIfActive();
-    return 'next';
+    return { sent: true, outcome: 'ok' };
 }
 
 /**
- * 压缩第 i 楼这一轮，写回（含迟到结果的核对）。
- * @returns {Promise<'next'|'stop'>}  stop = 停下这一次 ensureMemories（接口没选好、切走了存档）
+ * 压缩一轮（job.msg 是这一轮的回复），写回（含迟到结果的核对）。
+ * @returns {Promise<{sent: boolean, outcome: 'ok'|'fail'|'stop', error?: string}>}  stop = 接口没选好（不算失败）
  */
-async function summarizeOne(i) {
-    const msg = state.chat[i];
+async function summarizeOne({ msg }) {
+    lastMerge = null;
+    const i = state.chat.indexOf(msg);
+    if (i < 0 || !pendingAt(i)) return { sent: false, outcome: 'ok' };
     const snapshot = msg.content;
-    // 这一轮输入的快照：压缩期间隐藏 / 取消隐藏 / 编辑了它的输入，结果就和「会发给模型的内容」对不上了，丢掉重压
+    // 这一轮输入的快照：压缩期间编辑了它的输入，结果就和这一轮现在的原文对不上了，丢掉重压
     // （按传进来的聊天数组算：切走之后要拿别的数组——重新读出来的 state.chat、存储里的记录——来比）
     const inputsIn = (chat, k) => JSON.stringify(turnInputs(chat, k).map(j => chat[j].content));
     const inputsOf = k => inputsIn(state.chat, k);
@@ -231,23 +338,25 @@ async function summarizeOne(i) {
     const epoch = persist.epoch;   // 压缩要等好几秒，期间可能切到别的存档
     ui.memoryPending = msg;
     renderMemoryIfActive();
-    /** 把结果写到一条消息上：原文在压缩期间被改过（或已经有了摘要）就作废，下一圈重来 */
-    let apply;
+    /** 把结果写到一条消息上：原文在压缩期间被改过（或已经有了摘要）就作废，下一圈重来。隐藏标记不管（隐藏不碰记忆） */
+    let apply, sent, outcome = 'ok', error;
     try {
-        const line = await summarizeTurn(i);
-        // 压缩期间这一楼被隐藏了也作废：隐藏的回复不压（隐藏 / 取消隐藏改了这一轮的取材，旧结果对不上）
-        apply = m => { if (m.content !== snapshot || m.memory || isHidden(m) || coveredByMerge(m)) return false; m.memory = line; delete m.memoryError; return true; };
+        const r = await summarizeTurnInfo(i);
+        sent = r.sent;
+        apply = m => { if (m.content !== snapshot || m.memory || coveredByMerge(m)) return false; m.memory = r.line; delete m.memoryError; return true; };
     } catch (e) {
+        sent = true;
         // 压缩期间用户把接口删了 / 清了模型：这不是这一轮的错，别记失败，停下（选好后会再触发）
-        if (memoryRefStatus().state === 'no') { ui.memoryPending = null; renderMemoryIfActive(); return 'stop'; }
-        const err = String(e.message ?? e).slice(0, 300);
-        apply = m => { if (m.content !== snapshot || m.memory || isHidden(m) || coveredByMerge(m)) return false; m.memoryError = err; return true; };
+        if (memoryRefStatus().state === 'no') { ui.memoryPending = null; renderMemoryIfActive(); return { sent, outcome: 'stop' }; }
+        error = String(e.message ?? e).slice(0, 300);
+        outcome = 'fail';
+        apply = m => { if (m.content !== snapshot || m.memory || coveredByMerge(m)) return false; m.memoryError = error; return true; };
     }
     ui.memoryPending = null;
     if (persist.epoch !== epoch) {
-        // 已经切走了：msg 是旧存档里的对象，改它不会被保存。按「那时的卡 / 存档 + 楼层号 + 原文 + 这一轮的输入」写回原来的存档，
-        // 然后停下这一轮（新存档的压缩等它自己的下一次回复再触发）。输入和当前存档那条路一样要核对：
-        // 切走前（或在别的标签页里）改了 / 隐藏了这一轮的输入，结果就和这一轮现在的样子对不上了，不写
+        // 已经切走了：msg 是旧存档里的对象，改它不会被保存。按「那时的卡 / 存档 + 楼层号 + 原文 + 这一轮的输入」写回原来的存档
+        // （队列下一圈发现换了存档就停下，新存档的压缩等它自己的下一次触发）。输入和当前存档那条路一样要核对：
+        // 切走前（或在别的标签页里）改了这一轮的输入，结果就和这一轮现在的样子对不上了，不写
         const { cardId, chatId } = idsOfEpoch(epoch);
         const fits = chat => Array.isArray(chat) && chat[i] && inputsIn(chat, i) === inputsSnap;
         if (cardId && chatId && cardId === persist.cardId && chatId === persist.chatId) {
@@ -258,14 +367,14 @@ async function summarizeOne(i) {
             await patchStoredChat(cardId, chatId, rec => (fits(rec.messages) ? apply(rec.messages[i]) : false)).catch(e => console.error('补写记忆失败', e));
         }
         renderMemoryIfActive();
-        return 'stop';
+        return { sent, outcome, error };
     }
     const k = state.chat.indexOf(msg);
     if (k >= 0 && inputsOf(k) === inputsSnap) apply(msg);   // 对不上就不写，下一圈按现在的输入重压
     save();
     if (!ui.busy && !ui.previewIsSent) refreshPreview();
     renderMemoryIfActive();
-    return 'next';
+    return { sent, outcome, error };
 }
 
 export function renderMemoryIfActive() {
@@ -277,10 +386,10 @@ export function renderMemoryTab() {
     const m = state.memory;
     const { cut } = foldChat(state.chat);
     const turns = state.chat.map((msg, i) => ({ msg, i })).filter(x => x.msg.role === 'assistant');
-    // 隐藏的回复不压缩、不进记忆块，不算在「已压缩 / 总数」里（表格里照样列出来，标「已隐藏」，摘要留着可以看、可以改）
-    const counted = turns.filter(x => !isHidden(x.msg));
-    const done = counted.filter(x => x.msg.memory).length;
     const changed = () => { save(); ui.previewIsSent = false; refreshPreview(); renderMemoryTab(); };
+    // 只读标签页 / 已停止保存：会触发压缩 / 合并请求的控件禁用（结果反正存不下来）
+    const locked = persist.readOnly || persist.stopped;
+    const lockedTitle = '这个标签页是只读的（见页面顶上的说明）';
 
     // 压缩用的模型还不能用（只有网页版会有）：开关旁一个小徽章 + 设置区下面一条提示。不重画整页，只切显示（见 paintHint）
     const enabledBadge = h('span', { class: 'badge bad', id: 'mem-unusable-badge', hidden: true, title: '外置记忆开着，但摘要模型还没选好，现在不会压缩' }, '开着，但还不能用');
@@ -292,11 +401,29 @@ export function renderMemoryTab() {
         enabledBadge.hidden = unusableNote.hidden = !bad;
         if (bad) unusableNote.textContent = `${s.reason}：在上面选一个接口和模型，之后的回复才会被压成摘要；已有的回复会在选好后自动补压。`;
     };
-    queueMicrotask(() => paintHint?.());   // 节点还没挂上页面，下一拍再画
+    // 队列状态（src/memory-queue.js）：一行短字「待压缩 37 · 待合并 2」，全做完就不显示；连续失败停下时另一行写原因。
+    // 队列每做完一件活就更新（paintQueue），不重画整页
+    const queueLine = h('div', { class: 'dim', 'data-fk': 'mem-queue', hidden: true, style: 'margin-top:6px' });
+    // 平时不带 log-line error（页面上别处按这个类找「有没有红色错误行」），停下时才加上
+    const haltedLine = h('div', { 'data-fk': 'mem-queue-halted', hidden: true });
+    paintQueue = () => {
+        if (!queueLine.isConnected) { paintQueue = null; return; }
+        const { turns: nt, merges: nm } = memoryQueueCounts();
+        const parts = [];
+        if (nt) parts.push(`待压缩 ${nt}`);
+        if (nm) parts.push(`待合并 ${nm}`);
+        queueLine.textContent = parts.join(' · ');
+        queueLine.hidden = !m.enabled || !parts.length;
+        const halt = queue.state.halted;
+        haltedLine.hidden = !m.enabled || !halt;
+        haltedLine.className = haltedLine.hidden ? '' : 'log-line error';
+        if (halt) haltedLine.textContent = `连续 ${halt.count} 次失败，已暂停${halt.reason ? '：' + halt.reason : ''}`;
+    };
+    queueMicrotask(() => { paintHint?.(); paintQueue?.(); });   // 节点还没挂上页面，下一拍再画
     // 带边框的框：框头是开关，框里是全部设置和操作；关着就折叠（只剩框头）。摘要列表在框外
     const box = h('div', { class: 'mem-box' + (m.enabled ? ' on' : ''), id: 'mem-box' },
         h('div', { class: 'mem-box-head' },
-            h('label', { class: 'inline' }, h('input', { type: 'checkbox', id: 'mem-enabled', checked: m.enabled, onchange: e => { m.enabled = e.target.checked; changed(); if (m.enabled) ensureMemories(); } }), '启用外置记忆'),
+            h('label', { class: 'inline' }, h('input', { type: 'checkbox', id: 'mem-enabled', checked: m.enabled, disabled: locked, title: locked ? lockedTitle : null, onchange: e => { m.enabled = e.target.checked; changed(); if (m.enabled) ensureMemories(); } }), '启用外置记忆'),
             enabledBadge),
         h('div', { class: 'mem-box-body', id: 'mem-box-body', hidden: !m.enabled },
             h('div', { class: 'summary' },
@@ -324,7 +451,7 @@ export function renderMemoryTab() {
                 // 记忆再压缩（memory-fold.js 文件头「合并段」）：留空 / 0 = 不做，不写字段。改了不动已有的合并段，只影响之后的合并。
                 // 不走 changed()：合并的结果要等下一批原文换成摘要时才换上，改设置这一刻发出去的内容不变
                 h('label', { class: 'inline', title: `留空或 0 = 不做；最少 ${MERGE_EVERY_MIN}、最多 ${MERGE_EVERY_MAX}。已经合并的不受影响` }, '每',
-                    h('input', { type: 'number', id: 'mem-merge-every', min: 0, max: MERGE_EVERY_MAX, step: 1,
+                    h('input', { type: 'number', id: 'mem-merge-every', min: 0, max: MERGE_EVERY_MAX, step: 1, disabled: locked,
                         value: mergeEveryOf(m) || '', style: 'width:4.5em',
                         onchange: e => {
                             const raw = e.target.value.trim();
@@ -335,8 +462,10 @@ export function renderMemoryTab() {
                         } }),
                     '条记忆再次压缩'),
                 h('span', { class: 'spacer' }),
-                h('button', { title: '压缩还没有摘要的轮次，并重试失败的', onclick: () => { for (const x of turns) delete x.msg.memoryError; mergeWork.error = null; ensureMemories(); renderMemoryTab(); } }, '补全 / 重试')),
+                h('button', { 'data-fk': 'mem-retry', disabled: locked, title: locked ? lockedTitle : '压缩还没有摘要的轮次，并重试失败的', onclick: () => { resumeMemories(); renderMemoryTab(); } }, '补全 / 重试')),
             unusableNote,
+            queueLine,
+            haltedLine,
             mergeWork.error ? h('div', { class: 'log-line error', 'data-fk': 'mem-merge-error' }, `合并失败：${mergeWork.error}`) : null));
     const kids = [
         box,
@@ -361,7 +490,7 @@ export function renderMemoryTab() {
                 const v = e.target.value.trim();
                 if (!anchorMsg.memoryMerged) return renderMemoryTab();
                 if (v) anchorMsg.memoryMerged = { ...anchorMsg.memoryMerged, text: v };
-                else { redo(); setTimeout(ensureMemories, 0); }
+                else { redo(); setTimeout(() => redoFirst(state.chat[s.members[0]]), 0); }
                 changed();
             } });
         return h('tr', { class: s.pending ? '' : 'hit', 'data-fk': 'mem-merged-row' },
@@ -369,8 +498,8 @@ export function renderMemoryTab() {
             h('td', null, h('span', { class: 'badge on', title: s.pending ? '已合并，下一批原文换成摘要时一起换上（免得多打断一次缓存）' : `${s.members.length} 轮的摘要已合并成这一段` }, '已合并')),
             h('td', { style: 'width:100%' }, input),
             h('td', { class: 'dim' }, `${orig}→${s.text.length}`),
-            h('td', null, h('button', { class: 'ghost', 'data-fk': 'mem-merged-redo', title: '重压：作废这一段，这几轮回到逐轮压缩',
-                onclick: () => { redo(); changed(); ensureMemories(); } }, '↻')));
+            h('td', null, h('button', { class: 'ghost', 'data-fk': 'mem-merged-redo', title: locked ? lockedTitle : '重压：作废这一段，这几轮回到逐轮压缩', disabled: locked,
+                onclick: () => { const first = state.chat[s.members[0]]; redo(); changed(); redoFirst(first); } }, '↻')));
     };
     const rows = turns.filter(({ i }) => !segOf.has(i) || segOf.get(i).members[0] === i).map(({ msg, i }) => {
         if (segOf.has(i)) return segRow(segOf.get(i));
@@ -378,18 +507,20 @@ export function renderMemoryTab() {
         const input = h('input', { class: 'mem', value: msg.memory ?? '', placeholder: pending ? '压缩中…' : '（还没有摘要，可以直接手写）',
             title: msg.memory === MEMORY_SKIP ? '「-」表示这一轮没有值得记的内容，不会进记忆块' : '写成「-」可以让这一轮不进记忆块',
             onchange: e => { const v = e.target.value.trim(); if (v) { msg.memory = v; delete msg.memoryError; } else delete msg.memory; changed(); } });
+        // 隐藏的楼照常列出它的摘要（隐藏不碰记忆，摘要照发，见 memory-fold.js 文件头「隐藏楼层」），另加一个小小的「已隐藏」。
+        // 整轮隐藏、还没压过的：不压、不算待压缩，只显示「已隐藏」；隐藏的回复在切点之后不发原文，不显示「原文发送」
+        const hid = isHidden(msg), wholeHidden = turnFullyHidden(state.chat, i);
         const status = pending ? h('span', { class: 'badge' }, '压缩中…')
-            : isHidden(msg) ? h('span', { class: 'badge', 'data-fk': 'mem-hidden', title: '这一楼已隐藏：不发给模型，不压缩，摘要（如果有）不进记忆块。取消隐藏后摘要直接恢复使用' }, '已隐藏')
             : msg.memoryError && !staleErr(msg) ? h('span', { class: 'badge bad', title: msg.memoryError }, '失败')   // 旧的「接口没配好」错误当作待压缩
-                : !msg.memory ? h('span', { class: 'badge' }, '待压缩')
-                    : i < cut ? h('span', { class: 'badge on' }, '已折叠') : h('span', { class: 'badge' }, '原文发送');
-        return h('tr', { class: i < cut && !isHidden(msg) ? 'hit' : isHidden(msg) ? 'mem-hidden-row' : '' },
+                : !msg.memory ? (wholeHidden ? null : h('span', { class: 'badge' }, '待压缩'))
+                    : i < cut ? h('span', { class: 'badge on' }, '已折叠') : hid ? null : h('span', { class: 'badge' }, '原文发送');
+        return h('tr', { class: [i < cut ? 'hit' : '', hid ? 'mem-hidden-row' : ''].filter(Boolean).join(' ') },
             h('td', { class: 'dim mono' }, `#${i}`),
-            h('td', null, status),
+            h('td', null, status, hid ? h('span', { class: 'badge', 'data-fk': 'mem-hidden' }, '已隐藏') : null),
             h('td', { style: 'width:100%' }, input, msg.memoryError && !staleErr(msg) ? h('div', { class: 'log-line error' }, msg.memoryError) : null),
             h('td', { class: 'dim' }, `${msg.content.length}→${(msg.memory ?? '').length}`),
-            h('td', null, h('button', { class: 'ghost', title: isHidden(msg) ? '隐藏的楼不压缩，取消隐藏后才能重压' : '重新压缩这一轮', disabled: pending || isHidden(msg),
-                onclick: () => { delete msg.memory; delete msg.memoryError; changed(); ensureMemories(); } }, '↻')),
+            h('td', null, h('button', { class: 'ghost', title: locked ? lockedTitle : wholeHidden ? '整轮都隐藏着：不压缩，取消隐藏后才能重压' : '重新压缩这一轮', disabled: pending || wholeHidden || locked,
+                onclick: () => { delete msg.memory; delete msg.memoryError; changed(); redoFirst(msg); } }, '↻')),
         );
     });
     kids.push(h('table', { class: 'grid' },

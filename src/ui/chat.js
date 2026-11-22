@@ -141,7 +141,7 @@ export function renderChatInfo() {
 //   - 显示：酒馆给 .mes 加 is_system="true"，出现幽灵图标，头像变灰（style.css .mes[is_system="true"] .avatar）；内容照常显示。
 //     我们整楼变淡 + 「已隐藏」字样（style.css 末尾「隐藏楼层」一块）。
 //   - 不发给模型、不算深度、不进世界书扫描：见 pipeline.js computePrompt 第 0 步。
-//   - 外置记忆：见 memory-fold.js 文件头「隐藏楼层」小节（setHidden 顺带作废受影响的摘要）。
+//   - 外置记忆：隐藏不碰记忆（memory-fold.js 文件头「隐藏楼层」）：setHidden 只改标记，摘要和合并段一个字都不动。
 // 拦截：和编辑 / 删除一样，正在生成、正在切换存档（旧存档的按钮）时不生效；另外恢复备份中、已停止保存、只读标签页时拒绝并说明。
 // （编辑 / 删除在只读标签页里目前是「改了但不保存」，没有拒绝；隐藏照任务要求拒绝。）
 
@@ -170,7 +170,7 @@ export function chatWriteBlocked(epoch = persist.epoch, action = '改聊天记�
     return null;
 }
 
-/** 真正改数据：setHidden（memory-fold.js）改标记、作废受影响的摘要；然后存盘、重画、补压 */
+/** 真正改数据：setHidden（memory-fold.js）只改标记；然后存盘、重画 */
 function applyHidden(indexes, hide) {
     const { changed } = setHidden(state.chat, indexes, hide);
     if (!changed.length) return 0;
@@ -178,8 +178,8 @@ function applyHidden(indexes, hide) {
     save();
     renderAll();
     renderMemoryIfActive();
-    // 作废了的轮次、以及刚取消隐藏而还没有摘要的回复，交给 ensureMemories 补压（它自己跳过隐藏的回复）
-    setTimeout(ensureMemories, 0);
+    // 隐藏不触发任何压缩请求。取消隐藏时，以前「整轮隐藏、还没压过」的轮变回待压缩，按正常流程排进队列（已有摘要的什么都不发）
+    if (!hide) setTimeout(ensureMemories, 0);
     return changed.length;
 }
 

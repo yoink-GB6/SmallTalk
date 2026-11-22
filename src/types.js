@@ -19,13 +19,15 @@ export {};
  * @property {string} [memory]       外置记忆：这一轮（之前的用户输入 + 这条回复）压缩成的一句话，只挂在 assistant 楼上
  * @property {string} [memoryError]  上次压缩失败的原因
  * @property {{text: string, count: number, wait?: number}} [memoryMerged]
- *   外置记忆的「再压缩」：把较早的 count 条回复（从这条往前数的可见回复，含这条）的摘要合并成的一段，挂在段的最后一条回复上。
+ *   外置记忆的「再压缩」：把较早的 count 条回复（从这条往前数的回复，含这条；隐藏的也算）的摘要合并成的一段，挂在段的最后一条回复上。
  *   wait 只在「已算好、还没换上」时有（成员各自的 memory 还在、照常按行发；切点再往后挪一次才换上）。规则见 src/memory-fold.js 文件头「合并段」。
  *   不用这个功能（memory.mergeEvery 不写）时永远不出现
  * @property {true} [memoryIn]   这条回复已被后面的合并段覆盖（自己的 memory 已删）：不再逐轮压缩。段作废时一起删掉，这一轮回到待压缩。
  *   读档时（memory-fold.js normalizeMerged）数不齐成员的段、孤儿标记都清掉
  * @property {true} [hidden]   隐藏楼层（酒馆的「隐藏消息」，jsonl 里是 is_system: true）：留在记录里、照常显示（变淡）、能编辑能搜，
- *                              但【不发给模型】，也不参与楼层深度、世界书扫描、上下文上限、外置记忆压缩。只在隐藏时写 true，平时不写这个字段。
+ *                              但【原文不发给模型】，也不参与楼层深度、世界书扫描、上下文上限。只在隐藏时写 true，平时不写这个字段。
+ *                              【不碰外置记忆】（2026-11-23）：隐藏 / 取消隐藏不作废摘要、不拆合并段、不触发压缩；已有的摘要照旧发。
+ *                              整轮（回复和它的输入）都隐藏、还没压过的轮隐藏期间不压。
  *                              和旁白（role 'system'）是两回事：旁白照常发送（作为 system 消息），旁白也可以被隐藏。
  *                              逐项规则和酒馆出处见 src/memory-fold.js 的「隐藏楼层」小节、src/ui/pipeline.js computePrompt。
  *                              老存档（这个功能以前导入的：st.is_system 为真、没有 hidden）：有写权限的标签页打开这个存档时
