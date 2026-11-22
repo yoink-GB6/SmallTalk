@@ -298,7 +298,7 @@ function avatarOf(c) {
 function cardBlock(c, ro) {
     const isOpen = open.has(c.id);
     const sub = `${c.chatCount ?? '…'} 个存档 · 上次使用 ${timeText(c.usedAt)}`;
-    const head = h('header', { class: 'arch-head' },
+    const head = h('header', { class: `arch-head${batch ? ' batch-row' : ''}${batch && picked.has(c.id) ? ' batch-picked' : ''}` },
         batch ? h('input', { type: 'checkbox', class: 'arch-pick', 'data-fk': `pick:${c.id}`, checked: picked.has(c.id), disabled: batchBusy,
             title: `选中「${c.name}」`, 'aria-label': `选中「${c.name}」`,
             onchange: e => { if (e.target.checked) picked.add(c.id); else picked.delete(c.id); draw(); } }) : null,
@@ -315,6 +315,18 @@ function cardBlock(c, ro) {
         actionBtn('导入', `导入酒馆的聊天记录（.jsonl），作为「${c.name}」的新存档并切过去`, `import:${c.id}`, ro, () => { picker.dataset.card = c.id; picker.click(); }),
         // 每卡的导出 / 删除按钮收进了顶上的「批量」。这个位置显示这张卡最后聊天的日期（没有存档记录就不显示）
         c.lastDay ? h('span', { class: 'dim arch-last', title: '最后聊天的日期' }, c.lastDay) : null);
+
+    // 批量模式下点头部（空白处或卡名）= 切换勾选，不再切卡。用捕获阶段拦：卡名是个按钮，不拦的话它自己的 onclick 会先跑。
+    // 头部里别的控件（展开箭头、新对话、导入、复选框自己）照常工作
+    head.addEventListener('click', e => {
+        if (!batch) return;
+        const t = e.target.closest('button, a, input, select, textarea, label, summary');
+        if (t && t !== head && !t.classList.contains('arch-main')) return;
+        e.preventDefault(); e.stopPropagation();
+        if (batchBusy) return;
+        if (picked.has(c.id)) picked.delete(c.id); else picked.add(c.id);
+        draw();
+    }, true);
 
     let body = null;
     if (isOpen) {

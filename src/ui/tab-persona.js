@@ -165,7 +165,7 @@ function otherFields(p, locked) {
 
 /** 一个人设的框 */
 function personaBox(p, locked) {
-    const head = h('summary', { class: 'persona-head', title: p.description ? p.description.slice(0, 120) : '（没有描述）' },
+    const head = h('summary', { class: `persona-head${view.batch ? ' batch-row' : ''}${view.batch && view.picked.has(p.id) ? ' batch-picked' : ''}`, title: p.description ? p.description.slice(0, 120) : '（没有描述）' },
         view.batch ? h('input', { type: 'checkbox', 'data-fk': 'persona-pick', checked: view.picked.has(p.id), 'aria-label': '选中这个人设',
             onchange: e => { e.target.checked ? view.picked.add(p.id) : view.picked.delete(p.id); renderBar(locked); } }) : null,
         h('span', { class: 'persona-label', 'data-fk': 'persona-label' }, p.remark || p.name),
@@ -178,6 +178,19 @@ function personaBox(p, locked) {
                     tryOp(() => { view.open = new Set([p.id]); commit(switchPersona(state, p.id)); });
                 } }, '用它'),
     );
+    // 批量模式下点框头（空白处或名字）= 切换勾选，不展开 / 收起；「用它」按钮和复选框自己照常工作
+    head.addEventListener('click', e => {
+        if (!view.batch) return;
+        const t = e.target.closest('button, a, input, select, textarea, label');
+        if (t && t !== head) return;
+        e.preventDefault(); e.stopPropagation();   // <summary> 的默认动作是展开 / 收起
+        const on = !view.picked.has(p.id);
+        if (on) view.picked.add(p.id); else view.picked.delete(p.id);
+        const cb = head.querySelector('input[type=checkbox]');
+        if (cb) cb.checked = on;
+        head.classList.toggle('batch-picked', on);
+        renderBar(locked);
+    }, true);
     const box = h('details', { class: p.active ? 'persona-item active' : 'persona-item', 'data-fk': 'persona-item', 'data-id': p.id,
         open: view.open.has(p.id) }, head);
     box.addEventListener('toggle', () => { box.open ? view.open.add(p.id) : view.open.delete(p.id); });

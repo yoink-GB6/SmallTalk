@@ -229,7 +229,7 @@ export function renderModelPicker(container, { value, onChange, compact = false 
         // Codex 的 '' 是「默认（跟随 Codex）」，不算没选
         const labels = ep?.type === 'codex-cli' ? CODEX_LABEL : {};
         const shown = value.model || labels[''] || '';
-        const btn = h('button', { type: 'button', class: 'mp-model-btn' + (shown ? '' : ' empty'), disabled: !ep, 'aria-haspopup': 'dialog', 'aria-expanded': 'false',
+        const btn = h('button', { type: 'button', class: 'mp-model-btn' + (shown ? '' : ' mp-empty'), disabled: !ep, 'aria-haspopup': 'dialog', 'aria-expanded': 'false',
             title: shown ? `模型：${shown}` : '还没选模型：点这里选择', 'aria-label': '模型' }, shown || '选择模型…');
         btn.addEventListener('click', () => {
             if (openPop?.anchor === btn) return closePop();   // 再点一次 = 收起

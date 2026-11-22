@@ -13,8 +13,9 @@ export const DIST = path.join(ROOT, 'dist');
 
 // 页面本身：两种产物都要
 // manifest.webmanifest + icons/：PWA（添加到主屏幕）要的清单和图标
+// themes/：各主题自带的素材（图片等），按主题分子目录，如 themes/princesse/camellia-line.svg
 export const PAGE_FILES = ['index.html', 'style.css', 'favicon.svg', 'manifest.webmanifest'];
-export const PAGE_DIRS = ['src', 'vendor', 'icons'];
+export const PAGE_DIRS = ['src', 'vendor', 'icons', 'themes'];
 // 本地服务：只有压缩包版要（网页版没有服务端，绝不能带上 server.mjs / server/）
 export const SERVER_FILES = ['package.json', 'server.mjs'];
 export const SERVER_DIRS = ['server'];

@@ -289,7 +289,7 @@ function bookBlock(src, i, { hit, miss, ro }) {
     const open = isOpen(src);
     const fk = name => `${name}:${i}`;
 
-    const head = h('div', { class: 'section-title wedit-title wbook-head' },
+    const head = h('div', { class: `section-title wedit-title wbook-head${batch.on && b ? ' batch-row' : ''}${batch.on && b && batch.sel.has(b) ? ' batch-picked' : ''}` },
         batch.on && b ? h('input', { type: 'checkbox', class: 'wbook-pick', 'data-fk': fk('wbook-pick'), checked: batch.sel.has(b), title: '选中这本书',
             onchange: e => { e.target.checked ? batch.sel.add(b) : batch.sel.delete(b); renderWorldTab(); } }) : null,
         h('button', { class: 'wbook-toggle', type: 'button', 'data-fk': fk('wbook-toggle'), 'aria-expanded': String(open),
@@ -303,6 +303,16 @@ function bookBlock(src, i, { hit, miss, ro }) {
             h('button', { disabled: ro, 'data-fk': fk('wbook-add'), onclick: () => addEntry(src) }, '＋ 新增条目'),
             // 单本的导出 / 移除按钮已收进顶上的「批量」
             null));
+
+    // 批量模式下点书头（空白处或书名）= 切换勾选，不展开 / 收起；卡自带那本不能参与批量，照旧。头部里的开关、下拉框、按钮照常工作
+    if (b) head.addEventListener('click', e => {
+        if (!batch.on) return;
+        const t = e.target.closest('button, a, input, select, textarea, label, summary');
+        if (t && t !== head && !t.classList.contains('wbook-toggle')) return;
+        e.preventDefault(); e.stopPropagation();
+        if (batch.sel.has(b)) batch.sel.delete(b); else batch.sel.add(b);
+        renderWorldTab();
+    }, true);
 
     const parts = [head];
     if (b && bookScopeOf(b).scope === 'cards') parts.push(bindLine(b));
@@ -433,7 +443,8 @@ function entryEditor(e, ro) {
         h('div', { class: 'row' }, h('label', { class: 'inline', style: 'flex:1' }, '标题', textInput('comment', true))),
         h('div', { class: 'row' }, h('label', { class: 'inline', style: 'flex:1' }, '主关键词', keyInput('key', '用逗号分隔；/正则/i 也可以'))),
         h('div', { class: 'row' }, h('label', { class: 'inline', style: 'flex:1' }, '次要关键词', keyInput('keysecondary', '可留空'))),
-        e.keysecondary.length ? h('div', { class: 'row' }, h('label', { class: 'inline' }, '次要关键词逻辑', sel('selectiveLogic', LOGIC_NAMES, false))) : null,
+        // 注意：这里是原生 append，传 null 会被画成字面的 "null"，所以没有次要关键词时传空数组展开
+        ...(e.keysecondary.length ? [h('div', { class: 'row' }, h('label', { class: 'inline' }, '次要关键词逻辑', sel('selectiveLogic', LOGIC_NAMES, false)))] : []),
         h('div', { class: 'row' },
             h('label', { class: 'inline' }, '位置', sel('position', POSITION_NAMES, true)),
             e.position === 4 ? [

@@ -89,6 +89,9 @@
   --control-pad-y: 4px;            /* 按钮 / 输入框 / 下拉框的内边距 */
   --control-pad-x: 9px;
   --control-height: 38px;          /* 输入区：发送 / 停止按钮的高度，也是输入框一行的高度（二者必须相等） */
+  --control-bg: var(--panel);      /* 按钮 / 输入框 / 下拉框的底色（主按钮另有规则） */
+  --control-line: var(--line);     /* 它们的边框颜色 */
+  --control-border-width: var(--border-width);   /* 它们四边的边框宽度：可写成 "0 0 1px" 之类只留底线（Princesse 就是这样） */
   --transition-fast: .12s;         /* 悬停时淡入淡出 */
   --transition-slide: .2s;         /* 抽屉滑出、遮罩淡入 */
 
@@ -126,28 +129,314 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    主题：在这里按 data-theme 覆盖变量。
    主题清单在 src/themes.js（加一项才会出现在「杂项」页的下拉框里）。
-   下面是 Princesse 的骨架示例（被注释掉了，值留空）：填值、去掉注释、再到 src/themes.js 加 { id: 'princesse', name: 'Princesse' } 就生效。
+   每个主题一段，结构照抄 Princesse：① 变量（浅色）② 变量（深色，放进 prefers-color-scheme 媒体查询）③ 主题专属规则。
+   规则一律以 `:root[data-theme="xxx"]` 开头：只在这个主题下生效，「默认」主题一个像素都不受影响。
+   这个前缀本身的优先级是 (0,2,0)，已经压过大多数单类 / 双类的共用规则；想让后面某条共用规则仍然赢（比如带色条的 .card.cmp-same），
+   就把选择器的主体包进 :where(…)（不加优先级）。素材放 themes/<id>/，打包白名单已带上 themes/。
    ═══════════════════════════════════════════════════════════════════════════ */
-/*
+
+/* ───────────── Princesse ─────────────
+   象牙白（页面底）+ 纯白（面板、消息）+ 近黑（文字、线），外加一点琥珀金——金只用在两处：当前页签下面那条线、控件获得焦点时的线。
+   强调色是黑：主按钮黑底白字、四角切角；次要按钮和输入框没有盒子，只留一条底线；卡片 / 消息不画四面框，靠留白和细分隔线；
+   圆角 0–2px，没有阴影，弹出的东西靠 1px 黑线 + 纯白底；界面和聊天正文都用衬线（等宽字体不变），标题 / 页签再把字距拉开。
+   深色版照用户自己的站点 KeepAlive：只有一种黑，字和线是同一种暖白的不同透明度，没有灰色填充块，点缀是香槟金（主按钮是金底黑字）。
+   右侧面板（窄屏是抽屉）左下角有一处装饰，用 CSS mask 画在伪元素上，颜色跟着 --text 走：
+   浅色是一朵手绘墨线的山茶花（themes/princesse/camellia-traced.png），深色是鸡尾酒（每次打开随机一张，清单和每张的摆法在 src/themes.js）。 */
 :root[data-theme="princesse"] {
-  --bg: ; --panel: ; --panel-2: ; --line: ; --text: ; --dim: ; --accent: ; --accent-text: ; --user-bg: ; --bot-bg: ;
-  --ok: ; --bad: ; --warn: ; --info: ;
-  --bg-page: ; --bg-chat: ; --bg-image-page: ; --bg-image-chat: ; --bg-image-repeat: ; --bg-image-size: ;
-  --radius-control: ; --radius-card: ; --radius-message: ; --radius-large: ; --radius-small: ; --radius-tiny: ; --radius-pill: ;
-  --border-width: ; --bar-width: ; --bar-width-thin: ;
-  --shadow-control: ; --shadow-card: ; --shadow-pop: ; --shadow-dialog: ; --shadow-dropdown: ; --shadow-drawer: ;
-  --font-ui: ; --font-mono: ; --font-chat: ; --font-size-base: ; --line-height-base: ;
-  --control-pad-y: ; --control-pad-x: ; --control-height: ;
+  /* ── 颜色：三样 + 一点金 ── */
+  --bg: #faf7f2;                   /* 象牙白 */
+  --panel: #ffffff;                /* 纯白 */
+  --panel-2: #f5f1ea;              /* 面板里的次级底（右侧面板、代码块）：仍是象牙白一族，略深一点 */
+  --line: #e3ddd2;                 /* 分隔用的发丝线（装饰性，不承担"认出控件"的任务） */
+  --text: #111111;                 /* 近黑 */
+  --dim: #67625a;
+  --accent: #111111;               /* 强调色就是黑 */
+  --accent-text: #ffffff;
+  --user-bg: #f3eee5;              /* 用户消息：比页面底略深的象牙白，外加左侧一条细黑线（见下面的规则） */
+  --bot-bg: #ffffff;
+  --pr-gold: #a8843f;              /* 琥珀金。浅色底上要做焦点指示，得 3:1 以上，所以比 #c9a86a 深一档 */
+  --pr-gold-on-accent: #c9a86a;    /* 主按钮（黑底）上的焦点金线 */
+  --pr-disabled: #69645c;          /* 禁用的文字 / 线 */
+  --pr-disabled-bg: #f1ede6;       /* 禁用的主按钮底 */
+  --pr-strong-line: var(--text);   /* 强一点的线：表头底线、弹出层的框、用户消息左侧（深色里换成半透明暖白） */
+  --pr-current: var(--text);       /* 当前项的标记：当前卡 / 存档 / 人设左侧的线、下拉面板当前项（深色里是金） */
+  --pr-pre-bg: var(--panel-2);     /* 代码块：浅色用底色，深色用一圈细线 */
+  --pr-pre-border: transparent;
+  /* 装饰图：浅色是山茶花（手绘墨线，线粗，所以调得很淡）。右侧面板左下角一朵较大的，左边和底边各被裁掉一点 */
+  --pr-deco-image: url("themes/princesse/camellia-traced.png");
+  --pr-deco-opacity: .065;
+  --pr-deco-fill: var(--text);     /* 装饰图的颜色（mask 底下的 background）：浅色就是墨线色 */
+  --pr-deco-w: 330px;
+  --pr-deco-h: 330px;
+  --pr-deco-left: -34px;
+  --pr-deco-bottom: -26px;
+  --pr-deco-w-narrow: 240px;       /* 窄屏的抽屉里 */
+  --pr-deco-h-narrow: 240px;
+  --pr-deco-left-narrow: -24px;
+  --pr-deco-bottom-narrow: -18px;
+  /* ── 颜色：语义色压成克制的深色调（能分辨，不跳） ── */
+  --ok: #2f5a43;
+  --bad: #8b2c2c;
+  --warn: #7a5a1e;
+  --info: #34495e;
+  --scrim: rgb(17 17 17 / .35);
+  --cmp-same: #3e6b52;
+  --cmp-diff: #9a6b2f;
+  --level-always: #8b2c2c;
+  --level-chat: #9a6b2f;
+  --level-minute: #9c8f5a;
+  --hint-neutral: #8c877f;
+  --src-prompt: #5b5480;
+  --src-marker: #3e6e6e;
+  --src-chat: #67625a;
+  --src-worldinfo: #3e6b52;
+  --src-depthPrompt: #8a6a35;
+  --src-example: #7e4a6a;
+  --src-utility: #85817a;
+  --src-prefill: #8b2c2c;
+  --src-memory: #3a6170;
+  --src-authorNote: #3f5a80;
+
+  /* ── 形状：方正 ── */
+  --radius-control: 0;
+  --radius-card: 0;
+  --radius-message: 0;
+  --radius-large: 0;
+  --radius-small: 1px;
+  --radius-tiny: 1px;
+  --radius-pill: 2px;
+
+  /* ── 阴影：全部去掉 ── */
+  --shadow-control: none;
+  --shadow-card: none;
+  --shadow-pop: none;
+  --shadow-dialog: none;
+  --shadow-dropdown: none;
+  --shadow-drawer: none;
+
+  /* ── 控件：没有盒子，只留底线（这三个变量是共用规则里给主题留的口子，见 :root） ── */
+  --control-bg: transparent;
+  --control-line: var(--text);
+  --control-border-width: 0 0 var(--border-width);
+
+  /* ── 字体：界面和聊天正文都用衬线（系统自带，不下载字体）；西文和数字走 Times New Roman。等宽字体（代码、JSON）不变 ── */
+  --pr-font-heading: "Times New Roman", "Songti SC", "Noto Serif SC", "Noto Serif CJK SC", "Source Han Serif SC", "Source Han Serif CN", STSong, SimSun, serif;
+  --font-ui: var(--pr-font-heading);
+  --font-chat: var(--pr-font-heading);
+  --pr-font-size-chat: 15px;       /* 聊天正文：宋体在 14px 下偏细，长段吃力，放大一号（参考站也是 15px/1.5） */
+  --pr-tracking: .12em;
+
+  accent-color: var(--text);       /* 勾选框 / 单选框：黑（深色版里是象牙白） */
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root[data-theme="princesse"] {
-    --bg: ; --panel: ; --panel-2: ; --line: ; --text: ; --dim: ; --accent: ; --accent-text: ; --user-bg: ; --bot-bg: ;
-    --ok: ; --bad: ; --warn: ;
+    /* 深色：照用户自己的站点（KeepAlive）的做法——只有一种黑；字、线都是同一种暖白，靠不同的透明度压在纯黑上分出层次。
+       没有任何独立调出来的深灰：面板、消息、卡片、条目、折叠条、表格、输入区全是这一个黑（或透明），区分一律靠细线。
+       唯一的点缀是香槟金：勾选框 / 开关、当前项、焦点框、主按钮。 */
+    --bg: #000000;                 /* 只有这一种黑 */
+    --panel: #000000;
+    --panel-2: #000000;
+    --user-bg: #000000;
+    --bot-bg: #000000;
+    --text: #ece6d9;               /* 暖白 */
+    --dim: #b7b1a3;                /* 次要字 */
+    --pr-rule: rgb(236 230 217 / .24);     /* 细线：分隔折叠条 / 条目 / 消息 */
+    --pr-rule-2: rgb(236 230 217 / .5);    /* 强一点的线：控件底线、弹出层的框、用户消息左侧 */
+    --line: var(--pr-rule);
+    --control-line: var(--pr-rule-2);
+    --accent: #d2be8e;             /* 香槟金：主按钮是金底黑字的实心切角 */
+    --accent-text: #000000;
+    --pr-gold: #d2be8e;
+    --pr-gold-on-accent: #000000;  /* 金色主按钮上的焦点框：黑 */
+    --pr-disabled: #a39e94;        /* 禁用的字 / 线（暖白在纯黑上压暗，不另调灰） */
+    --pr-disabled-bg: transparent; /* 禁用的主按钮：不填色，只剩虚线底线 */
+    --hint-neutral: #a39e94;
+    /* 装饰图：深色是鸡尾酒。--pr-deco-pick 由 src/ui/theme.js 在页面启动时从 src/themes.js 的清单里随机挑一张、设在 <html> 上，
+       同时设 data-pr-deco-fit（corner / width），下面的「装饰图」规则按它换摆法；没有 JS / 清单为空时用兜底图（马天尼，corner）。
+       下面这组是 corner（马天尼）的值：贴左下角、完整露出，可以比线稍明显；width（场景）的值在「装饰图」规则里。
+       颜色不是纯暖白（"看起来不好喝"）：竖向渐变，底部香槟金（像杯里的酒、桌上的暖光），往上过渡到暖白，最上面略淡出 */
+    --pr-deco-fill: linear-gradient(to top, #d9c48f 0%, #e6d7b0 30%, #f3ecdc 60%, #f6f1e6 100%);
+    --pr-deco-image: var(--pr-deco-pick, url("themes/princesse/cocktail-1.png"));
+    --pr-deco-opacity: .2;
+    --pr-deco-w: 222px;            /* 素材 445×600 */
+    --pr-deco-h: 300px;
+    --pr-deco-left: 18px;
+    --pr-deco-bottom: 14px;
+    --pr-deco-w-narrow: 163px;
+    --pr-deco-h-narrow: 220px;
+    --pr-deco-left-narrow: 12px;
+    --pr-deco-bottom-narrow: 10px;
+    --ok: #a9bb9c;                 /* 语义色：比浅色版亮，饱和度压低 */
+    --bad: #d9897f;
+    --warn: #c4a584;
+    --info: #9fb0c2;
+    --scrim: rgb(0 0 0 / .72);     /* 近黑半透明的遮罩 */
+    --src-prompt: #a9a2d0;
+    --src-marker: #8cc2c2;
+    --src-chat: #b7b1a3;
+    --src-worldinfo: #a9bb9c;
+    --src-depthPrompt: #cdae7a;
+    --src-example: #c99bb8;
+    --src-utility: #a8a399;
+    --src-prefill: #d9897f;
+    --src-memory: #8eb9c7;
+    --src-authorNote: #94acd3;
+    accent-color: var(--pr-gold);  /* 勾选框 / 单选框：金 */
     color-scheme: dark;
   }
 }
-*/
+
+/* ── Princesse：标题与字 ── */
+:root[data-theme="princesse"] :is(.brand, #tabs button, .section-title, .bk-head, .mes_name, table.grid th) {
+  font-family: var(--pr-font-heading); letter-spacing: var(--pr-tracking);
+}
+:root[data-theme="princesse"] .brand { text-transform: uppercase; font-weight: 400; letter-spacing: .24em; }
+:root[data-theme="princesse"] #tabs button.active { font-weight: 600; }
+:root[data-theme="princesse"] .section-title { font-weight: 600; }
+:root[data-theme="princesse"] table.grid th { font-weight: 400; letter-spacing: .04em; }   /* 表头列窄，字距拉太开会折行 */
+/* 引号里的对白：同色（不加别的彩色）。正文已经是衬线，这条只是保证引号里也是 */
+:root[data-theme="princesse"] .mes_text q { color: inherit; font-family: var(--pr-font-heading); }
+:root[data-theme="princesse"] .mes_text { font-size: var(--pr-font-size-chat); }
+
+/* ── Princesse：按钮 ── */
+/* 次要按钮：共用规则 + 上面的 --control-* 变量已经是"透明底 + 一条底线"；悬停时线加粗（用内阴影，不改盒子尺寸） */
+/* （整行可点的那几种按钮——页签、存档页的卡 / 存档名、折叠条、顶栏卡片名、文字链接——本来就没有线，不加） */
+:root[data-theme="princesse"] button:hover:not(:disabled, .primary, #tabs button, .arch-main, .usage-head, .wbook-toggle, .chip-card, .linkbtn) { box-shadow: inset 0 -1px 0 var(--text); }
+/* .ghost 本来就没边框：给一条更淡的发丝底线，悬停时变黑 */
+:root[data-theme="princesse"] button.ghost { border-bottom-color: var(--line); }
+:root[data-theme="princesse"] button.ghost:hover:not(:disabled) { border-bottom-color: var(--text); }
+/* 主按钮：黑底白字，四角切角 */
+:root[data-theme="princesse"] button.primary {
+  background: var(--accent); color: var(--accent-text); border-color: var(--accent);
+  padding-left: 14px; padding-right: 14px; letter-spacing: .08em;
+  clip-path: polygon(6px 0, calc(100% - 6px) 0, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0 calc(100% - 6px), 0 6px);
+}
+:root[data-theme="princesse"] button.primary:hover:not(:disabled) { box-shadow: none; background: color-mix(in srgb, var(--accent) 82%, var(--panel)); }
+/* 禁用：不用整体半透明（字会掉到对比度以下），改成灰字 + 虚线底线；主按钮换成浅灰底 */
+:root[data-theme="princesse"] button:disabled { opacity: 1; color: var(--pr-disabled); }
+:root[data-theme="princesse"] button:disabled:not(.primary, #tabs button, .arch-main, .usage-head, .wbook-toggle, .chip-card, .linkbtn) { border-bottom-style: dashed; border-bottom-color: var(--pr-disabled); }
+:root[data-theme="princesse"] button.primary:disabled { background: var(--pr-disabled-bg); border-color: var(--pr-disabled-bg); }
+:root[data-theme="princesse"] :is(select, input, textarea):disabled { color: var(--pr-disabled); border-bottom-style: dashed; }
+
+/* ── Princesse：输入框、下拉框、文本框 ── */
+/* 单行的：共用规则 + 变量已是"透明底 + 底线"。共用规则没覆盖到的密码框 / 搜索框补上同样的样子 */
+:root[data-theme="princesse"] :is(input[type="password"], input[type="search"]) {
+  background: transparent; border: 0; border-bottom: var(--border-width) solid var(--control-line); border-radius: 0; padding: var(--control-pad-y) var(--control-pad-x);
+}
+/* 多行的大文本框只有底线看不出范围：加一圈很淡的发丝线，底边仍是黑线（聊天输入框除外，它是"一行起步"的，只留底线） */
+:root[data-theme="princesse"] textarea:not(#input) { border-width: var(--border-width); border-color: var(--line) var(--line) var(--control-line); background: var(--panel); }
+
+/* ── Princesse：焦点 ── */
+/* 一律用金色。输入类：底线变金（再加一条内阴影成 2px，不改尺寸） */
+:root[data-theme="princesse"] :is(select, input[type="text"], input:not([type]), input[type="number"], input[type="password"], input[type="search"], textarea):focus {
+  outline: none; border-bottom-color: var(--pr-gold); box-shadow: inset 0 -1px 0 var(--pr-gold);
+}
+/* 按钮：底线变金 */
+:root[data-theme="princesse"] button:focus-visible { outline: none; border-bottom-color: var(--pr-gold); box-shadow: inset 0 -1px 0 var(--pr-gold); }
+/* 主按钮被切角，外侧的 outline 会被裁掉：画在里面（离边 4px，切角 6px 时四角也完整） */
+:root[data-theme="princesse"] button.primary:focus-visible { box-shadow: none; outline: 1px solid var(--pr-gold-on-accent); outline-offset: -4px; }
+/* 页签：底线留给"当前页"那条金线，焦点用一圈细金框 */
+:root[data-theme="princesse"] #tabs button:focus-visible { box-shadow: none; outline: 1px solid var(--pr-gold); outline-offset: -4px; }
+/* 其余能聚焦的（勾选框、折叠条、标题按钮、链接……） */
+:root[data-theme="princesse"] :focus-visible { outline: 2px solid var(--pr-gold); outline-offset: 2px; }
+
+/* ── Princesse：页签与当前项 ── */
+:root[data-theme="princesse"] #tabs button.active { border-bottom-color: var(--pr-gold); }
+/* 当前卡 / 当前存档 / 当前人设：不画框，左侧一条 2px 的线（浅色黑、深色金） */
+:root[data-theme="princesse"] :is(.arch-card.current, .arch-chat.current) { border-color: transparent; border-bottom-color: var(--line); box-shadow: inset 2px 0 0 var(--pr-current); }
+:root[data-theme="princesse"] #tab-persona .persona-item.active { border-color: transparent; border-bottom-color: var(--line); box-shadow: inset 2px 0 0 var(--pr-current); }
+:root[data-theme="princesse"] #tab-persona .persona-item.active > .persona-head { background: transparent; border-radius: 0; }
+:root[data-theme="princesse"] .persona-head .persona-cur { color: var(--pr-current); }
+/* 下拉面板里的当前项、接口页"聊天中"的模型：象牙白底 + 左侧黑线（原来是强调色混出来的浅色块） */
+:root[data-theme="princesse"] :is(.mp-item.active, .ep-model.using) { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--pr-current); }
+:root[data-theme="princesse"] .mp-item.selected { color: var(--pr-current); }
+/* ── Princesse：消息、卡片、列表条目 ── */
+/* 不画四面的框：白块落在象牙白底上，靠留白分开；条目底下一条发丝线。
+   用 border-color 而不是 border-width:0，这样后面带左侧色条的规则（.card.cmp-same 等）照样生效 */
+:root[data-theme="princesse"] .mes { border-color: transparent; padding: 10px 14px; }
+:root[data-theme="princesse"] .mes[data-role="user"] { box-shadow: inset 1px 0 0 var(--pr-strong-line); }
+:root[data-theme="princesse"] .mes.mes-hidden { opacity: .74; }   /* 原来 .55：灰字会掉到 3:1 以下 */
+:root[data-theme="princesse"] .mes_text pre { border-color: var(--pr-pre-border); background: var(--pr-pre-bg); }
+:root[data-theme="princesse"] :where(.card, .pitem, .an-box) { border-color: transparent; border-bottom-color: var(--line); }
+:root[data-theme="princesse"] :is(#tab-persona .persona-item, #tab-memory .mem-box) { border-color: transparent; border-bottom-color: var(--line); }   /* 这两条原规则带 id，:where 压不过 */
+:root[data-theme="princesse"] .an-box { background: var(--panel); }
+:root[data-theme="princesse"] .ep-models { border-width: var(--border-width) 0; }
+/* 表格：去掉外框，表头底下一条黑线 */
+:root[data-theme="princesse"] table.grid { border-color: transparent; }
+:root[data-theme="princesse"] table.grid th { background: transparent; border-bottom-color: var(--pr-strong-line); }
+/* 被停用 / 未启用的条目：原来是 .5 / .55 的透明度，字会掉到 4.5:1 以下，这里提到 .62 */
+:root[data-theme="princesse"] :is(.pitem.disabled > header, table.grid tr.off, .wbook.inactive .wbook-table, .wbook.inactive .wbook-toggle, .wbook.inactive .wbook-meta) { opacity: .62; }
+/* 头像、小圆点：方正 */
+:root[data-theme="princesse"] :is(.chip-card img, .arch-avatar, .dot) { border-radius: 0; }
+:root[data-theme="princesse"] :is(.usage-bar, .budget-meter) { border-radius: 0; }
+/* 聊天区顶上的提示条落在花的上面时也要读得清：给不透明底 */
+:root[data-theme="princesse"] #chat-info { background: var(--panel); }
+:root[data-theme="princesse"] #store-error { background: var(--panel); }
+
+/* ── Princesse：弹出的东西 ── */
+/* 没有阴影，靠 1px 黑线 + 纯白底；提示条的色条只留给成功 / 错误 */
+:root[data-theme="princesse"] :is(.bk-panel, .mp-pop) { border-color: var(--pr-strong-line); }
+:root[data-theme="princesse"] .toast { border: var(--border-width) solid var(--pr-strong-line); }
+:root[data-theme="princesse"] .toast.error { border-left: var(--bar-width-thin) solid var(--bad); }
+:root[data-theme="princesse"] .toast.ok { border-left: var(--bar-width-thin) solid var(--ok); }
+:root[data-theme="princesse"] #gen-error { border-width: 0 0 0 2px; }
+
+/* ── Princesse 深色：色块全部换成线 ──
+   深色里所有底色都是同一个黑（变量已经这样设了）；这里再把几类"自带底色"的东西改成透明，让面板里的装饰图能透出来，
+   并在原来靠底色区分的地方补上细线。 */
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="princesse"] { --pr-strong-line: var(--pr-rule-2); --pr-current: var(--pr-gold); --pr-pre-bg: transparent; --pr-pre-border: var(--pr-rule); }
+  /* 卡片、条目、折叠框、表格、文本框：透明底（它们之间本来就有底部细线） */
+  :root[data-theme="princesse"] :is(.card, .pitem, .an-box, #tab-persona .persona-item, #tab-memory .mem-box, table.grid, .wedit-row > td, textarea) { background: transparent; }
+  /* 消息之间：底部一条细线（用户消息另有左侧那条强一点的线） */
+  :root[data-theme="princesse"] .mes { border-bottom-color: var(--line); }
+  /* 「当前」徽标：金（当前项都用金） */
+  :root[data-theme="princesse"] .badge.on { color: var(--pr-gold); }
+  /* 禁用的主按钮：不填色，金底换成一条虚线底线 */
+  :root[data-theme="princesse"] button.primary:disabled { border-bottom: var(--border-width) dashed var(--pr-disabled); }
+}
+
+/* ── Princesse：装饰图（浅色是山茶花，深色是鸡尾酒：白底是花，黑底是酒） ──
+   只有一处：右侧面板（窄屏是盖住聊天区的抽屉）的左下角。聊天区不放。画在面板的伪元素上，所以面板收起时跟着消失、抽屉滑出时跟着一起动。
+   两种摆法：corner（默认）= 贴左下角的一幅，尺寸看下面的 --pr-deco-*；width = 深色抽到场景图时，宽度铺满面板（左右贴边、图不被左右裁）、
+   贴着底边、上面留白，当一整面很淡的背景；面板很宽、图太高时顶部被裁到页签栏下沿为止
+   （<html data-pr-deco-fit="width">，由 src/ui/theme.js 按 src/themes.js 里那张图的 fit 设）。
+   画在 #inspector 的伪元素上：mask 取图的形状（PNG 用 alpha、SVG 用线条），颜色用 --text（浅色里是黑、深色里是象牙白），再整体调很低的透明度。
+   - 固定在面板这个"窗口"的左下角：滚动的是里面的 .tab，#inspector 本身不滚，所以图不跟着内容走；
+   - 在内容后面：z-index:-1 + #inspector 建立自己的层叠上下文（isolation:isolate），图画在面板底色之上、页签内容之下；
+     浅色里卡片 / 条目有白底，图只在空白处露出来；深色里它们是透明的，图就在文字后面，所以浓淡以不影响阅读为准；
+   - 不挡点击（pointer-events:none）、不占布局（绝对定位）；伸出面板的那一截被 overflow:hidden 裁掉（宽屏下 #inspector 本身不滚动，加它没有副作用）。
+   用哪张图、多大、放哪、多淡，都是上面浅 / 深两段里的 --pr-deco-* 变量。 */
+:root[data-theme="princesse"] #inspector { isolation: isolate; overflow: hidden; }
+:root[data-theme="princesse"] #inspector::after {
+  content: ""; position: absolute; z-index: -1; pointer-events: none;
+  left: var(--pr-deco-left); bottom: var(--pr-deco-bottom); width: var(--pr-deco-w); height: var(--pr-deco-h);
+  background: var(--pr-deco-fill); opacity: var(--pr-deco-opacity);
+  -webkit-mask: var(--pr-deco-image) left bottom / contain no-repeat;
+  mask: var(--pr-deco-image) left bottom / contain no-repeat;
+}
+@media (prefers-color-scheme: dark) {
+  /* width：宽度 = 面板整宽（不扣内边距），高度按图的比例（素材 907×1200），贴底；最高到页签栏下沿，再高就从顶上裁掉。要比线（.24）淡得多 */
+  :root[data-theme="princesse"][data-pr-deco-fit="width"] #inspector::after {
+    left: 0; right: auto; bottom: 0; top: auto; width: 100%; height: auto; aspect-ratio: 907 / 1200;
+    max-height: calc(100% - var(--pr-tabs-h, 53px)); opacity: .13;
+    -webkit-mask-size: 100% auto; mask-size: 100% auto; -webkit-mask-position: left bottom; mask-position: left bottom;
+  }
+}
+@media (min-width: 901px) {
+  /* 宽屏下 #inspector 是普通的网格子项，要 position:relative 才能当定位的参照；窄屏它是 position:fixed 的抽屉，本身就是参照，不能改 */
+  :root[data-theme="princesse"] #inspector { position: relative; }
+}
+@media (max-width: 900px) {
+  /* 窄屏的抽屉：缩小 */
+  :root[data-theme="princesse"] #inspector::after {
+    left: var(--pr-deco-left-narrow); bottom: var(--pr-deco-bottom-narrow); width: var(--pr-deco-w-narrow); height: var(--pr-deco-h-narrow);
+  }
+}
+@media (max-width: 900px) and (prefers-color-scheme: dark) {
+  :root[data-theme="princesse"][data-pr-deco-fit="width"] #inspector::after { left: 0; bottom: 0; width: 100%; height: auto; --pr-tabs-h: 46px; }
+}
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -164,8 +453,9 @@ body {
 }
 button, input, select, textarea { font: inherit; color: inherit; }
 button, select, input[type="text"], input:not([type]), input[type="number"], textarea {
-  background: var(--panel);
-  border: var(--border-width) solid var(--line);
+  background: var(--control-bg);
+  border: var(--border-width) solid var(--control-line);
+  border-width: var(--control-border-width);
   border-radius: var(--radius-control);
   padding: var(--control-pad-y) var(--control-pad-x);
   box-shadow: var(--shadow-control);
@@ -439,7 +729,7 @@ button.chip-card::after { content: '▾'; color: var(--dim); font-weight: 400; }
 .mp-model-btn { max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .model-picker.compact .mp-model-btn { max-width: 16ch; }
 .mp-model-btn::after { content: ' ▾'; color: var(--dim); }
-.mp-model-btn.empty { color: var(--dim); }
+.mp-model-btn.mp-empty { color: var(--dim); }
 .model-picker.bad .mp-model-btn { border-color: var(--bad); }
 /* 浮层挂在 body 上（顶栏 / 检查器有 overflow 会裁掉）；z-index 高于页内弹层 25、低于 toast 30 */
 .mp-pop { position: fixed; z-index: 28; display: flex; flex-direction: column; gap: 4px; padding: 6px;
@@ -753,3 +1043,7 @@ body:not(:has(#manual-mode:checked)) .smalltalk-frontend-source { display: none;
 
 /* 作者注释挪到人设页最下面 */
 .an-slot { margin-top: 14px; }
+
+/* 批量：点整行选中 */
+.batch-row, .arch-card > header.batch-row { cursor: pointer; }   /* 后一个选择器是为了压过 .arch-card > header 的 cursor: default */
+.batch-row.batch-picked { background: color-mix(in srgb, var(--accent) 12%, transparent); }

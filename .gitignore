@@ -19,6 +19,7 @@
 !/src/
 !/vendor/
 !/icons/
+!/themes/
 
 # 本地版的小服务
 !/package.json
