@@ -1048,3 +1048,11 @@ body:not(:has(#manual-mode:checked)) .smalltalk-frontend-source { display: none;
 /* 批量：点整行选中 */
 .batch-row, .arch-card > header.batch-row { cursor: pointer; }   /* 后一个选择器是为了压过 .arch-card > header 的 cursor: default */
 .batch-row.batch-picked { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* 拼装页就地编辑 */
+.seg > .seg-label { display: flex; align-items: center; gap: 6px; }
+.seg-edit-btn { margin-left: auto; padding: 0 6px; font-size: var(--font-size-xs); font-weight: 400; }
+.pedit { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; min-width: 0; }
+.pedit-where { font-size: var(--font-size-xs); }
+.pedit textarea { width: 100%; max-width: 100%; box-sizing: border-box; min-height: 5em; resize: vertical; font-family: var(--font-mono, monospace); }
+.pedit .row { display: flex; gap: 6px; }
