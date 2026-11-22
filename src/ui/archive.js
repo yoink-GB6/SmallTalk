@@ -28,7 +28,6 @@ import { invalidateArchiveTab } from './tab-archive.js';
 import { askRegexFate, moveAndFlush, undoMove, refreshRegexViews, moveSummary } from './regex-delete.js';
 import { enabledScripts } from '../regex-move.js';
 import { restoreActive } from './backup.js';   // 循环依赖（backup.js 导入本文件）：只在函数体里调用
-import { ensureMemories } from './memory.js';  // 同上
 
 // ───────────────────────────── 读列表 ─────────────────────────────
 
@@ -362,7 +361,7 @@ persist.onSwap = () => { teardownChatUi(); adoptLegacyHidden(); };
  * 一处就全管到；这时 state.js 已经记下了这个存档读进来时的快照，所以这里改完 save() 会照常把它写回去。
  * 只在有写权限时做：只读标签页、已停止保存、保存暂停中、正在恢复备份时不做——只读标签页里这些楼照旧显示为未隐藏，
  *   等它接管成为写标签页（会自动刷新、重新载入）时再做；恢复备份期间的切换不做，下次打开这个存档时再做。
- * 走现成的 memory-fold.js setHidden：受影响的那几轮的摘要按规矩作废、交给 ensureMemories 重压（这些楼以前是照常发送的，摘要里有它们）。
+ * 走现成的 memory-fold.js setHidden：只改标记，不碰记忆（已有的摘要照旧留着、照旧发；不触发补压，见 memory-fold.js 文件头「隐藏楼层」）。
  * 只触发一次：做完这些楼有了 hidden，legacyHiddenFloors 不再选中它们（天然幂等）；没有这类楼的存档什么都不改、不多写一次。
  * 旁白（extra.type 'narrator'，is_system false）不受影响。
  */
@@ -373,7 +372,6 @@ function adoptLegacyHidden() {
     const { changed } = setHidden(state.chat, floors, true);
     if (!changed.length) return;
     save();
-    setTimeout(ensureMemories, 0);
     toast(`这个存档有 ${changed.length} 楼在酒馆里是隐藏的，现在已按隐藏处理（不会发给模型）。可以在聊天区顶上点「全部取消隐藏」。`, 'ok');
 }
 

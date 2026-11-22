@@ -28,7 +28,7 @@
 //     从这一版起「st.is_system 为真、却没有 hidden」只可能是这种老存档（取消隐藏会把 st.is_system 改成 false），
 //     所以打开这个存档时自动按隐藏处理（用户定的：不问，直接认成隐藏，提示一句）：
 //       哪几楼 = legacyHiddenFloors（本文件，纯函数）；做在 ui/archive.js adoptLegacyHidden（存档装进 state 之后，只在有写权限时），
-//       走 memory-fold.js setHidden（受影响的那几轮摘要按规矩作废重压），然后正常保存。做完这些楼有了 hidden，下次打开不会再触发。
+//       走 memory-fold.js setHidden（只改标记，不碰记忆：已有的摘要照旧留着），然后正常保存。做完这些楼有了 hidden，下次打开不会再触发。
 //     解析（parseChatFile）和导出本身不迁移：导出时 hidden 和 st 一致就原样写回（见下面 messageToLine）。
 //
 // 作者注释（酒馆 authors-note.js metadata_keys，规则见 src/author-note.js 文件头）：

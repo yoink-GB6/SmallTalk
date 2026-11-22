@@ -111,15 +111,15 @@ export const hostMethods = {
             if (i !== null) list.push({ u, i });
         }
         // is_hidden（酒馆助手 setChatMessages 可以改它，对应酒馆的 is_system）：先收集，最后一次性走 setHidden，
-        // 和界面上的「隐藏 / 取消隐藏」同一条路（作废受影响的摘要，规则见 memory-fold.js 文件头「隐藏楼层」）
+        // 和界面上的「隐藏 / 取消隐藏」同一条路（只改标记、不碰记忆，规则见 memory-fold.js 文件头「隐藏楼层」）
         const hideIds = [], showIds = [];
         for (const { u, i } of list) if (typeof u.is_hidden === 'boolean') (u.is_hidden ? hideIds : showIds).push(i);
         // 拒绝条件和界面上的按钮一样（正在生成、正在恢复备份、已停止保存、只读），开头的 writeBlocked 已经整个拦过了
         if (hideIds.length || showIds.length) {
             setHidden(state.chat, hideIds, true);
-            setHidden(state.chat, showIds, false);
+            const shown = setHidden(state.chat, showIds, false).changed.length;
             ui.previewIsSent = false;
-            setTimeout(ensureMemories, 0);
+            if (shown) setTimeout(ensureMemories, 0);   // 同界面：只有取消隐藏才可能多出待压缩的轮
         }
         for (const { u, i } of list) {
             const m = state.chat[i];
