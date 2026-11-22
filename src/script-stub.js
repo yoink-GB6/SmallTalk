@@ -53,10 +53,26 @@ export function scriptStubMain(BOOT, LIB) {
     var URL2ID = Object.create(null);    // blob 地址 → 脚本 id
     var booted = false, libsReady = false, bootData = null, appReadyFired = false;
 
+    // 直通模式（「允许直接操作页面」，宿主一侧见 ui/script-host.js 文件头「直通模式」）：iframe 和主页面同源、不设沙箱。
+    // 协议、副本、API 表面和沙箱完全同一套（就是这个函数），只换「传输」：不走 postMessage，宿主把一个桥对象挂在 iframe 元素上
+    // （frameElement.__smalltalkBridge），两边直接调用——宿主 → 这里同步送达（副本补丁、RPC 结果当场生效；事件推迟到微任务里分发，
+    // 免得脚本的回调在宿主自己的代码中间跑），这里 → 宿主由宿主排进微任务处理。同步读之前先让宿主把攒着的改动推过来（fresh），
+    // 所以同步读真的是「现在」的值。只有沙箱才需要的替身（localStorage、原生对话框、新窗口、悬浮区的测量、找酒馆元素的检测）都不装。
+    var TRUSTED = BOOT.trusted === true;
+    var BRIDGE = null;
+    if (TRUSTED) { try { BRIDGE = W.frameElement && W.frameElement.__smalltalkBridge; } catch (e) { BRIDGE = null; } }
+
     function post(msg) {
         msg.smalltalk = true;
         msg.frameId = FRAME_ID;
+        // 直通：宿主那边当场做结构化克隆（参数里有函数 / DOM 节点时和 postMessage 一样同步抛 DataCloneError）
+        if (TRUSTED) { if (!BRIDGE) throw new Error('SmallTalk：找不到宿主'); BRIDGE.receive(msg); return; }
         HOST.postMessage(msg, '*');
+    }
+    /** 直通模式：同步读之前让宿主把攒着的改动先推过来（同步送达）。沙箱模式什么都不做 */
+    function fresh() {
+        if (!TRUSTED || !BRIDGE || !booted) return;
+        try { BRIDGE.pull(); } catch (e) { /* 宿主已经拆了 */ }
     }
 
     function toText(v) {
@@ -184,7 +200,8 @@ export function scriptStubMain(BOOT, LIB) {
         ownKeys: function () { return Array.from(LS.keys()); },
         getOwnPropertyDescriptor: function (t, p) { return LS.has(String(p)) ? { value: LS.get(String(p)), enumerable: true, configurable: true, writable: true } : undefined; },
     });
-    try { Object.defineProperty(W, 'localStorage', { value: lsProxy, configurable: true, enumerable: true, writable: false }); } catch (e) { /* ignore */ }
+    // 直通模式：脚本拿到的就是真的 localStorage（和主页面同源、同一个存储，和酒馆里一样），不装替身（sessionStorage / cookie 在同源下本来就能用，上面的检测自然跳过）
+    if (!TRUSTED) { try { Object.defineProperty(W, 'localStorage', { value: lsProxy, configurable: true, enumerable: true, writable: false }); } catch (e) { /* ignore */ } }
     function lsBoot(init) {
         if (!init || typeof init !== 'object') return;
         Object.keys(init).forEach(function (k) { var v = init[k]; if (typeof v === 'string' && lsTotal + lsSize(k, v) <= BOOT.storageLimit) { LS.set(k, v); lsTotal += lsSize(k, v); } });
@@ -211,7 +228,7 @@ export function scriptStubMain(BOOT, LIB) {
     function noDialog(name, ret) {
         return function () { logOnce(caller(), 'unsupported', '脚本想弹出原生对话框（' + name + '），SmallTalk 不支持：可以用 toastr 或在自己的界面里显示'); return ret; };
     }
-    try { W.alert = noDialog('alert', undefined); W.confirm = noDialog('confirm', false); W.prompt = noDialog('prompt', null); W.print = noDialog('print', undefined); } catch (e) { /* ignore */ }
+    if (!TRUSTED) { try { W.alert = noDialog('alert', undefined); W.confirm = noDialog('confirm', false); W.prompt = noDialog('prompt', null); W.print = noDialog('print', undefined); } catch (e) { /* ignore */ } }
     function openViaHost(url) {
         var href;
         try { href = new URL(String(url), 'https://invalid.invalid/').href; } catch (e) { return null; }
@@ -219,8 +236,9 @@ export function scriptStubMain(BOOT, LIB) {
         rpc('openUrl', [href], caller()).then(null, function () {});
         return null;
     }
-    try { W.open = function (url) { return openViaHost(url); }; } catch (e) { /* ignore */ }
-    document.addEventListener('click', function (e) {
+    // 直通模式：原生对话框、window.open、链接、表单都是浏览器原样的（和酒馆里一样），下面这几个替身只在沙箱里装
+    if (!TRUSTED) try { W.open = function (url) { return openViaHost(url); }; } catch (e) { /* ignore */ }
+    if (!TRUSTED) document.addEventListener('click', function (e) {
         var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
         if (!a || e.defaultPrevented) return;
         var raw = a.getAttribute('href') || '';
@@ -228,7 +246,7 @@ export function scriptStubMain(BOOT, LIB) {
         e.preventDefault();   // 不让沙箱自己导航走（那样这张卡的脚本全没了），也开不了新窗口
         openViaHost(a.href);
     });
-    document.addEventListener('submit', function (e) {
+    if (!TRUSTED) document.addEventListener('submit', function (e) {
         e.preventDefault();
         logOnce(caller(), 'unsupported', '脚本的表单想提交，SmallTalk 不支持（沙箱里不能提交表单；脚本可以自己监听 submit 处理）');
     });
@@ -244,7 +262,7 @@ export function scriptStubMain(BOOT, LIB) {
     // 拖动：按下（pointerdown）时立刻报「整块」（drag: true），宿主放开裁剪，松开 / 取消 / 宿主说在外面松开了（release）后再量真实区域。
     var SHADOWS = new WeakMap();
     var shadowMO = null;
-    try {
+    if (!TRUSTED) try {   // 直通模式没有悬浮区（脚本直接画在主页面上），这一节的测量都不装
         var origAttach = Element.prototype.attachShadow;
         Element.prototype.attachShadow = function () {
             var root = origAttach.apply(this, arguments);
@@ -361,9 +379,11 @@ export function scriptStubMain(BOOT, LIB) {
         lastRegions = '';
         scheduleRegions();
     }
-    W.addEventListener('pointerdown', startDrag, true);
-    W.addEventListener('pointerup', function () { endDrag(false); }, true);
-    W.addEventListener('pointercancel', function () { endDrag(false); }, true);
+    if (!TRUSTED) {
+        W.addEventListener('pointerdown', startDrag, true);
+        W.addEventListener('pointerup', function () { endDrag(false); }, true);
+        W.addEventListener('pointercancel', function () { endDrag(false); }, true);
+    }
     function watchRegions() {
         try { shadowMO = new MutationObserver(scheduleRegions); shadowMO.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true }); } catch (e) { /* ignore */ }
         W.addEventListener('resize', scheduleRegions);
@@ -518,9 +538,17 @@ export function scriptStubMain(BOOT, LIB) {
 
     // ───────── 宿主的消息 ─────────
 
-    W.addEventListener('message', function (e) {
+    if (!TRUSTED) W.addEventListener('message', function (e) {
         if (e.source !== HOST) return;
-        var d = e.data;
+        onHost(e.data);
+    });
+    // 直通模式：宿主直接调这个（同步送达）。事件、release 推到微任务里再分发：宿主是在自己的代码中间发的事件（比如生成到一半），
+    // 脚本的回调不能插在那中间跑（postMessage 本来也是异步到达的）；补丁和结果当场生效、不跑脚本的代码，所以不用推迟
+    if (TRUSTED && BRIDGE) BRIDGE.toStub = function (d) {
+        if (d && (d.kind === 'event' || d.kind === 'release')) queueMicrotask(function () { onHost(d); });
+        else onHost(d);
+    };
+    function onHost(d) {
         if (!d || d.smalltalk !== true || d.frameId !== FRAME_ID) return;
         if (d.kind === 'result') {
             var p = pending.get(d.id);
@@ -546,7 +574,7 @@ export function scriptStubMain(BOOT, LIB) {
             bootData = d;
             maybeStart();
         }
-    });
+    }
 
     // ───────── 同步读 ─────────
 
@@ -563,6 +591,7 @@ export function scriptStubMain(BOOT, LIB) {
         return out;
     }
     function getChatMessages(range, option) {
+        fresh();
         var o = option && typeof option === 'object' ? option : {};
         var role = ['system', 'assistant', 'user'].indexOf(o.role) >= 0 ? o.role : null;
         var hs = o.hide_state === 'hidden' || o.hide_state === 'unhidden' ? o.hide_state : 'all';
@@ -583,6 +612,7 @@ export function scriptStubMain(BOOT, LIB) {
 
     /** option → {key, get(), set(v)}；写和读对 message 的 'latest' 不一样（照酒馆助手） */
     function scopeOf(option, sid, method, write) {
+        fresh();
         var o = option && typeof option === 'object' && !Array.isArray(option) ? option : {};
         var type = o.type === undefined ? 'chat' : o.type;
         if (type === 'chat' || type === 'global' || type === 'character') {
@@ -718,6 +748,7 @@ export function scriptStubMain(BOOT, LIB) {
             return r && typeof r.then === 'function' ? r.then(done) : done(r);
         };
         api.getAllVariables = function () {
+            fresh();
             var s = sidOf(), out = {};
             var add = function (t) { Object.keys(t || {}).forEach(function (k) { if (k !== '__proto__') out[k] = t[k]; }); };
             add(M.vars.global); add(M.vars.character);
@@ -844,6 +875,7 @@ export function scriptStubMain(BOOT, LIB) {
     }
 
     function context() {
+        fresh();
         var c = {
             chat: M.chat.map(function (m) { return { name: m.name, is_user: m.role === 'user', is_system: m.is_hidden, mes: m.message, message_id: m.message_id, swipe_id: m.swipe_id, swipes: m.swipes.slice() }; }),
             name1: M.ctx.name1, name2: M.ctx.name2, characterId: 0, chatId: M.ctx.chatId, groupId: null,
@@ -871,7 +903,7 @@ export function scriptStubMain(BOOT, LIB) {
     var impl = {};
     Object.keys(GLOBAL).forEach(function (k) { impl[k] = GLOBAL[k]; });
     impl.getChatMessages = getChatMessages;
-    impl.getLastMessageId = function () { return M.chat.length - 1; };
+    impl.getLastMessageId = function () { fresh(); return M.chat.length - 1; };
     impl.getCurrentMessageId = function () { throw new Error('getCurrentMessageId 只能在消息里的前端卡里用（脚本不在任何一楼里）'); };
     impl.getMessageId = function (name) {
         var m = /^TH-message--(\d+)--\d+$/.exec(String(name));
@@ -879,16 +911,18 @@ export function scriptStubMain(BOOT, LIB) {
         return Number(m[1]);
     };
     impl.getCharData = function (name) {
+        fresh();
         if (name === undefined || name === null || name === 'current' || name === M.ctx.name2) return clone(M.card.raw);
         return null;
     };
     impl.getCharAvatarPath = function (name) {
+        fresh();
         if (name === undefined || name === null || name === 'current' || name === M.ctx.name2) return M.card.avatar || null;
         return null;
     };
-    impl.getCurrentCharacterName = function () { return M.ctx.name2; };
-    impl.getCharacterNames = function () { return [M.ctx.name2]; };
-    impl.getCurrentPersonaName = function () { return M.ctx.name1; };
+    impl.getCurrentCharacterName = function () { fresh(); return M.ctx.name2; };
+    impl.getCharacterNames = function () { fresh(); return [M.ctx.name2]; };
+    impl.getCurrentPersonaName = function () { fresh(); return M.ctx.name1; };
     impl.getTavernHelperVersion = function () { return BOOT.versions.helper; };
     impl.getFrontendVersion = impl.getTavernHelperVersion;
     impl.getTavernVersion = function () { return BOOT.versions.tavern; };
