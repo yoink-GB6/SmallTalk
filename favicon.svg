@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<!-- 流星：一颗白色的星拖着由亮到淡的尾巴，从右上划向左下，旁边点缀三颗小星。
+     自带一个深夜空蓝的圆角方形底（上深下浅的柔和渐变）：白色主体放在浅色标签栏上会看不见，
+     有了深色底，浅色、深色标签栏上都清楚。
+     两个 id 是给 scripts/make-icons.mjs 用的：#bg 是底，#meteor 是流星本体（含小星）。
+     脚本生成 maskable / apple-touch 图时会把底改成铺满的直角、把流星单独缩放，所以改结构时别删 id。 -->
+<defs>
+<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#0b1330"/>
+<stop offset="1" stop-color="#26407a"/>
+</linearGradient>
+<!-- 尾巴：从星头（20,44）到尾尖（50,14），由亮到透明 -->
+<linearGradient id="tail" gradientUnits="userSpaceOnUse" x1="20" y1="44" x2="50" y2="14">
+<stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+<stop offset="0.55" stop-color="#cfe0ff" stop-opacity="0.5"/>
+<stop offset="1" stop-color="#9db8ff" stop-opacity="0"/>
+</linearGradient>
+<radialGradient id="glow">
+<stop offset="0.45" stop-color="#e3ecff" stop-opacity="0.6"/>
+<stop offset="1" stop-color="#e3ecff" stop-opacity="0"/>
+</radialGradient>
+</defs>
+<rect id="bg" x="0" y="0" width="64" height="64" rx="14" fill="url(#sky)"/>
+<g id="meteor">
+<!-- 主尾：底边藏在星头后面，往尾尖收成一点 -->
+<path d="M16.1 40.1L23.9 47.9L50 14Z" fill="url(#tail)"/>
+<!-- 两道细的副尾（圆头线），一长一短，让尾巴有层次；起点也藏在星头后面 -->
+<g stroke="url(#tail)" stroke-width="1.8" stroke-linecap="round" fill="none" opacity="0.7">
+<path d="M17.2 41.2L38 20.4"/>
+<path d="M22.8 46.8L42 27.6"/>
+</g>
+<!-- 星头：柔和的光晕（径向渐变）+ 白色实心 + 一点暖黄的核 -->
+<circle cx="20" cy="44" r="12" fill="url(#glow)"/>
+<circle cx="20" cy="44" r="6.2" fill="#ffffff"/>
+<circle cx="19.2" cy="44.8" r="2.6" fill="#fff1c2"/>
+<!-- 小星 -->
+<g fill="#ffffff">
+<circle cx="48" cy="46" r="1.5"/>
+<circle cx="13" cy="19" r="1.3"/>
+<circle cx="36" cy="10" r="1" opacity="0.8"/>
+</g>
+</g>
+</svg>

@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Small Talk</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<!-- "添加到主屏幕"用的一组标签（网页版做成 PWA）。地址全是相对的，网页版挂在子路径下也能用：
+     manifest：名字、图标、独立窗口模式（内容和理由见 manifest.webmanifest / scripts/make-icons.mjs）；
+     apple-touch-icon：iOS 不认清单里的图标，只认这张（不透明底，iOS 会把透明处填黑）；
+     theme-color：系统标题栏 / 状态栏的颜色，取自 style.css 的顶栏色 --panel，浅色 / 深色各一条；
+     下面几条 mobile-web-app / apple-mobile-web-app：让 iOS 和安卓从主屏幕打开时没有浏览器边框，并指定主屏幕上显示的名字 -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1f2125" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Small Talk">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="style.css">
+<!-- 渲染用的两个库，和酒馆本体用的是同一套：showdown 做 markdown，DOMPurify 做净化 -->
+<script src="vendor/showdown/2.1.0/showdown.min.js"></script>
+<script src="vendor/dompurify/3.2.4/purify.min.js"></script>
+</head>
+<body>
+
+<header id="topbar">
+  <!-- 标题：宽屏下只是普通标题；窄屏下它就是开合右侧检查器抽屉的按钮（role / tabindex / aria-expanded 由 src/ui/drawer.js 按屏宽加减，
+       前面的 ☰ 图标是 CSS 伪元素，所以 textContent 仍是干净的 "SmallTalk"）。id 沿用 drawer-toggle -->
+  <div id="drawer-toggle" class="brand">SmallTalk</div>
+  <button id="card-chip" class="chip-card" type="button" title="当前角色卡：点这里打开「存档」页，切换 / 管理角色卡和存档"></button>
+  <span class="spacer"></span>
+  <!-- 只在聊天用的模型有问题时出现（见 tab-provider.js 的 paintChatWarn），点它去「接口」页 -->
+  <button id="chat-warn" class="mp-warn" type="button" hidden></button>
+  <!-- 手动模式开着时的提醒（点它去「杂项」页关掉）；没开就不显示 -->
+  <button id="manual-badge" class="manual-badge" type="button" hidden title="手动模式已开：发送时不调用模型，prompt 拼好后由你自己去用、再把回复贴回来。点这里去「杂项」页关闭">手动</button>
+  <span id="health" class="health" title="模型桥状态">●</span>
+</header>
+<!-- 导入文件的选择框：顶栏的「导入」按钮没了，现在由「存档」页顶部的「导入…」按钮点它。拖文件进页面也走同一条路（src/app.js） -->
+<input type="file" id="file-input" multiple accept=".png,.json,.jsonl,.zip" hidden>
+<!-- 开场白下拉框 #greeting-select 全页唯一：平时停在这个隐藏的 #greeting-home 里，「存档」页（tab-archive.js）重画时把它挪进当前卡那一行的「新对话」旁边
+     （重画前先挪回来，免得被 replaceChildren 丢掉）。archive.js 多处直接读它的值，所以它必须一直在文档里 -->
+<div id="greeting-home" hidden><select id="greeting-select" title="选择开场白：当前存档只有开场白时原地替换，否则新开一个存档"></select></div>
+
+<div id="store-error" hidden><b>存储出了问题</b> <span id="store-error-text"></span></div>
+
+<main id="layout">
+  <section id="chat-pane">
+    <!-- 聊天区顶上不再有工具栏（存档名、楼数、开场白、手动徽标都挪走了，见 tab-archive.js / 顶栏）。
+         #chat-info 只在有话要说时出现：上下文上限丢了楼、有隐藏楼层（chat.js renderChatInfo）；平时 hidden -->
+    <div id="chat-info" class="dim" hidden></div>
+    <!-- 聊天内搜索（src/ui/chat-search.js）：入口在「杂项」页最上面的「搜索聊天记录」；Ctrl+F 不拦截，留给浏览器自己的页内查找 -->
+    <div id="chat-search" hidden>
+      <input id="chat-search-input" type="text" placeholder="搜索当前存档（不分大小写）" autocomplete="off" aria-label="搜索关键词">
+      <span id="chat-search-count" class="dim" aria-live="polite"></span>
+      <button id="chat-search-prev" class="ghost" type="button" title="上一处（Shift+Enter）" disabled>↑ 上一处</button>
+      <button id="chat-search-next" class="ghost" type="button" title="下一处（Enter）" disabled>↓ 下一处</button>
+      <button id="chat-search-close" class="ghost" type="button" title="关闭（Esc）">✕</button>
+    </div>
+    <!-- 一张卡都没有、也还没聊过时的引导（src/ui/chat.js 的 renderChatEmpty 控制显示）。放在 #chat 外面：#chat 的子节点是按楼层下标一一对应的 -->
+    <div id="chat-empty" class="empty" hidden>还没有角色卡。把角色卡（PNG / JSON）拖进这个页面，或者打开「<button id="chat-empty-archive" class="linkbtn" type="button">存档</button>」页点「导入」。也可以直接在下面发消息，和 Assistant 聊。</div>
+    <div id="chat"></div>
+    <div id="gen-error" hidden>
+      <div class="gen-error-head"><b>这次生成失败了</b><span class="spacer"></span><button id="gen-error-close" class="ghost" title="关闭">✕</button></div>
+      <pre id="gen-error-text"></pre>
+      <div id="gen-error-hint" class="dim"></div>
+    </div>
+    <div id="manual-panel" hidden>
+      <div class="dim">手动模式：prompt 已拼好（见右侧「拼装」页，可复制）。把模型的回复贴到这里：</div>
+      <textarea id="manual-reply" rows="5" placeholder="粘贴模型回复…"></textarea>
+      <div class="row">
+        <button id="manual-ok" class="primary">作为回复插入</button>
+        <button id="manual-cancel">取消</button>
+      </div>
+    </div>
+    <form id="composer">
+      <textarea id="input" rows="3" placeholder="Enter发送，Shift+Enter换行"></textarea>
+      <div class="col">
+        <button id="send" class="primary" type="submit">发送</button>
+        <button id="stop" type="button" hidden>停止</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="inspector">
+    <nav id="tabs">
+      <button data-tab="archive" class="active">存档</button>
+      <button data-tab="memory">记忆</button>
+      <button data-tab="persona">人设</button>
+      <button data-tab="world">世界书</button>
+      <button data-tab="preset">预设</button>
+      <button data-tab="regex">正则</button>
+      <button data-tab="provider">接口</button>
+      <button data-tab="prompt">拼装</button>
+      <button data-tab="misc">杂项</button>
+    </nav>
+    <div id="tab-archive" class="tab active"></div>
+    <div id="tab-memory" class="tab"></div>
+    <!-- 人设页（tab-persona.js）：首行工具条 #persona-bar 和人设列表 #persona-list 每次打开重画；每个人设是一个可折叠的框。
+         当前人设的三个输入框 #persona-fields（名字 #persona-name、备注 #persona-remark、描述 #persona-desc）是常驻控件：
+         不随页签重画（事件在 bindPersonaTab，值由 shell.js 的 renderTopbar / renderPersonaTab 同步），平时待在隐藏的 #persona-fields-home 里，
+         重画时被挪进当前人设那个框里。下方 #notes-box 是便签（tab-notes.js 的 renderNotesTab 画） -->
+    <div id="tab-persona" class="tab">
+      <div id="persona-bar" class="row persona-bar"></div>
+      <div id="persona-list" class="persona-list"></div>
+      <div id="persona-fields-home" hidden>
+        <div id="persona-fields" class="persona-fields">
+          <label class="inline">名字 <input id="persona-name" size="14" autocomplete="off"></label>
+          <label class="inline">备注 <input id="persona-remark" size="14" autocomplete="off" maxlength="200" placeholder="可不填，用来区分重名的人设"></label>
+          <textarea id="persona-desc" rows="6" placeholder="人设描述"></textarea>
+        </div>
+      </div>
+      <div id="notes-box" class="notes-box"></div>
+    </div>
+    <div id="tab-world" class="tab"></div>
+    <div id="tab-preset" class="tab"></div>
+    <div id="tab-regex" class="tab"></div>
+    <div id="tab-provider" class="tab">
+      <div id="chat-model-section">
+        <span class="cm-lead">使用</span>
+        <span id="chat-model" class="model-picker" data-sentence="1" title="聊天用的接口和模型"></span>
+      </div>
+      <div id="provider-panel"></div>
+    </div>
+    <div id="tab-prompt" class="tab"></div>
+    <div id="tab-misc" class="tab">
+      <div class="section-title">手动模式</div>
+      <label class="inline" title="不调用模型：拼好的 prompt 自己拿去用，再把回复贴回来">
+        <input type="checkbox" id="manual-mode"> 手动模式
+      </label>
+      <div class="dim misc-note">开着时，点发送不会调用模型：prompt 在「拼装」页拼好，你自己拿去用，再把模型的回复贴回聊天区。开着时聊天区顶上会有一个「手动」标记。</div>
+      <div id="misc-rest"></div>
+    </div>
+  </section>
+</main>
+
+<div id="drawer-mask"></div>
+<div id="drop-hint" hidden>松手导入：角色卡 PNG / JSON、预设、世界书、正则、酒馆聊天记录 .jsonl、酒馆的整体备份 zip</div>
+<div id="toasts"></div>
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

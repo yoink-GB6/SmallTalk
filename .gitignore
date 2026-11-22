@@ -1,0 +1,32 @@
+# 白名单式：先全部忽略，再逐项放行。以后项目里新增的任何东西默认【不会】进仓库，
+# 只有明确写在下面的才会。和打包用的白名单（scripts/pack-common.mjs）是一个思路。
+#
+# 永远不进仓库的（即使以后有人改这个文件也请别放行）：
+#   CLAUDE.md            给 Claude 的交接说明，里面有本机路径和私人备注
+#   test-char-preset/    自己测试用的卡和预设
+#   dist/                打包产物
+# 暂时不进的：
+#   README.md            还没写完（2026-11-22 用户定：写完再放行）
+#   test/、browser-tests/  个别脚本里写着项目外私人文件的路径，清理过再考虑
+
+/*
+
+# 页面本身（网页版打包出来的就是这些，外加打包时生成的 sw.js 和 _headers）
+!/index.html
+!/style.css
+!/favicon.svg
+!/manifest.webmanifest
+!/src/
+!/vendor/
+!/icons/
+
+# 本地版的小服务
+!/package.json
+!/server.mjs
+!/server/
+
+# 打包脚本（生成离线缓存 sw.js 要用）
+!/scripts/
+
+!/.gitignore
+!/.gitattributes

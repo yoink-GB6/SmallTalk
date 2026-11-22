@@ -1,0 +1,11 @@
+{
+  "name": "smalltalk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "练手用的简易酒馆：预设拼装 / 世界书触发 / 角色卡与美化导入",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  }
+}
