@@ -22,6 +22,7 @@ import { state, ui, save, persist, setPersonaFields, STOPPED_TEXT } from './stat
 import { refreshPreview } from './pipeline.js';
 import { renderAll } from './shell.js';
 import { renderNotesTab } from './tab-notes.js';
+import { mountNoteBox, noteBoxHasFocus } from './author-note.js';   // 只在函数体里调用
 import { listPersonas, addPersona, switchPersona, updateCurrent, updatePersona, deletePersonas, exportPersonasFile, parsePersonasFile, mergePersonas,
     personasFileName, MAX_REMARK } from '../personas.js';
 import { pickJson } from './importer.js';   // 循环依赖：只在函数体里调用
@@ -200,6 +201,9 @@ export function renderPersonaTab() {
     if (document.activeElement !== remark) remark.value = state.persona.remark ?? '';
     name.disabled = desc.disabled = remark.disabled = locked;
     renderNotesTab();
+    // 作者注释（当前存档的）：常驻小框挂在本页最下面。正在框里打字时不刷新（会打断输入法组字）；
+    // 这期间要是存档换了，框自己在下一次输入时发现并改填成新存档的值（author-note.js commit）
+    if (!noteBoxHasFocus()) mountNoteBox($('#an-slot'));
 }
 
 /** 绑定常驻控件的事件（app.js 的 bind() 里调一次） */

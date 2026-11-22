@@ -6,7 +6,7 @@ import { $ } from './ui/dom.js';
 import { state, ui, card, save } from './ui/state.js';
 import { permanentRegex, refreshPreview } from './ui/pipeline.js';
 import { ensureMemories } from './ui/memory.js';
-import { scrollChatToEnd, send, swipedTurn } from './ui/chat.js';
+import { scrollChatToEnd, send, fitInput, swipedTurn } from './ui/chat.js';
 import { appendSwipe } from './chatfile.js';
 import { importFiles } from './ui/importer.js';
 import { restoreActive } from './ui/backup.js';
@@ -41,7 +41,9 @@ function bind() {
     $('#input').addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     });
-    $('#input').addEventListener('input', () => { ui.previewIsSent = false; refreshPreview(); });
+    $('#input').addEventListener('input', () => { fitInput(); ui.previewIsSent = false; refreshPreview(); });
+    window.addEventListener('resize', fitInput);   // 窗口变窄变宽后折行变了，高度要重算
+    fitInput();
     $('#stop').addEventListener('click', () => ui.abort?.abort());
     // 「重新生成」按钮现在在最后一楼的左下角，由 chat.js 渲染楼层时自己绑定
     // 「新对话」按钮已从聊天区头部去掉（「存档」页里每张卡都有）；开场白下拉框保留：

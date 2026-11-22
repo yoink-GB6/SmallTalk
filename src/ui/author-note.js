@@ -1,4 +1,4 @@
-// 「存档」页当前存档那一行下面的「作者注释」小框（可折叠，默认收起）。规则见 src/author-note.js，数据见 types.js ChatRecord.authorNote。
+// 「人设」页最下面（便签下面）的「作者注释」小框（可折叠，默认收起；每个存档一份，标题写明「当前存档」。2026-11-23 从「存档」页挪来）。规则见 src/author-note.js，数据见 types.js ChatRecord.authorNote。
 //
 // 为什么放在「存档」页：作者注释是「这个存档」的东西（酒馆里写着 Unique to this chat），放在当前存档那一行下面最直观；
 // 「拼装」页是看结果的地方，「记忆」页是另一个功能。
@@ -30,7 +30,7 @@ const mark = h('span', { class: 'an-mark dim', id: 'an-mark' });
 const status = h('span', { class: 'an-status dim', id: 'an-status' });
 
 const box = h('details', { class: 'an-box', id: 'an-box', 'data-fk': 'an-box' },
-    h('summary', { class: 'an-head' }, '作者注释', mark),
+    h('summary', { class: 'an-head' }, '作者注释（当前存档）', mark),
     h('div', { class: 'an-body' },
         prompt,
         h('div', { class: 'an-fields' },

@@ -138,10 +138,12 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; color: var(-
 @keyframes blink { 50% { opacity: 0; } }
 .mes_edit { display: flex; flex-direction: column; gap: 6px; }
 #composer { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--panel); }
-#composer textarea { flex: 1; }
-/* 输入框旁只剩发送 / 停止（重新生成挪到了回复下面）：按钮撑满输入框的高度，不留半截空白 */
-#composer .col { display: flex; flex-direction: column; gap: 6px; }
-#composer .col button:not([hidden]) { flex: 1; }
+/* 输入框默认一行高，随内容变高（chat.js fitInput 定高度），最高半个可见屏幕（dvh：手机软键盘弹出后按剩下的可见区域算；不认 dvh 的旧浏览器用 vh）。
+   发送 / 停止占同一个位置（同一时刻只显示一个），和一行的输入框等高，输入框变高时贴在底部、不跟着拉长 */
+#composer { align-items: flex-end; }
+#composer textarea { flex: 1; resize: none; box-sizing: border-box; min-height: 38px; max-height: 50vh; max-height: 50dvh; overflow-y: auto; }
+#composer .col { display: flex; flex-direction: column; }
+#composer .col button { height: 38px; box-sizing: border-box; }
 #manual-panel { padding: 10px 14px; border-top: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; gap: 6px; }
 #manual-panel[hidden] { display: none; }
 #gen-error { margin: 0 14px 10px; padding: 8px 12px; border: 1px solid var(--bad); border-left-width: 4px; border-radius: 8px; background: var(--panel); }
@@ -649,3 +651,6 @@ body:not(:has(#manual-mode:checked)) .smalltalk-frontend-source { display: none;
 .an-fields label.inline { display: inline-flex; align-items: center; gap: 4px; }
 .an-fields input[type="number"] { width: 5em; }
 .an-status { font-size: 12px; }
+
+/* 作者注释挪到人设页最下面 */
+.an-slot { margin-top: 14px; }

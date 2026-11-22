@@ -75,7 +75,7 @@
       </div>
     </div>
     <form id="composer">
-      <textarea id="input" rows="3" placeholder="Enter发送，Shift+Enter换行"></textarea>
+      <textarea id="input" rows="1" placeholder="Enter发送，Shift+Enter换行"></textarea>
       <div class="col">
         <button id="send" class="primary" type="submit">发送</button>
         <button id="stop" type="button" hidden>停止</button>
@@ -112,6 +112,8 @@
         </div>
       </div>
       <div id="notes-box" class="notes-box"></div>
+      <!-- 作者注释（每个存档一份，ui/author-note.js 的常驻小框挂在这里）。不常用，所以放在人设页最下面（2026-11-23 从存档页挪来） -->
+      <div id="an-slot" class="an-slot"></div>
     </div>
     <div id="tab-world" class="tab"></div>
     <div id="tab-preset" class="tab"></div>

@@ -293,10 +293,23 @@ export function deleteFrom(i, epoch) {
 
 export function setBusy(busy) {
     ui.busy = busy;
+    // 发送和停止占同一个位置：平时只有「发送」，生成中只有「停止」（发送仍然同时 disabled，别处和测试靠它判断是否空闲）
     $('#send').disabled = busy;
+    $('#send').hidden = busy;
     $('#stop').hidden = !busy;
     const box = $('#chat');
     if (box?.lastElementChild) updateSwipeControls(box.lastElementChild, box.children.length - 1);
+}
+
+/**
+ * 输入框的高度跟着内容走：默认一行，打字变高，最高到 CSS 里的 max-height（半个可见屏幕），再多就在框里滚。
+ * 做法：先让它缩回去量出内容高度（scrollHeight），再定成这个高度；上限交给 CSS，超过时 CSS 自己出滚动条。
+ */
+export function fitInput() {
+    const ta = $('#input');
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${ta.scrollHeight + (ta.offsetHeight - ta.clientHeight)}px`;   // 加上上下边框，不然每次差两像素、会冒出滚动条
 }
 
 export async function send() {
@@ -306,6 +319,7 @@ export async function send() {
     if (text) {
         state.chat.push({ role: 'user', name: state.persona.name || 'User', content: permanentRegex(text, 'user') });
         $('#input').value = '';
+        fitInput();   // 发出去了：输入框缩回一行
     }
     await generateReply();
 }

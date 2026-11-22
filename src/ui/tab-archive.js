@@ -22,7 +22,6 @@ import {
 import { importFiles, importBlockedReason } from './importer.js';   // 循环依赖（importer 导入 archive）：只在函数体里调用
 import { openSearch } from './chat-search.js';   // 「搜索聊天记录」按钮用（只在函数体里调用）
 import { closeDrawer } from './drawer.js';
-import { mountNoteBox, noteBoxHasFocus, onNoteBoxBlur } from './author-note.js';   // 同上：只在函数体里调用
 
 // ───────────────────────────── 运行期界面状态（不持久化，刷新页面就没了） ─────────────────────────────
 
@@ -141,16 +140,9 @@ function fetchMissing() {
     }
 }
 
-let noteDeferred = false;   // 焦点在作者注释框里时推迟了一次重画（见 ui/author-note.js 文件头）
-let noteBlurBound = false;
-
 function draw() {
     const tab = $('#tab-archive');
     if (!tab || !model) return;
-    // 正在作者注释框里打字 / 操作：重画会把框摘下来再放回去，焦点和输入法组字都会断。等焦点离开再画（楼数之类晚一点更新没关系）
-    if (!noteBlurBound) { noteBlurBound = true; onNoteBoxBlur(() => { if (noteDeferred) { noteDeferred = false; draw(); } }); }
-    if (noteBoxHasFocus() && tab.contains(document.activeElement)) { noteDeferred = true; return; }
-    noteDeferred = false;
     if (persist.cardId !== lastActive) {
         // 换了当前卡：新的当前卡默认展开；上一张是自动展开的就收回去（手动展开的留着）
         if (auto.delete(lastActive)) open.delete(lastActive);
@@ -220,8 +212,6 @@ function draw() {
     tab.replaceChildren(...kids);
     const slot = tab.querySelector('.arch-greeting-slot');
     if (slot && sel) slot.append(sel);
-    // 作者注释框（常驻，ui/author-note.js）：挪进当前存档那一行下面
-    mountNoteBox(tab.querySelector('.arch-note-slot'));
     if (fk) tab.querySelector(`[data-fk="${CSS.escape(fk)}"]:not(:disabled)`)?.focus({ preventScroll: true });
 }
 
@@ -349,7 +339,5 @@ function chatRow(c, x, ro) {
             h('span', { class: 'dim arch-count', 'data-fk': `count:${x.id}`, title: '楼层数' }, `${x.count ?? 0} 楼`),
             actionBtn('改名', '给这个存档改名', `ren:${x.id}`, ro, () => act(() => renameChat(c.id, x.id))),
             actionBtn('导出', '导出为酒馆的聊天记录（.jsonl）', `exp:${x.id}`, ro, () => exportChat(c.id, x.id)),
-            actionBtn('✕', '删除这个存档', `del:${x.id}`, ro, () => act(() => deleteChat(c.id, x.id)))),
-        // 当前存档：下面挂作者注释的小框（draw 里把常驻的那个框挪进来）
-        active ? h('div', { class: 'arch-note-slot' }) : null);
+            actionBtn('✕', '删除这个存档', `del:${x.id}`, ro, () => act(() => deleteChat(c.id, x.id)))));
 }
