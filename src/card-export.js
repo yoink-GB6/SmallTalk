@@ -167,6 +167,39 @@ function mergeBookEntries(rawEntries, baseline, current) {
     });
 }
 
+// ───────────────────────────── 卡的文字字段 ─────────────────────────────
+
+const s = (v) => (typeof v === 'string' ? v : v == null ? '' : String(v));
+
+/**
+ * 「拼装」页能就地改的卡字段 → 写回酒馆卡 JSON 的哪里。照酒馆保存角色时的 charaFormatData（characters.js ~L580–625）：
+ *   description / personality / scenario / mes_example：顶层和 data.* 两处都写（V1 只有顶层，就只写顶层）；
+ *   system_prompt / post_history_instructions：只在 data.*；
+ *   深度提示：data.extensions.depth_prompt.prompt（缺 depth / role 时照酒馆补默认 4 / system）。
+ * dataOnly 的字段 V1 卡没地方放：改了就要升级成 V2（upgradeV1 用的是 Card 上的当前值，已经带着改动）。
+ */
+const TEXT_FIELDS = [
+    ...[['description', 'description'], ['personality', 'personality'], ['scenario', 'scenario'], ['mesExample', 'mes_example']].map(([k, key]) => ({
+        get: (c) => s(c?.[k]),
+        write: (o, v) => { o[key] = v; if (isObj(o.data)) o.data[key] = v; },
+    })),
+    ...[['systemPrompt', 'system_prompt'], ['postHistoryInstructions', 'post_history_instructions']].map(([k, key]) => ({
+        dataOnly: true,
+        get: (c) => s(c?.[k]),
+        write: (o, v) => { o.data[key] = v; },
+    })),
+    {
+        dataOnly: true,
+        get: (c) => s(c?.depthPrompt?.prompt),
+        write: (o, v) => {
+            if (!isObj(o.data.extensions)) o.data.extensions = {};
+            const dp = isObj(o.data.extensions.depth_prompt) ? o.data.extensions.depth_prompt : { depth: 4, role: 'system' };
+            dp.prompt = v;
+            o.data.extensions.depth_prompt = dp;
+        },
+    },
+];
+
 // ───────────────────────────── 卡 → 酒馆卡 JSON ─────────────────────────────
 
 /**
@@ -225,8 +258,9 @@ function upgradeV1(raw, card) {
 
 /**
  * 把我们的 Card 还原成酒馆的卡 JSON。以 card.raw（导入时原样保留的原始 JSON）为底，
- * 只覆盖我们这边会被用户改的三块：卡内嵌世界书（card.worldEntries）、卡自带正则（card.regexScripts）
- * 和酒馆助手脚本（card.scripts → data.extensions.tavern_helper，合并规则在 scripts.js writeScriptsInto）。
+ * 只覆盖我们这边会被用户改的几块：卡内嵌世界书（card.worldEntries）、卡自带正则（card.regexScripts）、
+ * 酒馆助手脚本（card.scripts → data.extensions.tavern_helper，合并规则在 scripts.js writeScriptsInto），
+ * 以及「拼装」页就地改过的文字字段（TEXT_FIELDS：描述、性格、场景、示例对话、system_prompt、post_history_instructions、深度提示）。
  * 其余字段一个不动；没改过的卡导出结果与 card.raw JSON 语义相同。不修改 card.raw。
  *
  * 注意：酒馆导出时会跑 unsetPrivateFields（fav 设成 false、删 chat）。为了让「没改过 = 原样」可验证，
@@ -253,12 +287,16 @@ export function exportCardJson(card, options = {}) {
     const regexChanged = !jsonEqual(regex, baseRegex);
     // 酒馆助手脚本（card.scripts，规则见 scripts.js 文件头「导出」）：没在「脚本」页改过 = 不碰 raw
     const scriptsDirty = scriptsChanged(card);
+    // 文字字段（「拼装」页可以就地改）：和「导入时的样子」逐个比，只有变了的才写。改了又改回原样 = 没改
+    const fieldsChanged = baseline ? TEXT_FIELDS.filter((f) => f.get(card) !== f.get(baseline)) : [];
+    const needsData = fieldsChanged.some((f) => f.dataOnly);
 
-    // V1：只有真要写世界书 / 正则 / 脚本（V1 没地方放）时才升级。什么都没改就原样还回去，
+    // V1：只有真要写世界书 / 正则 / 脚本 / V1 没有位置的字段（system_prompt 等）时才升级。什么都没改就原样还回去，
     // 酒馆导入 V1 时自己会升级，结果和我们升级后再导入是一样的，原样更不容易出错。
     // raw 解析不出卡（迁移来的空卡 emptyCard() 的 raw = {}）：没有底可用，直接用 Card 的字段拼一张 V2。
     const isV1 = !isObj(out.data);
-    if (!baseline || (isV1 && (bookChanged || regexChanged || scriptsDirty))) out = upgradeV1(out, card);
+    if (!baseline || (isV1 && (bookChanged || regexChanged || scriptsDirty || needsData))) out = upgradeV1(out, card);
+    for (const f of fieldsChanged) f.write(out, f.get(card));
 
     if (bookChanged) {
         const rawBook = isObj(out.data.character_book) ? out.data.character_book : null;
