@@ -1,4 +1,7 @@
-// 「拼装」页的就地编辑：点哪一段（Source），就在那里展开这一段的【原文】（宏替换之前、正则之前、合并之前那份），改完写回来源。
+// 「拼装」页的就地编辑：展开一条消息后，按来源（Source）分成几节（只有一个来源就一节），能改的节标题行末尾有「编辑」，
+// 点了在那里展开这个来源的【原文】（宏替换之前、正则之前、合并之前那份），改完写回来源。
+// 能改：角色卡字段、预设条目、世界书条目（卡自带的和额外的）、人设描述、作者注释、聊天的一楼。
+// 不能改（不出现「编辑」）：外置记忆、工具提示（new_chat_prompt 等）、预填充、wi_format 包装、世界书示例、合并成一段认不出条目的世界书。
 //
 // 为什么是原文而不是页面上显示的最终文字：显示的是宏替换过的结果，拿它写回去 {{user}} / {{char}} 就被写死成名字了。
 //
@@ -12,10 +15,13 @@
 // 循环依赖：从兄弟 ui 模块导入的函数只在函数体里调用。
 
 import { h, toast } from './dom.js';
-import { state, ui, save, persist } from './state.js';
-import { refreshPreview } from './pipeline.js';   // 只在函数体里调用
-import { chatWriteBlocked } from './chat.js';     // 同上
+import { state, ui, save, persist, preset, setPersonaFields, setAuthorNote } from './state.js';
+import { updateCurrent } from '../personas.js';
+import { refreshPreview, allEntries, currentAuthorNote } from './pipeline.js';   // 只在函数体里调用
+import { chatWriteBlocked, editMessageText } from './chat.js';     // 同上
 import { renderPromptTab } from './tab-prompt.js';   // 同上
+import { ownPreset } from './tab-preset.js';          // 同上
+import { renderTopbar } from './shell.js';            // 同上
 
 /** 卡字段：名字（灰字里用）、读、写 */
 const CARD_FIELDS = {
@@ -73,6 +79,63 @@ export function resolveSource(s) {
             key: `card:${f}`, where: `角色卡 · ${d.label}`,
             get: () => String(d.get(state.card) ?? ''),
             set: text => { d.set(state.card, text); writeRaw(state.card, f, text); save(); },
+        };
+    }
+    // 预设条目：走「预设」页条目编辑器的路（tab-preset.js promptEditor：先 ownPreset——还在用内置默认预设时复制一份——再改 content、存盘、刷新顶栏）。
+    // 预设里找不到这个 identifier（assemble 自动补上的内置默认条目）或是占位条目：不可改
+    if (s.kind === 'prompt' && !s.cardField) {
+        const find = () => (preset().prompts ?? []).find(x => x?.identifier === s.id);
+        const pr = find();
+        if (!pr || pr.marker || typeof pr.content !== 'string') return null;
+        return {
+            key: `preset:${s.id}`, where: `预设条目 · ${pr.name || s.id}`,
+            get: () => String(find()?.content ?? ''),
+            set: text => {
+                const t = ownPreset().prompts.find(x => x?.identifier === s.id);
+                if (!t) return;
+                t.content = text; save(); renderTopbar();
+            },
+        };
+    }
+    // 世界书条目：按「书名 + uid」认（同「世界书」页的触发结果）。合并成一段、认不出是哪一条的（没有 book）不可改。
+    // 写法同「世界书」页的条目编辑器（tab-world.js entryEditor：直接改条目原对象、存盘、刷新预览）
+    if (s.kind === 'worldinfo' && typeof s.book === 'string') {
+        const find = () => allEntries().find(e => e.book === s.book && String(e.uid) === s.id);
+        const e = find();
+        if (!e) return null;
+        return {
+            // uid 是数字，放在前面；不用 \0 当分隔（key 要放进 data-src 和 CSS 选择器里）
+            key: `wi:${s.id}@${s.book}`, where: `世界书「${s.book}」· ${e.comment || `条目 ${e.uid}`}`,
+            get: () => String(find()?.content ?? ''),
+            set: text => { const t = find(); if (t) { t.content = text; save(); } },
+        };
+    }
+    // 人设描述：同「人设」页描述框（tab-persona.js bindPersonaTab）
+    if (s.kind === 'marker' && s.id === 'personaDescription') {
+        return {
+            key: 'persona', where: '人设 · 描述',
+            get: () => String(state.persona?.description ?? ''),
+            set: text => { setPersonaFields(updateCurrent(state, { description: text })); save(); },
+        };
+    }
+    // 作者注释正文：同「人设」页下面的作者注释框（state.js setAuthorNote，它自己存盘）
+    if (s.kind === 'authorNote') {
+        if (!persist.chatMeta) return null;
+        return {
+            key: 'authorNote', where: '作者注释',
+            get: () => currentAuthorNote().prompt,
+            set: text => { setAuthorNote({ prompt: text }); },
+        };
+    }
+    // 聊天的一楼：同编辑消息的「保存」（chat.js editMessageText：永久改写正则、候选同步、记忆摘要作废、存盘重画）。
+    // 输入框里还没发出去的那一句（楼层号 = 现有楼数）不可改
+    if (s.kind === 'chat') {
+        const i = Number(s.id);
+        if (!Number.isInteger(i) || !state.chat[i]) return null;
+        return {
+            key: `chat:${i}`, where: `聊天第 ${i} 楼`,
+            get: () => String(state.chat[i]?.content ?? ''),
+            set: text => { editMessageText(i, text); },
         };
     }
     return null;
