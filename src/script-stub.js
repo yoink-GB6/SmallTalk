@@ -31,6 +31,7 @@
 import { FRAME_LIBS, frameLibTag, embedJson } from './render.js';
 import { varOpsFactory } from './vars-ops.js';
 import { chatSyncFactory } from './script-sync.js';
+import { STORAGE_LIMIT } from './cardvars.js';
 
 /**
  * @param {{frameId: string, unimplemented: Record<string, string>, versions: {helper: string, tavern: string}}} BOOT
@@ -135,10 +136,59 @@ export function scriptStubMain(BOOT, LIB) {
             getOwnPropertyDescriptor: function (t, p) { return map.has(String(p)) ? { value: map.get(String(p)), enumerable: true, configurable: true, writable: true } : undefined; },
         });
     }
-    ['localStorage', 'sessionStorage'].forEach(function (name) {
+    ['sessionStorage'].forEach(function (name) {
         try { void W[name].length; return; } catch (e) { /* SecurityError：装内存替身 */ }
         try { Object.defineProperty(W, name, { value: makeStorage(), configurable: true, enumerable: true, writable: false }); } catch (e) { /* ignore */ }
     });
+    // localStorage（第 6 期，提前做了）：按卡持久化到 cardvars:<卡 id>.storage。宿主在 boot 里给这张卡的整份初值（只这一次传大值），
+    // getItem / key / length 同步读本地；setItem / removeItem / clear 先改本地，300ms 内的改动合并成一次只含改了的键的 RPC（storageWrite）。
+    // 总量上限 STORAGE_LIMIT 个字符（和宿主 cardvars.js 一样），超了 setItem 抛 QuotaExceededError（和真 localStorage 一样）。
+    // 宿主拒绝（只读标签页等）时本地这次的改动只在这次运行里有效，记一条日志。消息里的前端卡还是各自的内存替身（没接这一份）
+    var LS = new Map(), lsTotal = 0, lsPending = null, lsTimer = null;
+    function lsSize(k, v) { return k.length + v.length; }
+    function lsQueue(k, v) {
+        if (!lsPending) lsPending = { set: Object.create(null), del: Object.create(null), clear: false };
+        if (k === null) { lsPending = { set: Object.create(null), del: Object.create(null), clear: true }; }
+        else if (v === null) { delete lsPending.set[k]; lsPending.del[k] = 1; }
+        else { delete lsPending.del[k]; lsPending.set[k] = v; }
+        if (!lsTimer) lsTimer = setTimeout(lsFlush, 300);
+    }
+    function lsFlush() {
+        lsTimer = null;
+        var p = lsPending; lsPending = null;
+        if (!p || !booted) return;
+        rpc('storageWrite', [{ clear: p.clear, set: Object.assign({}, p.set), del: Object.keys(p.del) }], null).then(null, function (err) {
+            log(null, 'warn', 'localStorage 没有存下来：' + (err && err.message) + '（这次运行里照样能读到）');
+        });
+    }
+    W.addEventListener('pagehide', function () { if (lsTimer) { clearTimeout(lsTimer); lsFlush(); } });
+    var lsApi = {
+        getItem: function (k) { k = String(k); return LS.has(k) ? LS.get(k) : null; },
+        setItem: function (k, v) {
+            k = String(k); v = String(v);
+            var old = LS.has(k) ? lsSize(k, LS.get(k)) : 0, next = lsTotal - old + lsSize(k, v);
+            if (next > BOOT.storageLimit) throw new DOMException('Setting the value of \'' + k.slice(0, 50) + '\' exceeded the quota.', 'QuotaExceededError');
+            if (LS.get(k) === v) return;
+            LS.set(k, v); lsTotal = next; lsQueue(k, v);
+        },
+        removeItem: function (k) { k = String(k); if (!LS.has(k)) return; lsTotal -= lsSize(k, LS.get(k)); LS.delete(k); lsQueue(k, null); },
+        clear: function () { if (!LS.size) return; LS.clear(); lsTotal = 0; lsQueue(null, null); },
+        key: function (i) { var keys = Array.from(LS.keys()); i = Number(i); return i >= 0 && i < keys.length ? keys[i] : null; },
+    };
+    Object.defineProperty(lsApi, 'length', { get: function () { return LS.size; } });
+    var lsProxy = new Proxy(lsApi, {
+        get: function (t, p) { if (p in t || typeof p !== 'string') return t[p]; return LS.has(p) ? LS.get(p) : undefined; },
+        set: function (t, p, v) { if (p in t || typeof p !== 'string') return false; lsApi.setItem(p, v); return true; },
+        deleteProperty: function (t, p) { lsApi.removeItem(String(p)); return true; },
+        has: function (t, p) { return p in t || LS.has(String(p)); },
+        ownKeys: function () { return Array.from(LS.keys()); },
+        getOwnPropertyDescriptor: function (t, p) { return LS.has(String(p)) ? { value: LS.get(String(p)), enumerable: true, configurable: true, writable: true } : undefined; },
+    });
+    try { Object.defineProperty(W, 'localStorage', { value: lsProxy, configurable: true, enumerable: true, writable: false }); } catch (e) { /* ignore */ }
+    function lsBoot(init) {
+        if (!init || typeof init !== 'object') return;
+        Object.keys(init).forEach(function (k) { var v = init[k]; if (typeof v === 'string' && lsTotal + lsSize(k, v) <= BOOT.storageLimit) { LS.set(k, v); lsTotal += lsSize(k, v); } });
+    }
     try { void document.cookie; } catch (e) {
         var jar = new Map();
         try {
@@ -192,6 +242,16 @@ export function scriptStubMain(BOOT, LIB) {
     // 已知漏量：::before / ::after 伪元素超出元素本身的部分、超过 40px 的阴影 / 滤镜、overflow 裁掉的部分（多量，不是漏量）、
     //   嵌套 iframe 里面的东西超出 iframe 框的部分（浏览器本来也画不出来）；没有显示出来但能接收点击的（opacity:0 的透明遮罩）不算区域。
     // 拖动：按下（pointerdown）时立刻报「整块」（drag: true），宿主放开裁剪，松开 / 取消 / 宿主说在外面松开了（release）后再量真实区域。
+    var SHADOWS = new WeakMap();
+    var shadowMO = null;
+    try {
+        var origAttach = Element.prototype.attachShadow;
+        Element.prototype.attachShadow = function () {
+            var root = origAttach.apply(this, arguments);
+            try { SHADOWS.set(this, root); if (shadowMO) shadowMO.observe(root, { subtree: true, childList: true, attributes: true, characterData: true }); scheduleRegions(); } catch (e) { /* ignore */ }
+            return root;
+        };
+    } catch (e) { /* ignore */ }
     var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, LINK: 1, META: 1, TEMPLATE: 1, NOSCRIPT: 1, TITLE: 1, BASE: 1 };
     function shadowPad(cs) {
         var t = (cs.boxShadow && cs.boxShadow !== 'none' ? cs.boxShadow : '') + ' ' + (cs.filter && cs.filter !== 'none' ? cs.filter : '');
@@ -226,6 +286,9 @@ export function scriptStubMain(BOOT, LIB) {
                     }
                 }
                 if (c.firstElementChild) walk(c, mine);
+                // 很多浮窗脚本把界面放进 shadow root（宿主元素自己常常是 0×0）：钻进去量
+                var sr = c.shadowRoot || SHADOWS.get(c);
+                if (sr && sr.firstElementChild) walk(sr, mine);
                 if (tooMany) return;
             }
         }
@@ -302,7 +365,7 @@ export function scriptStubMain(BOOT, LIB) {
     W.addEventListener('pointerup', function () { endDrag(false); }, true);
     W.addEventListener('pointercancel', function () { endDrag(false); }, true);
     function watchRegions() {
-        try { new MutationObserver(scheduleRegions).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true }); } catch (e) { /* ignore */ }
+        try { shadowMO = new MutationObserver(scheduleRegions); shadowMO.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true }); } catch (e) { /* ignore */ }
         W.addEventListener('resize', scheduleRegions);
         ['transitionrun', 'transitionend', 'transitioncancel', 'animationstart', 'animationend', 'animationcancel', 'load'].forEach(function (n) { document.addEventListener(n, scheduleRegions, true); });
         // 有动画 / 过渡在跑时每 32ms 量一次（同上，不用 rAF）
@@ -899,7 +962,8 @@ export function scriptStubMain(BOOT, LIB) {
     function maybeStart() {
         if (booted || !libsReady || !bootData) return;
         booted = true;
-        applyOps(M, Array.isArray(bootData.ops) ? bootData.ops : []);
+        applyAll(Array.isArray(bootData.ops) ? bootData.ops : []);
+        lsBoot(bootData.storage);
         var list = Array.isArray(bootData.scripts) ? bootData.scripts : [];
         list.forEach(function (s) {
             var id = String(s.id);
@@ -974,7 +1038,7 @@ export const SCRIPT_UNIMPLEMENTED = Object.freeze({
 
 /** 脚本能 RPC 到宿主的方法（白名单）。变量的读、聊天的读都在沙箱里同步做，不在这里 */
 export const SCRIPT_BRIDGED = Object.freeze(['setChatMessages', 'setChatMessage', 'createChatMessages', 'deleteChatMessages',
-    'replaceVariables', 'insertOrAssignVariables', 'insertVariables', 'deleteVariable', 'triggerSlash', 'substitudeMacros', 'eventEmit', 'toastr', 'reloadIframe', 'replaceScriptButtons', 'openUrl']);
+    'replaceVariables', 'insertOrAssignVariables', 'insertVariables', 'deleteVariable', 'triggerSlash', 'substitudeMacros', 'eventEmit', 'toastr', 'reloadIframe', 'replaceScriptButtons', 'openUrl', 'storageWrite']);
 
 /** 酒馆 1.19.0 public/scripts/events.js 的 event_types 全集（只是名字 → 值；脚本里 tavern_events.X 要拿到对的字符串）。SmallTalk 真的会发哪些见 ui/script-host.js emitTavernEvent 的调用方 */
 export const TAVERN_EVENTS = Object.freeze({
@@ -1011,7 +1075,7 @@ const SCRIPT_LIBS = ['fontawesome', 'jquery', 'lodash', 'vue'];
  * @param {{frameId: string, assetBase?: string}} opts
  */
 export function buildScriptSrcdoc({ frameId, assetBase, colorScheme = 'light' }) {
-    const boot = { frameId: String(frameId), unimplemented: SCRIPT_UNIMPLEMENTED, versions: COMPAT_VERSIONS, tavernEvents: TAVERN_EVENTS };
+    const boot = { frameId: String(frameId), unimplemented: SCRIPT_UNIMPLEMENTED, versions: COMPAT_VERSIONS, tavernEvents: TAVERN_EVENTS, storageLimit: STORAGE_LIMIT };
     const scheme = colorScheme === 'dark' ? 'dark' : 'light';
     const lib = `{varOps: (${varOpsFactory.toString()})(), sync: (${chatSyncFactory.toString()})()}`;
     const stub = `<script data-smalltalk-script-stub>(${scriptStubMain.toString()})(${embedJson(boot)}, ${lib});</script>`;

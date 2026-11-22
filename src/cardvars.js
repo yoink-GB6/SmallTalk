@@ -17,8 +17,8 @@ import { varOps } from './vars-ops.js';
 
 export const CARDVARS_PREFIX = 'cardvars:';
 export const cardVarsKey = cardId => `${CARDVARS_PREFIX}${cardId}`;
-/** localStorage 小设置的总上限（字符数，和浏览器的 localStorage 一个量级） */
-export const STORAGE_LIMIT = 5 * 1024 * 1024;
+/** localStorage 小设置的总上限（字符数） */
+export const STORAGE_LIMIT = 20 * 1024 * 1024;   // 2026-11-23 从 5M 放宽：脚本常把 base64 的壁纸图存进 localStorage（单张就可能几 MB）
 
 const UNSAFE = new Set(['__proto__', 'constructor', 'prototype']);
 const isPlain = varOps.isPlain;

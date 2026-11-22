@@ -43,7 +43,8 @@ import { buildScriptSrcdoc } from '../script-stub.js';
 import { diffChat } from '../script-sync.js';
 import { parseSandboxMessage, scrubSecrets, cleanButtonList, parseRegions, regionsClipPath } from '../script-args.js';
 import { cardScripts, enabledScriptsOf, stripCodeFence, flattenScripts } from '../scripts.js';
-import { state, ui, persist, card, cardVarsReady, save } from './state.js';
+import { state, ui, persist, card, cardVarsReady, save, setCardVarsField } from './state.js';
+import { STORAGE_LIMIT } from '../cardvars.js';
 import { callHost, frameHost, readScope } from './frame-host.js';   // 循环依赖：只在函数体里调用
 import { restoreActive } from './backup.js';                        // 同上
 import { paintScriptStatus, ownScriptTree, renderScriptsTab } from './tab-scripts.js';   // 同上
@@ -114,6 +115,8 @@ function build(list) {
     const iframe = document.createElement('iframe');
     iframe.setAttribute('sandbox', SCRIPT_SANDBOX);
     iframe.setAttribute('referrerpolicy', 'no-referrer');
+    // 自动播放：跨源 iframe 要靠权限策略委托才能出声（脚本的音乐播放器 new Audio().play()）。这不是 sandbox 的标志，不放宽任何隔离
+    iframe.setAttribute('allow', 'autoplay');
     iframe.setAttribute('title', '酒馆助手脚本的悬浮界面');
     iframe.className = 'script-sandbox';
     iframe.dataset.fk = 'script-sandbox';
@@ -518,6 +521,28 @@ function openUrl(r, scriptId, url) {
     return true;
 }
 
+/**
+ * 沙箱的 localStorage 改动（只含改了的键）→ cardvars:<卡 id>.storage。{clear?, set: {键: 值}, del: [键]}，键值都必须是字符串，
+ * 危险键丢掉，总量不超过 STORAGE_LIMIT（沙箱那边已经按同一个上限抛过 QuotaExceededError，这里兜底）
+ */
+function storageWrite(r, ch) {
+    const why = r.cardId !== persist.cardId ? '角色卡已经换了' : ui.switching ? '正在切换存档' : restoreActive() ? '正在恢复，请稍等'
+        : persist.stopped ? '已停止保存' : persist.readOnly ? '这个标签页是只读的' : persist.cardVars === undefined ? '这张卡的数据还没读回来' : null;
+    if (why) throw new Error(why);
+    if (!ch || typeof ch !== 'object') throw new Error('格式不对');
+    const next = ch.clear === true ? {} : { ...(persist.cardVars?.storage ?? {}) };
+    for (const k of Array.isArray(ch.del) ? ch.del : []) if (typeof k === 'string') delete next[k];
+    if (ch.set && typeof ch.set === 'object') for (const [k, v] of Object.entries(ch.set)) {
+        if (typeof v !== 'string' || UNSAFE_IDS.has(k)) continue;
+        next[k] = v;
+    }
+    let total = 0;
+    for (const [k, v] of Object.entries(next)) total += k.length + v.length;
+    if (total > STORAGE_LIMIT) throw new Error('超过了总量上限');
+    setCardVarsField('storage', Object.keys(next).length ? next : undefined);
+    save();
+}
+
 /** 脚本改了自己的按钮（replaceScriptButtons 等）：写回卡里的脚本（card.scripts，第一次改时整棵树拷进去），存盘，重画按钮排。不重建沙箱 */
 function setScriptButtons(r, scriptId, list) {
     if (typeof scriptId !== 'string') throw new Error('SmallTalk 没法确定是哪个脚本在调用');
@@ -546,7 +571,8 @@ async function sendBoot(r) {
     const { ops, commit } = collectOps(r);
     const scripts = r.list.map(s => ({ id: s.id, name: s.name, info: s.info, button: s.button, code: stripCodeFence(s.content) }));
     r.booted = true;
-    if (post(r, { kind: 'boot', ops, scripts })) commit();
+    // localStorage 的整份初值只在 boot 时传这一次（壁纸之类可能几 MB），之后沙箱只把改了的键发回来（storageWrite）
+    if (post(r, { kind: 'boot', ops, scripts, storage: persist.cardVars?.storage ?? {} })) commit();
 }
 
 /** 会改聊天 / 触发生成的调用：日志里记一行（用户能看到是谁在改、是谁在花额度）。变量写太频繁，不记 */
@@ -580,6 +606,10 @@ async function handleCall(r, d) {
         const [name, ...rest] = d.args;
         if (typeof name === 'string') { try { emitFrameEvent(name, rest); } catch { /* 前端卡收不到就算了 */ } }
         return reply(true, undefined);
+    }
+    if (d.method === 'storageWrite') {
+        try { storageWrite(r, d.args[0]); reply(true, undefined); } catch (err) { const text = String(err?.message ?? err); scriptLog(r, null, 'warn', `localStorage 没有存下来：${text}`); reply(false, text); }
+        return;
     }
     if (d.method === 'replaceScriptButtons' || d.method === 'openUrl') {
         try {

@@ -22,7 +22,7 @@ import { substitute } from '../macros.js';
 import { $, toast, safeJson } from './dom.js';
 import { state, ui, card, save, persist, cardVarsReady, setCardVarsField } from './state.js';
 import { macroContext, permanentRegex, refreshPreview } from './pipeline.js';
-import { generateReply, scrollChatToEnd, chatWriteBlocked } from './chat.js';   // chatWriteBlocked：只在函数体里调用（循环依赖）
+import { generateReply, scrollChatToEnd, chatWriteBlocked, fitInput } from './chat.js';   // chatWriteBlocked：只在函数体里调用（循环依赖）
 import { renderAll, renderInspector } from './shell.js';
 import { renderMiscLog } from './tab-misc.js';
 import { ensureMemories } from './memory.js';   // 循环依赖（memory.js 经 pipeline.js 间接导入本文件）：只在函数体里调用
@@ -30,6 +30,7 @@ import { forwardFrameEvent, emitTavernEvent } from './script-host.js';   // 循�
 import { renderScriptLog } from './tab-scripts.js';      // 同上
 import { invalidateTurnAt, invalidateAfterDelete, isHidden, setHidden } from '../memory-fold.js';
 import { resolveMessageId } from '../frame-args.js';
+import { parseSlash } from '../slash-parse.js';
 import { varOps } from '../vars-ops.js';
 import { messageVarsOf, setMessageVars } from '../script-sync.js';
 import { cardScripts, flattenScripts, cardCharacterVars } from '../scripts.js';
@@ -78,26 +79,40 @@ function hostLog(ctx, level, text) {
     else frameHost.log({ messageId: ctx?.messageId ?? -1, level, text });
 }
 
-/** 极简斜杠命令：只认卡片按钮最常用的 /send /trigger /setinput，用 | 串联 */
+/**
+ * 极简斜杠命令：卡片按钮 / 脚本最常用的 /send /trigger /setinput /echo，用 | 串联（切分规则见 slash-parse.js：引号里和 \| 不切）。
+ * 管道：命令没有无名参数时用上一条的结果（STscript 的规矩）。返回最后一条的结果。
+ *   /send 文字         以用户身份发一条（不生成）；/trigger 触发一次生成（不等它结束，除非 await=true）
+ *   /setinput 文字     填进输入框（输入框跟着变高）；/echo [severity=info|warning|error|success] 文字  弹一条提示（标明来自卡 / 脚本，中性样式）
+ */
 export async function runSlash(command, ctx = ANON) {
-    for (const part of String(command).split('|').map(s => s.trim()).filter(Boolean)) {
-        const [, name, arg = ''] = part.match(/^\/(\S+)\s*([\s\S]*)$/) ?? [];
+    let pipe = '';
+    for (const { name, named, text: t, raw } of parseSlash(command)) {
+        const text = t === '' ? pipe : t;
         // 会改聊天 / 触发发送的命令：拒绝条件和别的改聊天的接口一样（见 writeBlocked）；被拒绝时这一串后面的也不做
         if ((name === 'send' || name === 'trigger') && writeBlocked(ctx, `斜杠命令 /${name}`)) return '';
         if (name === 'send') {
-            state.chat.push({ role: 'user', name: state.persona.name || 'User', content: arg });
+            state.chat.push({ role: 'user', name: state.persona.name || 'User', content: text });
             emitTavernEvent('message_sent', state.chat.length - 1);   // 酒馆 /send（slash-commands.js ~6107）：MESSAGE_SENT、画出来、USER_MESSAGE_RENDERED
             save(); renderAll(); scrollChatToEnd();
             emitTavernEvent('user_message_rendered', state.chat.length - 1);
+            pipe = '';
         } else if (name === 'trigger') {
-            await generateReply();
+            const p = generateReply();
+            if (named.await === 'true') await p;
+            pipe = '';
         } else if (name === 'setinput') {
-            $('#input').value = arg; refreshPreview();
+            $('#input').value = text; fitInput(); refreshPreview();
+            pipe = text;
+        } else if (name === 'echo') {
+            hostImpl.toastr(ctx, named.severity, text);
+            pipe = text;
         } else {
-            hostLog(ctx, 'unimplemented', `斜杠命令未实现：${part}`);
+            hostLog(ctx, 'unimplemented', `斜杠命令未实现：${raw.slice(0, 200)}`);
+            pipe = '';
         }
     }
-    return '';
+    return pipe;
 }
 
 /**
@@ -391,15 +406,16 @@ const hostImpl = {
     // 限频：脚本沙箱在 script-host.js 按沙箱限（10 秒 5 条）；前端卡在这里合起来限（10 秒 5 条）；同屏条数 dom.js toast 另有上限
     toastr: (ctx, kind, text) => {
         const body = String(text ?? '').slice(0, 300);
-        if (ctx?.kind === 'script') return toast(`脚本「${ctx.scriptName ?? '?'}」：${body}`, 'from-card');
+        const key = ctx?.kind === 'script' ? `s:${ctx.cardId}` : 'frames';
         const now = Date.now();
-        while (frameToastTimes.length && now - frameToastTimes[0] > 10000) frameToastTimes.shift();
-        if (frameToastTimes.length >= 5) { hostLog(ctx, 'info', `提示条太多，没显示：${body.slice(0, 200)}`); return; }
-        frameToastTimes.push(now);
-        toast(`前端卡：${body}`, 'from-card');
+        const times = (toastTimes.get(key) ?? []).filter(t => now - t < 10000);
+        if (times.length >= 5) { hostLog(ctx, 'info', `提示条太多，没显示：${body.slice(0, 200)}`); return; }
+        times.push(now);
+        toastTimes.set(key, times);
+        toast(ctx?.kind === 'script' ? `脚本「${ctx.scriptName ?? '?'}」：${body}` : `前端卡：${body}`, 'from-card');
     },
 };
-const frameToastTimes = [];
+const toastTimes = new Map();   // 'frames' | 's:<卡 id>' → 最近 10 秒的时间戳
 
 /** 宿主方法的名单（render.js 的前端卡白名单 BRIDGED_API、script-stub.js 的脚本白名单都是它的子集） */
 export const HOST_METHOD_NAMES = Object.freeze(Object.keys(hostImpl));
