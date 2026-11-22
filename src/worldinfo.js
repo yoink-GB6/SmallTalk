@@ -463,11 +463,15 @@ export function scanWorldInfo({ entries, chat, settings = {}, substitute, rng } 
         after: afterList.map((x) => x.content).join('\n'),
         beforeEntries: beforeList.map((x) => x.entry),
         afterEntries: afterList.map((x) => x.entry),
+        // 各条目宏替换之后的文字（和 *Entries 一一对应）：assemble.js 拿它把拼好的文本逐条对齐成出处
+        beforeContents: beforeList.map((x) => x.content),
+        afterContents: afterList.map((x) => x.content),
         depth: depthGroups.map((g) => ({
             depth: g.depth,
             role: /** @type {import('./types.js').Role} */ (ROLE_NAMES[g.role] ?? 'system'),
             content: g.items.map((x) => x.content).join('\n'),
             entries: g.items.map((x) => x.entry),
+            contents: g.items.map((x) => x.content),
         })),
         examplesBefore,
         examplesAfter,

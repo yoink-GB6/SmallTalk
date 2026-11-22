@@ -260,11 +260,18 @@ export function parseExampleIntoIndividual(block, name1, name2) {
     return result;
 }
 
-/** 世界书 before/after 的出处：能逐条对齐就逐条，否则整块一个 */
-function worldInfoEntryParts(text, entries, blockId) {
-    if (Array.isArray(entries) && entries.length && entries.map((e) => str(e.content)).join('\n') === text) {
-        return entries.map((e) => part(str(e.content), {
-            kind: 'worldinfo', id: String(e.uid), label: e.comment || `条目 ${e.uid}`,
+/**
+ * 世界书 before/after 的出处：能逐条对齐就逐条，否则整块一个。
+ * contents：各条目宏替换之后的文字（worldinfo.js 给的 beforeContents 等，和 entries 一一对应）。条目里有宏时 text 是替换后的，
+ * 拿原文 e.content 对不上；有 contents 就用它对齐（「拼装」页就地编辑要靠逐条的出处认出是哪一条）
+ */
+function worldInfoEntryParts(text, entries, blockId, contents) {
+    const texts = Array.isArray(contents) && Array.isArray(entries) && contents.length === entries.length && contents.join('\n') === text
+        ? contents.map(str)
+        : Array.isArray(entries) ? entries.map((e) => str(e.content)) : [];
+    if (Array.isArray(entries) && entries.length && texts.join('\n') === text) {
+        return entries.map((e, k) => part(texts[k], {
+            kind: 'worldinfo', id: String(e.uid), label: e.comment || `条目 ${e.uid}`, ...(typeof e.book === 'string' ? { book: e.book } : {}),
         }));
     }
     const ids = Array.isArray(entries) && entries.length ? entries.map((e) => e.uid).join('+') : blockId;
@@ -275,10 +282,10 @@ function worldInfoEntryParts(text, entries, blockId) {
 }
 
 /** openai.js formatWorldInfo（~L789）：套 wi_format，并尽量拆出包装文本 / 各条目 */
-function formatWorldInfoParts(text, entries, wiFormat, markerId, markerLabel) {
+function formatWorldInfoParts(text, entries, wiFormat, markerId, markerLabel, contents) {
     if (!text) return [];
     const format = typeof wiFormat === 'string' ? wiFormat : '{0}';
-    const entryParts = worldInfoEntryParts(text, entries, markerId);
+    const entryParts = worldInfoEntryParts(text, entries, markerId, contents);
     if (!format.trim()) return entryParts;
     const formatted = stringFormat(format, text);
     const pieces = format.split('{0}');
@@ -397,7 +404,7 @@ export function assemble(args) {
     const noteRun = noteTurn(note, macroChat);
     let noteRaw = [];
     if (noteRun.insert) {
-        const wiPart = (text, e) => part(text, { kind: 'worldinfo', id: String(e?.uid ?? ''), label: e?.comment || `条目 ${e?.uid}` });
+        const wiPart = (text, e) => part(text, { kind: 'worldinfo', id: String(e?.uid ?? ''), label: e?.comment || `条目 ${e?.uid}`, ...(typeof e?.book === 'string' ? { book: e.book } : {}) });
         const top = wi.anTop.map((t, k) => wiPart(t, wi.anTopEntries[k]));
         const bottom = wi.anBottom.map((t, k) => wiPart(t, wi.anBottomEntries[k]));
         noteRaw = [...top, part(note.prompt, { kind: 'authorNote', id: 'authorNote', label: '作者注释' }), ...bottom];
@@ -536,8 +543,8 @@ export function assemble(args) {
 
     // ── G. 填标记（preparePromptsForChatCompletion 的 systemPrompts，~L1374-1493）
     const markerContents = [
-        ['worldInfoBefore', () => formatWorldInfoParts(wi.before, wi.beforeEntries, preset.wi_format, 'worldInfoBefore', 'World Info (before)')],
-        ['worldInfoAfter', () => formatWorldInfoParts(wi.after, wi.afterEntries, preset.wi_format, 'worldInfoAfter', 'World Info (after)')],
+        ['worldInfoBefore', () => formatWorldInfoParts(wi.before, wi.beforeEntries, preset.wi_format, 'worldInfoBefore', 'World Info (before)', wi.beforeContents)],
+        ['worldInfoAfter', () => formatWorldInfoParts(wi.after, wi.afterEntries, preset.wi_format, 'worldInfoAfter', 'World Info (after)', wi.afterContents)],
         ['charDescription', () => markerText('charDescription', description)],
         ['charPersonality', () => markerText('charPersonality', personalityText)],
         ['scenario', () => markerText('scenario', scenarioText)],
@@ -700,7 +707,7 @@ export function assemble(args) {
         extensionPrompts.push({
             depth: Number(g.depth),
             role: ROLES.includes(g.role) ? g.role : 'system',
-            parts: worldInfoEntryParts(str(g.content), g.entries, `depth-${g.depth}-${g.role}`),
+            parts: worldInfoEntryParts(str(g.content), g.entries, `depth-${g.depth}-${g.role}`, g.contents),
         });
     }
 
@@ -967,6 +974,8 @@ function normalizeWorldInfo(w) {
         after: str(w.after),
         beforeEntries: Array.isArray(w.beforeEntries) ? w.beforeEntries : [],
         afterEntries: Array.isArray(w.afterEntries) ? w.afterEntries : [],
+        beforeContents: Array.isArray(w.beforeContents) ? w.beforeContents : null,
+        afterContents: Array.isArray(w.afterContents) ? w.afterContents : null,
         depth: Array.isArray(w.depth) ? w.depth : [],
         examplesBefore: Array.isArray(w.examplesBefore) ? w.examplesBefore : [],
         examplesAfter: Array.isArray(w.examplesAfter) ? w.examplesAfter : [],

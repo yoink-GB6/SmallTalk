@@ -215,7 +215,9 @@ export {};
  * @property {string} after                  position 1
  * @property {WorldEntry[]} beforeEntries    组成 before 的条目，顺序与文本一致
  * @property {WorldEntry[]} afterEntries
- * @property {WorldInfoDepthGroup[]} depth   position 4
+ * @property {string[]} [beforeContents]     组成 before 的各条目宏替换之后的文字（与 beforeEntries 一一对应）；assemble.js 用它逐条对齐出处
+ * @property {string[]} [afterContents]      同上，after
+ * @property {WorldInfoDepthGroup[]} depth   position 4（每组另有 contents：各条目替换后的文字，与 entries 一一对应）
  * @property {string[]} examplesBefore       position 5，每个条目一项
  * @property {string[]} examplesAfter        position 6
  * @property {string[]} anTop                position 2「作者注释上」，每个条目一项，已是最终顺序（order 小的在上）
