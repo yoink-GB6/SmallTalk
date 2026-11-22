@@ -231,3 +231,21 @@ export const STORE_KEYS = {
         how: '备份里不带（可能很大，而且是旧版本的东西）；导出提示里说一句',
     },
 };
+
+/**
+ * 不进 IndexedDB 的「这台设备的界面偏好」：存在浏览器的 localStorage 里。
+ * 它们不是用户内容，也不是设置：不进整体备份、不进任何导出，恢复备份时不动；换设备 / 清站点数据后回到默认，这是有意的。
+ * 读写一律包 try/catch（无痕窗口等用不了 localStorage 时，不记就是了）。上面的 GLOBAL_FIELDS / STORE_KEYS 只登记 IndexedDB 里的东西，
+ * 这两个键不在那里，所以单独写在这儿，免得以后有人以为漏登记了；test/data-inventory.test.mjs 核对：源码里出现的 'smalltalk.xxx' 形式的键都登记在这里，这里登记的也都真的在用。
+ * @type {Record<string, {what: string, where: string, default: string}>}
+ */
+export const LOCAL_STORAGE_PREFS = {
+    'smalltalk.panelCollapsed': {
+        what: '宽屏下右侧面板是否收起（"1" = 收起；默认不存）',
+        where: 'src/ui/drawer.js', default: '展开',
+    },
+    'smalltalk.theme': {
+        what: '界面主题的 id（src/themes.js 清单里的一项；默认主题不存这个键）',
+        where: 'src/ui/theme.js；index.html <head> 里有一小段内联脚本在样式表之前读它，首屏就是对的主题', default: 'default（跟随系统的默认样式）',
+    },
+};

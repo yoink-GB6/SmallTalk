@@ -18,6 +18,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Small Talk">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
+<!-- 主题：样式表之前先把 <html data-theme> 设好，首屏就是对的主题、不闪一下。读 localStorage['smalltalk.theme']（和 src/themes.js 的 THEME_STORAGE_KEY 同一个键）；
+     不依赖任何模块，读不了就当默认。值只接受简单的 id（字母数字下划线连字符），'default' 不设属性；清单里有没有这个 id 由 src/ui/theme.js 启动时再校验 -->
+<script>try{var t=localStorage.getItem('smalltalk.theme');if(t&&t!=='default'&&/^[A-Za-z0-9_-]{1,32}$/.test(t))document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
 <link rel="stylesheet" href="style.css">
 <!-- 渲染用的两个库，和酒馆本体用的是同一套：showdown 做 markdown，DOMPurify 做净化 -->
 <script src="vendor/showdown/2.1.0/showdown.min.js"></script>
@@ -127,6 +130,10 @@
     </div>
     <div id="tab-prompt" class="tab"></div>
     <div id="tab-misc" class="tab">
+      <!-- 主题（src/ui/theme.js 用 src/themes.js 的清单填选项；选了立即生效并记进 localStorage，不进存储 / 备份） -->
+      <div class="row theme-row">
+        <label class="inline" for="theme-select">主题 <select id="theme-select" title="界面主题"></select></label>
+      </div>
       <div class="section-title">手动模式</div>
       <label class="inline" title="不调用模型：拼好的 prompt 自己拿去用，再把回复贴回来">
         <input type="checkbox" id="manual-mode"> 手动模式

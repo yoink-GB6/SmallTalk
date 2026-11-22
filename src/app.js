@@ -14,6 +14,7 @@ import { renderInspector, renderAll, paintManualBadge } from './ui/shell.js';
 import { refreshEndpoints } from './ui/tab-provider.js';
 import { initArchive, bindArchive, newChat } from './ui/archive.js';
 import { initDrawer } from './ui/drawer.js';
+import { initTheme } from './ui/theme.js';
 import { bindPersonaTab } from './ui/tab-persona.js';
 import { initPwaUi } from './ui/pwa-ui.js';
 import { bindChatSearch } from './ui/chat-search.js';
@@ -98,6 +99,7 @@ function bind() {
 await initArchive();
 bind();
 initDrawer();
+initTheme();          // 「杂项」页最上面的主题下拉框（<html data-theme> 的首屏设置在 index.html 的内联脚本里）
 bindArchive();
 bindChatSearch();     // 聊天区工具栏的「搜索」
 renderAll();
