@@ -394,7 +394,28 @@ button.chip-card::after { content: '▾'; color: var(--dim); font-weight: 400; }
 /* ── 顶栏精简 ── */
 /* 顶栏只剩：标题（窄屏下兼作抽屉按钮）、卡片名、告警 / 状态灯。一律单行不换行；放不下时只截断卡片名。 */
 #topbar { flex-wrap: nowrap; min-width: 0; }
-.brand { flex: none; white-space: nowrap; user-select: none; }
+.brand { flex: none; white-space: nowrap; user-select: none; display: flex; align-items: center; cursor: pointer; }
+/* 标题兼开合按钮（窄屏开合抽屉、宽屏收起 / 展开右侧面板）：前面带 ☰，整块可点；伪元素不进 textContent */
+.brand::before { content: '☰'; margin-right: 6px; }
+.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+/* ── 宽屏：右侧面板与页面等高，页签栏和顶栏连成一条导航栏 ── */
+/* body 改成两列网格：左列 = 顶栏 + 存储报错横幅 + 聊天区，右列 = 面板（占满整列高度）。#layout 用 display: contents 让出自己的格子，
+   聊天区和面板直接成为 body 的网格子项。顶栏和页签栏用同一个固定高度，同样的底色和下边线，看起来就是一条横贯页面的导航栏。
+   窄屏（≤900px）整块不生效，仍是原来的抽屉。面板收起状态是 body.panel-collapsed（src/ui/drawer.js，记在 localStorage）。 */
+@media (min-width: 901px) {
+  body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); }
+  #layout { display: contents; }
+  #topbar { grid-column: 1; grid-row: 1; }
+  #store-error { grid-column: 1; grid-row: 2; }
+  #chat-pane { grid-column: 1; grid-row: 3; }
+  #inspector { grid-column: 2; grid-row: 1 / -1; }
+  #topbar, #tabs { height: 53px; flex: none; }
+  #tabs { align-items: stretch; padding: 0 10px; }
+  body.panel-collapsed { grid-template-columns: minmax(0, 1fr); }
+  body.panel-collapsed #inspector { display: none; }
+  body.panel-collapsed #chat-pane { border-right: 0; }
+}
 .chip-card { flex: 0 1 auto; min-width: 0; }
 .chip-card img, button.chip-card::after { flex: none; }
 .chip-name { min-width: 0; max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -417,9 +438,7 @@ button.chip-card::after { content: '▾'; color: var(--dim); font-weight: 400; }
 #tab-misc > .section-title:first-child { margin-top: 0; }
 @media (max-width: 900px) {
   /* 标题就是抽屉按钮：前面带 ☰，整块可点；伪元素不进 textContent */
-  .brand { display: flex; align-items: center; min-height: 36px; cursor: pointer; }
-  .brand::before { content: '☰'; margin-right: 6px; }
-  .brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  .brand { min-height: 36px; }
   /* 提示条挪到顶栏下方居中（右下角会盖住输入框和发送按钮）。仍是 fixed、z-index 30：在抽屉(16)、导出面板(25)、模型下拉(28)之上。
      容器不拦点击，免得提示条之外的区域点不到聊天内容 */
   #toasts { left: 10px; right: 10px; bottom: auto; top: calc(var(--topbar-h, 48px) + 8px); align-items: center; pointer-events: none; }

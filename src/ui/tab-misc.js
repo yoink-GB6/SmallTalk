@@ -7,7 +7,6 @@ import { $, h, toast } from './dom.js';
 import { state, ui, save, stopSaving, persist } from './state.js';
 import { refreshPreview } from './pipeline.js';
 import { backendKind } from '../llm.js';
-import { openSearch } from './chat-search.js';
 import { backupSection } from './backup.js';   // 「整体备份」一节（备份全部数据 / 从备份恢复；逻辑都在 backup.js）
 import { tavernSection } from './tavern-ui.js'; // 「和酒馆整体互通」一节（酒馆整体备份 zip 的导入 / 导出成酒馆目录结构；逻辑都在 tavern-ui.js）
 import { pwaSection } from './pwa-ui.js';       // 「安装到主屏幕」一节（只在网页版显示；逻辑在 pwa-ui.js / src/pwa.js）
@@ -17,13 +16,6 @@ import { pwaSection } from './pwa-ui.js';       // 「安装到主屏幕」一�
 export function renderMiscTab() {
     const vars = ui.preview?.variables ?? state.variables;
     $('#misc-rest').replaceChildren(
-        // 聊天内搜索的入口（原来在聊天区顶上）。窄屏下检查器是盖住聊天区的抽屉，先收起才看得到搜索栏
-        h('div', { class: 'row' },
-            h('button', { id: 'misc-search-btn', 'data-fk': 'misc-search', type: 'button', title: '在当前存档里搜索', onclick: () => {
-                document.body.classList.remove('drawer-open');
-                document.querySelector('#drawer-toggle')?.setAttribute('aria-expanded', 'false');
-                openSearch();
-            } }, '搜索聊天记录')),
         // 两个备份紧跟在「手动模式」后面、变量前面（2026-11-23 用户定的顺序）
         backupSection(),
         tavernSection(),

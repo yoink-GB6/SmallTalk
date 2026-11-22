@@ -26,7 +26,7 @@
 <body>
 
 <header id="topbar">
-  <!-- 标题：宽屏下只是普通标题；窄屏下它就是开合右侧检查器抽屉的按钮（role / tabindex / aria-expanded 由 src/ui/drawer.js 按屏宽加减，
+  <!-- 标题：兼开合右侧面板的按钮（窄屏开合抽屉，宽屏收起 / 展开面板；role / tabindex / aria-expanded / title 由 src/ui/drawer.js 加，
        前面的 ☰ 图标是 CSS 伪元素，所以 textContent 仍是干净的 "SmallTalk"）。id 沿用 drawer-toggle -->
   <div id="drawer-toggle" class="brand">SmallTalk</div>
   <button id="card-chip" class="chip-card" type="button" title="当前角色卡：点这里打开「存档」页，切换 / 管理角色卡和存档"></button>
@@ -50,7 +50,7 @@
     <!-- 聊天区顶上不再有工具栏（存档名、楼数、开场白、手动徽标都挪走了，见 tab-archive.js / 顶栏）。
          #chat-info 只在有话要说时出现：上下文上限丢了楼、有隐藏楼层（chat.js renderChatInfo）；平时 hidden -->
     <div id="chat-info" class="dim" hidden></div>
-    <!-- 聊天内搜索（src/ui/chat-search.js）：入口在「杂项」页最上面的「搜索聊天记录」；Ctrl+F 不拦截，留给浏览器自己的页内查找 -->
+    <!-- 聊天内搜索（src/ui/chat-search.js）：入口在「存档」页第一行最后的「搜索聊天记录」；Ctrl+F 不拦截，留给浏览器自己的页内查找 -->
     <div id="chat-search" hidden>
       <input id="chat-search-input" type="text" placeholder="搜索当前存档（不分大小写）" autocomplete="off" aria-label="搜索关键词">
       <span id="chat-search-count" class="dim" aria-live="polite"></span>

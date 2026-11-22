@@ -20,6 +20,8 @@ import {
     importChatFile, deleteCard,
 } from './archive.js';
 import { importFiles, importBlockedReason } from './importer.js';   // 循环依赖（importer 导入 archive）：只在函数体里调用
+import { openSearch } from './chat-search.js';   // 「搜索聊天记录」按钮用（只在函数体里调用）
+import { closeDrawer } from './drawer.js';
 import { mountNoteBox, noteBoxHasFocus, onNoteBoxBlur } from './author-note.js';   // 同上：只在函数体里调用
 
 // ───────────────────────────── 运行期界面状态（不持久化，刷新页面就没了） ─────────────────────────────
@@ -179,12 +181,15 @@ function draw() {
 
     const importCard = h('button', { class: 'primary', 'data-fk': 'import-card', disabled: ro, title: ro ? RO_TIP : '导入角色卡（PNG / JSON，作为新卡添加）或聊天记录（.jsonl，进当前卡的新存档），可一次选多个。世界书、正则、预设、人设请到各自的页导入；也可以直接把文件拖进页面',
         onclick: () => importPicker.click() }, '导入');
+    // 聊天内搜索的入口（原来在「杂项」页）：排在这一行最后。窄屏下检查器是盖住聊天区的抽屉，先收起才看得到搜索栏
+    const searchBtn = h('button', { id: 'misc-search-btn', 'data-fk': 'misc-search', type: 'button', title: '在当前存档里搜索',
+        onclick: () => { closeDrawer(); openSearch(); } }, '搜索聊天记录');
     // 整体备份 / 恢复在「杂项」页（src/ui/backup.js 的 backupSection），这一页不再有备份那一行
     const kids = [];
     if (!cards.length) {
         kids.push(h('div', { class: 'empty' }, '还没有角色卡。导入一张 PNG / JSON 角色卡后，它和它的聊天存档会按卡列在这里；'
             + '也可以不导入，直接和 Assistant 聊（发出第一条消息后会自动建一张占位卡）。'),
-        h('div', { class: 'row', style: 'justify-content:center' }, importCard));
+        h('div', { class: 'row', style: 'justify-content:center' }, importCard, searchBtn));
     } else {
         // 顶上的「新对话」去掉了：每张卡那一行自己有「新对话」（当前卡的那个和以前顶上的一样，读同一个开场白下拉框）
         const bar = batch
@@ -200,7 +205,8 @@ function draw() {
             h('button', { 'data-fk': 'batch-cancel', disabled: batchBusy, onclick: () => { batch = false; picked.clear(); draw(); } }, '取消'),
             h('span', { class: 'dim' }, `已选 ${picked.size} 张`)]
             : [importCard,
-                h('button', { 'data-fk': 'batch', title: '多选角色卡，一次导出或删除', onclick: () => { batch = true; draw(); } }, '批量')];
+                h('button', { 'data-fk': 'batch', title: '多选角色卡，一次导出或删除', onclick: () => { batch = true; draw(); } }, '批量'),
+                searchBtn];
         kids.push(h('div', { class: 'summary' }, ...bar,
             h('span', { class: 'spacer' }),
             h('span', { class: 'dim' }, `${cards.length} 张卡 · ${total} 个存档`)));
