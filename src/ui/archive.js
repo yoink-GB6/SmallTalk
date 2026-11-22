@@ -87,17 +87,29 @@ export function liveChats() {
 // 代价是只读期间输入框里没发出的字会丢——反正横幅一直写着「这里的改动不会保存」。
 
 const LOCK_NAME = 'smalltalk-writer';
+const LOCK_RETRY_MS = 2500, LOCK_RETRY_STEP = 250;   // 抢锁失败后的重试窗口（见 acquireWriterLock）
 
 /** @returns {Promise<'held'|'busy'|'none'>} none = 浏览器什么协调手段都没有（降级：照常写，可能互相覆盖） */
 function acquireWriterLock() {
     if (globalThis.navigator?.locks?.request) {
-        return new Promise(resolve => {
+        // 抢不到不立刻判只读，先重试一小会儿（LOCK_RETRY_MS 内每 LOCK_RETRY_STEP 一次）：刷新 / 「点这里更新」重载时，
+        // 自己上一次加载的文档可能还没来得及放锁，新页面就已经开始跑了；这时直接判只读会让唯一的标签页误以为有「另一个标签页」。
+        // 真正的第二个标签页：锁一直被占着，重试到时限后照样变成只读；这段时间里 initArchive 还没往下走，不会读写任何数据。
+        const tryOnce = () => new Promise(resolve => {
             navigator.locks.request(LOCK_NAME, { ifAvailable: true }, lock => {
                 if (!lock) { resolve('busy'); return undefined; }
                 resolve('held');
                 return new Promise(() => {});   // 一直不释放：页面关掉 / 刷新时浏览器自动释放
             }).catch(() => resolve('none'));
         });
+        return (async () => {
+            const until = Date.now() + LOCK_RETRY_MS;
+            for (;;) {
+                const r = await tryOnce();
+                if (r !== 'busy' || Date.now() >= until) return r;
+                await new Promise(res => setTimeout(res, LOCK_RETRY_STEP));
+            }
+        })();
     }
     // 退路：BroadcastChannel 问一声「有人在写吗」。两个标签页恰好同时打开时可能都以为自己是唯一的（竞态），只能尽力而为
     if (typeof BroadcastChannel === 'function') {

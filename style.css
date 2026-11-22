@@ -295,8 +295,9 @@
 :root[data-theme="princesse"] #tabs button.active { font-weight: 600; }
 :root[data-theme="princesse"] .section-title { font-weight: 600; }
 :root[data-theme="princesse"] table.grid th { font-weight: 400; letter-spacing: .04em; }   /* 表头列窄，字距拉太开会折行 */
-/* 引号里的对白：同色（不加别的彩色）。正文已经是衬线，这条只是保证引号里也是 */
-:root[data-theme="princesse"] .mes_text q { color: inherit; font-family: var(--pr-font-heading); }
+/* 引号里的对白：同色（不加别的彩色）。字体不在这里设：这条选择器比卡的 <style>（`.mes_text q`、`.mes_text *`）更具体，
+   设了字体会盖掉卡自己指定的字体；q 本来就继承容器的字体（主题的衬线，或卡给祖先元素设的字体）。 */
+:root[data-theme="princesse"] .mes_text q { color: inherit; }
 :root[data-theme="princesse"] .mes_text { font-size: var(--pr-font-size-chat); }
 
 /* ── Princesse：按钮 ── */
