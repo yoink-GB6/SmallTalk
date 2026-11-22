@@ -127,6 +127,74 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   酒馆主题变量的别名：卡的美化 CSS 会引用它们
+   酒馆在 :root 上定义了一批 --SmartTheme* 和工具色变量，角色卡里的 <style> / 前端卡常写 color: var(--SmartThemeEmColor) 之类；
+   我们没有定义它们时 var() 取不到值，颜色就丢了。这里把它们映射到我们自己的主题变量（--text / --accent / --panel …），
+   所以默认主题的浅色 / 深色和 Princesse 都会自动跟着变（var() 在 :root 上按当前主题的值解析），不用每个主题各写一份。
+   纯新增：界面自己的规则不引用它们（前端卡的 iframe 在生成 srcdoc 时由 src/render.js 把当前计算值抄进去，见 THEME_ALIAS_VARS）。
+   工具色（--black30a 之类）酒馆里就是固定值，照抄。清单和默认值来自酒馆 1.19.0 的 public/style.css 的 :root。
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  --SmartThemeBodyColor: var(--text);               /* 正文色（酒馆默认 rgb(220,220,210)） */
+  --SmartThemeEmColor: var(--dim);                  /* 斜体 / 次要文字（rgb(145,145,145)） */
+  --SmartThemeUnderlineColor: var(--text);          /* 下划线（rgb(188,231,207)）：我们没有对应的色，用正文色 */
+  --SmartThemeQuoteColor: var(--accent);            /* 引号里的话（rgb(225,138,36)）：用强调色 */
+  --SmartThemeBlurTintColor: var(--panel);          /* 面板底（rgba(23,23,23,1)） */
+  --SmartThemeChatTintColor: var(--bg);             /* 聊天区底（rgba(23,23,23,1)） */
+  --SmartThemeUserMesBlurTintColor: var(--user-bg); /* 用户消息底（rgba(0,0,0,.3)） */
+  --SmartThemeBotMesBlurTintColor: var(--bot-bg);   /* 角色消息底（rgba(60,60,60,.3)） */
+  --SmartThemeBorderColor: var(--line);             /* 边框（rgba(0,0,0,.5)） */
+  --SmartThemeShadowColor: rgb(0 0 0 / .5);         /* 阴影 */
+  --SmartThemeBlurStrength: calc(var(--blurStrength) * 1px);
+  /* 勾选框底色的 R/G/B 是裸数字（酒馆拿它们算 rgba()），没法从我们的色里拆出来，用酒馆默认值 */
+  --SmartThemeCheckboxBgColorR: 220;
+  --SmartThemeCheckboxBgColorG: 220;
+  --SmartThemeCheckboxBgColorB: 210;
+  --SmartThemeCheckboxBgColorA: 1;
+  --SmartThemeCheckboxTickColorValue: calc(((((var(--SmartThemeCheckboxBgColorR) * 299) + (var(--SmartThemeCheckboxBgColorG) * 587) + (var(--SmartThemeCheckboxBgColorB) * 114)) / 1000) - 128) * -1000);
+  --SmartThemeCheckboxTickColor: rgb(var(--SmartThemeCheckboxTickColorValue), var(--SmartThemeCheckboxTickColorValue), var(--SmartThemeCheckboxTickColorValue));
+  --mainFontFamily: var(--font-chat);               /* 酒馆："Noto Sans", sans-serif */
+  --monoFontFamily: var(--font-mono);
+  --fontScale: 1;
+  --mainFontSize: calc(var(--fontScale) * 15px);
+  --blurStrength: 10;
+  --shadowWidth: 2;
+  /* 工具色：酒馆固定值 */
+  --transparent: rgba(0, 0, 0, 0);
+  --black30a: rgba(0, 0, 0, 0.3);
+  --black50a: rgba(0, 0, 0, 0.5);
+  --black60a: rgba(0, 0, 0, 0.6);
+  --black70a: rgba(0, 0, 0, 0.7);
+  --black90a: rgba(0, 0, 0, 0.9);
+  --black100: rgba(0, 0, 0, 1);
+  --white20a: rgba(255, 255, 255, 0.2);
+  --white30a: rgba(255, 255, 255, 0.3);
+  --white50a: rgba(255, 255, 255, 0.5);
+  --white60a: rgba(255, 255, 255, 0.6);
+  --white70a: rgba(255, 255, 255, 0.7);
+  --white100: rgba(255, 255, 255, 1);
+  --grey10: rgb(25, 25, 25);
+  --grey30: rgb(75, 75, 75);
+  --grey50: rgb(125, 125, 125);
+  --grey5020a: rgba(125, 125, 125, 0.2);
+  --grey5050a: rgba(125, 125, 125, 0.5);
+  --grey70: rgb(175, 175, 175);
+  --grey75: rgb(190, 190, 190);
+  --grey30a: rgba(50, 50, 50, 0.3);
+  --grey7070a: rgba(175, 175, 175, 0.7);
+  --fullred: rgba(255, 0, 0, 1);
+  --crimson70a: rgba(100, 0, 0, 0.7);
+  --okGreen70a: rgba(0, 100, 0, 0.7);
+  --cobalt30a: rgba(100, 100, 255, 0.3);
+  --greyCAIbg: rgb(36, 36, 37);
+  --ivory: rgb(220, 220, 210);
+  --golden: rgb(248, 211, 0);
+  --warning: rgba(255, 0, 0, 0.9);
+  --active: rgb(88, 182, 0);
+  --preferred: rgb(244, 67, 54);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    主题：在这里按 data-theme 覆盖变量。
    主题清单在 src/themes.js（加一项才会出现在「杂项」页的下拉框里）。
    每个主题一段，结构照抄 Princesse：① 变量（浅色）② 变量（深色，放进 prefers-color-scheme 媒体查询）③ 主题专属规则。
