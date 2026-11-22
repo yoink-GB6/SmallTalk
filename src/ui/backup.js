@@ -730,10 +730,9 @@ export function backupSection() {
     return h('div', { class: 'bkx-section', 'data-fk': 'backup-section' },
         h('div', { class: 'section-title' }, '整体备份'),
         h('div', { class: 'dim bkx-desc' },
-            h('div', null, '把所有角色卡和存档、预设、全局设置、接口列表打包成一个文件，用来换设备（电脑 ↔ 手机、换浏览器、从本地版搬到网页版）。'),
-            h('div', null, '恢复到一个空的浏览器时原样还原；已经有数据时只新增，不改不删已有的东西。当前用的预设、人设、接口和模型不进备份，恢复时也不会被换掉。'
-                + '网页版里填的 API key 会一起带上，这时文件必须设密码加密。'),
-            h('div', null, '文件只在你自己的设备上，SmallTalk 不会上传到任何地方。')),
+            // 说明只留一句「包含什么」（2026-11-23 用户定）；恢复的规矩在恢复时的确认框和结果里说，README 有全文
+            h('div', null, '打包内容包含：角色卡和存档、预设、人设、额外世界书、全局正则、便签、全局变量、接口列表（网页版连 API key 一起，须设密码加密），'
+                + '以及外置记忆设置、上下文上限、世界书扫描深度。不含当前选用的预设、人设和模型。')),
         h('div', { class: 'row' },
             h('button', { 'data-fk': 'backup-export', title: '把全部数据备份成一个 .json 文件' + (ro ? '。这个标签页是只读的：备份的是存储里已经保存的内容' : ''),
                 onclick: () => exportAll() }, '备份全部数据'),

@@ -102,11 +102,14 @@ function lineToMessage(line) {
     if (typeof st.send_date === 'string') { msg.sendDate = st.send_date; delete st.send_date; }
     else if (typeof st.send_date === 'number') msg.sendDate = parseStDate(st.send_date) ?? undefined;
     if (msg.sendDate === undefined) delete msg.sendDate;
-    // 我们自己的命名空间 extra.smalltalk：记忆摘要
+    // 我们自己的命名空间 extra.smalltalk：记忆摘要，以及记忆再压缩的合并段 / 覆盖标记（memory-fold.js 文件头「合并段」）。
+    // 合并段和标记只看形状（对象 / true）就拆出来；成员数得对不对，打开存档时 normalizeMerged 再核对（对不上的清掉、那几轮重压）
     const ours = extra && isObj(extra.smalltalk) ? extra.smalltalk : null;
     if (ours) {
         if (typeof ours.memory === 'string') { msg.memory = ours.memory; delete ours.memory; }
         if (typeof ours.memoryError === 'string') { msg.memoryError = ours.memoryError; delete ours.memoryError; }
+        if (isObj(ours.memoryMerged)) { msg.memoryMerged = ours.memoryMerged; delete ours.memoryMerged; }
+        if (ours.memoryIn === true) { msg.memoryIn = true; delete ours.memoryIn; }
         if (!Object.keys(ours).length) delete extra.smalltalk;
     }
     // swipes / swipe_id：形状合法（字符串数组、swipe_id 是范围内的整数）才拆出来；否则原样留在 st 里，
@@ -209,14 +212,15 @@ function messageToLine(msg, sendDateFallback) {
         if (!(typeof line.send_date === 'number' && parseStDate(line.send_date) === msg.sendDate)) line.send_date = msg.sendDate;
     } else if (!imported) line.send_date = sendDateFallback;
     if (!(imported && 'mes' in line && !msg.content)) line.mes = msg.content ?? '';
-    const needExtra = !imported || msg.role === 'system' || msg.memory !== undefined || msg.memoryError !== undefined;
+    const OURS = ['memory', 'memoryError', 'memoryMerged', 'memoryIn'];   // 挂在 extra.smalltalk 下的（见 lineToMessage）
+    const hasOurs = OURS.some(k => msg[k] !== undefined);
+    const needExtra = !imported || msg.role === 'system' || hasOurs;
     const extra = isObj(line.extra) ? line.extra : needExtra ? (line.extra = {}) : {};
     if (msg.role === 'system') extra.type = 'narrator';
     else if (extra.type === 'narrator') delete extra.type;   // 角色被改掉了，旁白标记也要去掉
-    if (msg.memory !== undefined || msg.memoryError !== undefined) {
+    if (hasOurs) {
         const ours = isObj(extra.smalltalk) ? extra.smalltalk : (extra.smalltalk = {});
-        if (msg.memory !== undefined) ours.memory = msg.memory;
-        if (msg.memoryError !== undefined) ours.memoryError = msg.memoryError;
+        for (const k of OURS) if (msg[k] !== undefined) ours[k] = msg[k];
     }
     if (Array.isArray(msg.swipes) && msg.swipes.length) {
         // 拆出来的（或我们自己生成的）候选：写回酒馆的三个字段
@@ -356,9 +360,12 @@ function loadInfo(msg, info) {
     st.extra = structuredClone(isObj(info?.extra) ? info.extra : {});
     // 酒馆同步 swipe_info 时会把整个 extra 复制进去，其中可能有我们以前导出的 extra.smalltalk（记忆摘要）。
     // 那是旧候选的摘要，不能跟着换回来（ChatMessage.memory 才是记忆的唯一出处）
+    // 合并段 / 覆盖标记同理（它们属于「这一楼当时的那个候选」，换回来的旧候选上不能还挂着）
     if (isObj(st.extra.smalltalk)) {
         delete st.extra.smalltalk.memory;
         delete st.extra.smalltalk.memoryError;
+        delete st.extra.smalltalk.memoryMerged;
+        delete st.extra.smalltalk.memoryIn;
         if (!Object.keys(st.extra.smalltalk).length) delete st.extra.smalltalk;
     }
 }

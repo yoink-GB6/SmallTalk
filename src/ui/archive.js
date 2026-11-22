@@ -459,7 +459,7 @@ function untouched() {
     if (!g || state.chat.length > 1) return false;
     const m = state.chat[0];
     if ((m?.content ?? '') !== g.text || (!m && g.text !== '')) return false;
-    if (m && (m.memory !== undefined || m.memoryError !== undefined || m.role !== 'assistant')) return false;
+    if (m && (m.memory !== undefined || m.memoryError !== undefined || m.memoryMerged !== undefined || m.memoryIn !== undefined || m.role !== 'assistant')) return false;
     return JSON.stringify(state.variables.local ?? {}) === g.vars;
 }
 

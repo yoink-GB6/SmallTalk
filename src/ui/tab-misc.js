@@ -24,8 +24,10 @@ export function renderMiscTab() {
                 document.querySelector('#drawer-toggle')?.setAttribute('aria-expanded', 'false');
                 openSearch();
             } }, '搜索聊天记录')),
+        // 两个备份紧跟在「手动模式」后面、变量前面（2026-11-23 用户定的顺序）
+        backupSection(),
+        tavernSection(),
         h('div', { class: 'section-title' }, '变量（setvar / getvar）'),
-        h('div', { class: 'dim', style: 'margin-bottom:4px' }, '预设里的 {{setvar}} 在拼装时按条目顺序执行；这里是拼完之后的值。'),
         h('pre', { id: 'vars-view', class: 'block card', style: 'padding:8px 10px' }, JSON.stringify(vars, null, 2)),
         h('div', { class: 'row' },
             h('button', { onclick: () => { state.variables = { local: {}, global: {} }; save(); refreshPreview(); } }, '清空变量')),
@@ -33,12 +35,9 @@ export function renderMiscTab() {
         h('div', { class: 'dim', style: 'margin-bottom:4px' }, '消息里的前端卡（iframe）调用了哪些酒馆助手 API、哪些没实现、报了什么错。'),
         h('div', { id: 'frame-log', class: 'card', style: 'padding:6px 10px;max-height:300px;overflow:auto' }),
         pwaSection(),
-        backupSection(),
-        tavernSection(),
         h('div', { class: 'section-title' }, '数据'),
         h('div', { class: 'row' },
-            h('button', { onclick: resetAll }, '清空所有数据'),
-            h('span', { class: 'dim' }, '所有内容只存在这个浏览器的 IndexedDB 里')),
+            h('button', { onclick: resetAll }, '清空所有数据')),
     );
     renderMiscLog();
 }

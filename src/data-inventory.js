@@ -140,10 +140,11 @@ export const GLOBAL_FIELDS = {
         how: '它也是「聊天用哪个模型」，属于当前选择：导出时不写；旧备份里带着也忽略（不然读档时 migrateModelRefs 会拿它换算出一个 chatModel）',
     },
     memory: {
-        what: '外置记忆设置 {enabled, keep, summaryLen?, modelRef}（modelRef = 记忆压缩用的「接口 + 模型」；summaryLen = 每条摘要的目标字数，默认不写 = 60；'
+        what: '外置记忆设置 {enabled, keep, summaryLen?, mergeEvery?, modelRef}（modelRef = 记忆压缩用的「接口 + 模型」；summaryLen = 每条摘要的目标字数，默认不写 = 60；'
+            + 'mergeEvery = 「每 x 条记忆再次压缩」，默认不写 = 不做（memory-fold.js mergeEveryOf：非正整数 = 不做，1–3 按 4，上限 200）；'
             + 'batch 界面已隐藏，固定 10（2026-11-22 用户定）：存储 / 备份里残留的 batch 值运行时被忽略，见 memory-fold.js）',
         kind: 'setting', backup: 'yes', restore: 'ask', fresh: 'remap', export: null,
-        how: 'enabled / keep / summaryLen 等是设置：弹框答「是」才用备份里的（不是对象 / 去掉 modelRef 后为空 = 没有）。'
+        how: 'enabled / keep / summaryLen / mergeEvery 等是设置：弹框答「是」才用备份里的（不是对象 / 去掉 modelRef 后为空 = 没有）。'
             + '【modelRef（以及旧写法 model / openaiModel）是当前选择】：导出时去掉；答「是」时也保留本机的；空浏览器：设置原样、modelRef 不写 = 读档时补默认引用（所以登记成 fresh = remap）',
     },
     stableRandom: {
@@ -192,7 +193,10 @@ export const STORE_KEYS = {
             + '新加进来的存档的作者注释先规范化（坏值回默认）。'
             + '作者注释（2026-11-22 加，types.js ChatRecord.authorNote）是存档内容的一部分：跟着存档进整体备份、跟着 .jsonl 往返；'
             + '会发给模型（按它的位置 / 深度 / 频率插进拼装结果，assemble.js）；前端卡读不到也改不了它（frame-host.js 不提供接口，这次有意不做）。'
-            + '角色卡专属注释、默认作者注释（酒馆 settings.json 里）没做，不存',
+            + '角色卡专属注释、默认作者注释（酒馆 settings.json 里）没做，不存。'
+            + '外置记忆的摘要（ChatMessage.memory）和再压缩的合并段 / 覆盖标记（memoryMerged / memoryIn，2026-11-23 加，规则见 memory-fold.js 文件头「合并段」）'
+            + '都挂在消息上：跟着存档进整体备份、参与 chatSig 判重（只差合并状态的两个存档不算重复）、跟着 .jsonl 的 extra.smalltalk 往返；'
+            + '会发给模型（记忆块）；前端卡读不到（getChatMessages / getContextSnapshot 不给 memory 一类字段）。读档时 normalizeMerged 清掉坏段和孤儿标记',
     },
     index: {
         key: 'index:<cardId>', what: '每张卡的存档目录（名字、楼数、时间），切换时只读它',

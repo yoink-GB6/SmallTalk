@@ -168,9 +168,11 @@ export function computePrompt(chat, { commit }) {
     if (fold.rows.length) {
         const text = memText;
         const at = messages.findIndex(m => m.sources.some(s => s.kind === 'chat'));
+        // 合并段（记忆再压缩）一行顶好几轮：标签里数的是轮数。没有合并段时 = 行数，和以前一样
+        const turnCount = fold.rows.reduce((n, r) => n + (r.merged ? r.merged.count : 1), 0);
         messages.splice(at < 0 ? messages.length : at, 0, {
             role: 'system', content: text,
-            sources: [{ kind: 'memory', id: 'memory', label: `外置记忆（${fold.rows.length} 轮）`, chars: text.length }],
+            sources: [{ kind: 'memory', id: 'memory', label: `外置记忆（${turnCount} 轮）`, chars: text.length }],
         });
         log.push({ level: 'info', message: `外置记忆：第 0–${fold.cut - 1} 楼不再发送原文，改为 ${fold.rows.length} 行摘要，插在聊天记录之前` });
     }

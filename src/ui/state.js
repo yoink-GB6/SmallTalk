@@ -20,6 +20,7 @@ import {
 } from '../migrate.js';
 import { sanitizePreset } from '../preset-sanitize.js';
 import { storedAuthorNote } from '../author-note.js';
+import { normalizeMerged } from '../memory-fold.js';
 
 // ───────────────────────────── 状态 ─────────────────────────────
 
@@ -304,6 +305,9 @@ export function applyCardChat(cardRec, chatRec, { freshCard = false, freshChat =
             if (n) meta.authorNote = n; else delete meta.authorNote;
         }
         state.chat = Array.isArray(messages) ? messages : [];
+        // 外置记忆的合并段（memory-fold.js 文件头「合并段」）：读入容错。坏的段、孤儿标记去掉（被去掉标记的轮回到待压缩）。
+        // 和作者注释一样，快照按规范化之后的记，只是读一下不会引起一次重写
+        normalizeMerged(state.chat);
         state.variables = { local: isObj(variables) ? variables : {}, global: state.variables.global };
         persist.chatId = chatRec.id;
         persist.chatMeta = meta;

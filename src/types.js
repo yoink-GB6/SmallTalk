@@ -18,6 +18,12 @@ export {};
  * @property {string} content  存储的原文（未经显示正则 / 发送正则处理）
  * @property {string} [memory]       外置记忆：这一轮（之前的用户输入 + 这条回复）压缩成的一句话，只挂在 assistant 楼上
  * @property {string} [memoryError]  上次压缩失败的原因
+ * @property {{text: string, count: number, wait?: number}} [memoryMerged]
+ *   外置记忆的「再压缩」：把较早的 count 条回复（从这条往前数的可见回复，含这条）的摘要合并成的一段，挂在段的最后一条回复上。
+ *   wait 只在「已算好、还没换上」时有（成员各自的 memory 还在、照常按行发；切点再往后挪一次才换上）。规则见 src/memory-fold.js 文件头「合并段」。
+ *   不用这个功能（memory.mergeEvery 不写）时永远不出现
+ * @property {true} [memoryIn]   这条回复已被后面的合并段覆盖（自己的 memory 已删）：不再逐轮压缩。段作废时一起删掉，这一轮回到待压缩。
+ *   读档时（memory-fold.js normalizeMerged）数不齐成员的段、孤儿标记都清掉
  * @property {true} [hidden]   隐藏楼层（酒馆的「隐藏消息」，jsonl 里是 is_system: true）：留在记录里、照常显示（变淡）、能编辑能搜，
  *                              但【不发给模型】，也不参与楼层深度、世界书扫描、上下文上限、外置记忆压缩。只在隐藏时写 true，平时不写这个字段。
  *                              和旁白（role 'system'）是两回事：旁白照常发送（作为 system 消息），旁白也可以被隐藏。
@@ -539,7 +545,10 @@ export {};
  *   界面不再读写它，读到旧值忽略，不主动清理。仍在 OPTIONAL_GLOBAL_KEYS / SELECTION_KEYS 里，所以旧值照旧不进备份、存储里没有时 state 上也删掉。
  * @property {Record<string, string|number>} globalVariables   对应 Variables.global
  * @property {WorldInfoSettings} wi
- * @property {{enabled: boolean, model: string, keep: number, batch?: number, summaryLen?: number}} memory
+ * @property {{enabled: boolean, model: string, keep: number, batch?: number, summaryLen?: number, mergeEvery?: number}} memory
+ *   mergeEvery：「每 x 条记忆再次压缩」（记忆再压缩，src/memory-fold.js 文件头「合并段」）。属于「设置」，和 summaryLen 一样跟着 memory 进整体备份、
+ *   恢复到已有数据时跟「外置记忆设置」那句问话走。【默认不写】= 不做（界面上留空 / 0 / 乱填都是删掉这个键）。
+ *   读入容错 mergeEveryOf：不是正整数 = 0（不做），1–3 按 4，超过 200 按 200。改它不动已有的合并段，只影响之后的合并
  *   batch：外置记忆「攒一批再滑动」的批大小（src/memory-fold.js）。【界面已隐藏，固定 10（2026-11-22 用户定）】：
  *   运行时（ui/memory.js foldChat）一律按 MEMORY_BATCH_DEFAULT = 10 算，存储 / 整体备份里残留的别的值被忽略（不改写存储）；
  *   界面不会再写这个键。foldCut 本身仍认 memory.batch，只为让单元测试验证各种批大小。
@@ -706,6 +715,8 @@ export {};
  *                                        导出时只在和 hidden 不一致时改写（取消隐藏会把 st.is_system 改成 false），保证没动过的行往返不变。
  *                                        规则见 src/chatfile.js 文件头。
  *   行.extra.smalltalk.memory / memoryError ↔ ChatMessage.memory / memoryError
+ *   行.extra.smalltalk.memoryMerged / memoryIn ↔ ChatMessage.memoryMerged / memoryIn（记忆再压缩；只看形状：对象 / true。
+ *                                        在酒馆里删楼、换候选之后导回来，数不齐成员的段在打开存档时被清掉，那几轮重压——不做指纹，同 memory 的已知局限）
  *                                        （放在 extra 下我们自己的命名空间里；酒馆会原样保留 extra 中不认识的键）
  *   行的其余部分（含 extra 里其它键）     ↔ ChatMessage.st（原样）
  *

@@ -18,6 +18,53 @@
 //   - 折叠切点（foldCut）、「保留最近 N 楼原文」都只数可见的楼：N 楼原文指的是发出去的 N 楼。
 //     隐藏标记也是聊天内容的一部分，所以「切点只由聊天内容和设置决定、刷新后不变」照旧成立。
 //   - 隐藏 / 取消隐藏改变了哪几轮发出去的内容，就作废哪几轮的摘要（invalidateAfterHide），和编辑、删楼同一个规矩。
+//
+// ───── 记忆再压缩：合并段（2026-11-23，设置 memory.mergeEvery = x，默认不写 = 不做） ─────
+// 聊得很长以后，每轮一行的摘要也会越积越多。已经折叠进记忆块的摘要行，从最老的开始每攒够 x 行就合并成一段。
+// 用户定的三条规矩：合并后原来的一行行不留；合并段覆盖的楼里有一楼变了，这段就作废，那些轮回到「待压缩」、各自按原文重压
+// （以后攒够了再重新合并）；「记忆」页的输入框「每 [x] 条记忆再次压缩」，留空或 0 = 不做。
+//
+// 存储（都挂在 assistant 楼上；不用这个功能的人一个字段都不多）：
+//   段的最后一条回复（锚）：memoryMerged = {text, count, wait?}
+//     text  合并出来的那一段；count 这一段覆盖几条回复（锚自己也算，含写成「-」的那几轮）
+//     wait  只在「已算好、还没换上」时有（见下面「不额外打断缓存」）；换上之后删掉
+//   段里锚以外的回复（已换上之后）：memoryIn = true（「我被后面的那一段覆盖」），自己的 memory 删掉
+//   段的成员 = 从锚往前数 count 条【可见的】回复（隐藏的回复不是成员，也不在段里发出去，见文件头「隐藏楼层」）。
+//   不存楼层号（from / to）：前端卡单删前面的楼时楼层号会整体平移，存了反而要跟着改；成员和范围每次从锚往前数出来。
+//   一段的「范围」（segmentStart … 锚）：第一条成员那一轮的第一条输入起，到锚为止；界面上的「3–24」就是它。
+//
+// 两种状态：
+//   待换上（wait 有值）：成员各自的 memory 还在、还照常按行发（记忆块里仍是一行行的），段只是一份「算好了的提议」，成员没有 memoryIn。
+//   已换上（没有 wait）：成员的 memory 删掉、锚以外的成员带 memoryIn，记忆块里这一段只占一行。
+//   「没有哪一轮既有自己的摘要又被合并段覆盖」说的是已换上的段；待换上的段可以随时整份扔掉，成员的摘要一条不少。
+//
+// 不额外打断缓存（为什么有 wait）：
+//   合并会改记忆块开头的文字。合并请求是在切点刚前移、一批原文刚换成摘要之后才发出去的（那时才攒够 x 行），
+//   结果几秒后回来——要是一回来就用上，下一次发送的记忆块又变一次，提示缓存在两次切点移动之间多断一回。
+//   所以结果写下时记下 wait = 这一刻的切点 − (锚 + 1)，规则是：切点 − (锚 + 1) > wait 才换上，也就是【切点再往后挪一次】才用。
+//   切点本来就只在「一批原文换成摘要」时移动（foldCut 第 3 条），那一刻记忆块本来就要变，合并顺带一起换上，不多断一次。
+//   性质（test/memory-merge.test.mjs 钉着）：只往后加楼、后台压缩 / 合并随便什么时候完成，记忆块的文字只在切点变化时变化。
+//   wait 是相对锚的偏移、不是绝对楼层号：前端卡单删前面的楼时锚和切点一起平移，偏移不变；删的楼在锚和切点之间时偏移偏大，
+//   只是晚一批换上（不会更早）。换上（commitMerged）只是存储上的收尾：删掉成员的行、打上 memoryIn——换上前后 foldCut 的结果逐字相同，
+//   所以什么时候收尾都行（ensureMemories 每次开始和结束时做）。
+//   切点因为删掉最近的楼而退回到一段已换上的合并段中间时：切点再退到这一段开头之前（这一段整段照发原文），
+//   不把段劈开（段是一整段文字，没法只发一半）。和第 2 条「宁可多发也不丢内容」同一个方向。待换上的段被切点劈开时照旧按行发。
+//
+// 什么时候合并（nextMergeGroup）：只看已折叠（切点之前）的可见回复，跳过已经在某一段里（含待换上）的，从最老的开始，
+//   连续攒够 x 行（写成「-」的不算行数、但算成员）就是一组；中间隔着一段的不连起来（一段作废后中间空出来、不够 x 行的就留着按行发）。
+//   只做一层：合并出来的段不再被二次合并（多段按时间顺序排在记忆块里，通常就是最前面那几行）。这是有意的，以后要做多层再说。
+//   改小 / 改大 / 关掉 mergeEvery：已有的段不动（已经合并的保持，待换上的照常换上），只影响之后的合并。
+//
+// 作废（mergedSegments 读出段，dissolve 拆掉）：拆掉已换上的段 = 删 memoryMerged、删成员的 memoryIn，成员都没有摘要了，交给 ensureMemories 逐轮重压；
+//   拆掉待换上的段 = 只删 memoryMerged（成员的行原本就在）。入口：
+//   - invalidateTurnAt（编辑、前端卡改原文、换候选 / 重新生成后由调用方调）：作废的那条回复在哪一段里，就拆那一段；
+//   - setHidden：要改隐藏状态的楼落在某一段的「取材范围」里（从这一段前面最近的可见非用户楼起到锚，用改之前的状态算），就拆那一段——
+//     隐藏 / 取消隐藏会改变成员的取材、让成员进出发送内容、或让段里多出一条可见的回复，统统作废（和「取材变了就作废」同一个规矩，偏保守）；
+//   - invalidateAfterDelete（前端卡单删）：删掉的楼落在某一段的取材范围里，拆那一段；
+//   - invalidateBeforeTruncate（「删这一楼及之后」）：锚在被删范围里的段（被切进了覆盖范围）拆掉；
+//   - 「记忆」页的「重压」、把段的文字清空：dissolveMerged。
+//   读档时（normalizeMerged，state.js applyCardChat）和 ensureMemories 开始时：形状不对的段、数不出 count 条成员的段、
+//   成员状态对不上的段删掉；不属于任何合法段的 memoryIn（孤儿标记）删掉——被清掉标记的轮没有摘要，回到待压缩。坏数据不会让页面打不开。
 
 /** 这一楼是不是隐藏楼层（只认 true：默认不写这个字段） */
 export const isHidden = m => m?.hidden === true;
@@ -67,13 +114,15 @@ export function invalidateAfterHide(chat, wasHidden) {
         if (chat[r]?.role !== 'assistant') continue;
         if (isHidden(chat[r])) {
             // 这次被隐藏的：隐藏之前的取材（摘要就是按它压的）和原本的样子对不上 → 作废
-            if (!wasHidden(r) && !sameList(turnInputs(chat, r, wasHidden), original(r)) && dropMemory(chat[r])) hit.push(r);
+            if (!wasHidden(r) && !sameList(turnInputs(chat, r, wasHidden), original(r)) && dropTurn(chat, r)) hit.push(r);
             continue;
         }
         const now = turnInputs(chat, r);
         const before = wasHidden(r) ? original(r) : turnInputs(chat, r, wasHidden);
-        if (!sameList(now, before) && dropMemory(chat[r])) hit.push(r);
+        if (!sameList(now, before) && dropTurn(chat, r)) hit.push(r);
     }
+    // 合并段：经 setHidden 来的，受影响的段在改标记之前就拆过了；直接调用本函数时这里兜底，把对不上的段 / 孤儿标记清掉
+    normalizeMerged(chat);
     return hit;
 }
 
@@ -90,7 +139,10 @@ export function invalidateAfterHide(chat, wasHidden) {
 export function setHidden(chat, indexes, hide) {
     const before = chat.map(isHidden);
     const changed = [];
-    for (const i of new Set([...indexes].map(Number))) {
+    const want = [...new Set([...indexes].map(Number))];
+    // 合并段：要改的楼落在哪一段的取材范围里，就先（按改之前的隐藏状态）拆掉那一段（规则见文件头「合并段」）
+    const dissolved = dissolveTouched(chat, want.filter(i => Number.isInteger(i) && chat[i] && isHidden(chat[i]) !== hide));
+    for (const i of want) {
         const m = chat[i];
         if (!Number.isInteger(i) || !m) continue;
         const stFlag = m.st && typeof m.st === 'object' && m.st.is_system;
@@ -107,7 +159,8 @@ export function setHidden(chat, indexes, hide) {
     }
     changed.sort((a, b) => a - b);
     const invalidated = changed.length ? invalidateAfterHide(chat, k => before[k] ?? false) : [];
-    return { changed, invalidated };
+    // 被拆掉的已换上的段，成员也算「被作废」（没有合并段时这一步什么都不加，结果和以前一样）
+    return { changed, invalidated: dissolved.length ? [...new Set([...invalidated, ...dissolved])].sort((a, b) => a - b) : invalidated };
 }
 
 /** 摘要写成这个值表示「这一轮没有值得记的内容」：算作已处理（不挡住后面的折叠），但不进记忆块。也可以在记忆页手动填。 */
@@ -177,26 +230,304 @@ export function batchSize(memory) {
  * 和「上下文上限」（assemble.js）的配合：先折叠、后上限。上限只在 chat.slice(cut) 里从最老的开始丢，
  * 所以多发的那几楼要是超了上限，会照常被丢掉；等切点前移，它们会以摘要的形式回来。
  *
- * @param {{role: string, memory?: string, hidden?: boolean}[]} chat
+ * 合并段（见文件头「合并段」）：已换上的段的成员算「已有摘要」（第 2 条不被它们挡住）；一段已换上的段不能被切点劈开，
+ * 劈开了就把切点再退到这一段开头之前。摘要行里，用上了的段只占一行（在锚的位置），带 merged = {from, to, count}；
+ * 待换上（还没到时候）的段照旧按成员各自的行发。没有合并段时这些都不发生，结果和以前逐字相同。
+ *
+ * @param {{role: string, memory?: string, hidden?: boolean, memoryMerged?: object, memoryIn?: true}[]} chat
  * @param {{enabled?: boolean, keep?: number, batch?: number} | null | undefined} memory  GlobalRecord.memory（运行时调用方要把 batch 盖成 MEMORY_BATCH_DEFAULT，见上）
- * @returns {{cut: number, rows: {index: number, text: string}[]}}
+ * @returns {{cut: number, rows: {index: number, text: string, merged?: {from: number, to: number, count: number}}[]}}
  */
 export function foldCut(chat, memory) {
     if (!memory?.enabled) return { cut: 0, rows: [] };
     const vis = [];   // 可见楼层的楼层号
     for (let i = 0; i < chat.length; i++) if (!isHidden(chat[i])) vis.push(i);
     const at = v => chat[vis[v]];
+    const segs = hasMergeFields(chat) ? mergedSegments(chat).segs : [];
+    const segOf = new Map();   // 楼层号 → 它所在的段
+    for (const s of segs) for (const k of s.members) segOf.set(k, s);
+    const done = i => Boolean(chat[i].memory) || segOf.get(i)?.pending === false;
     let cut = Math.max(0, vis.length - Math.max(0, Number(memory.keep) || 0));
-    const firstMissing = vis.findIndex(i => chat[i].role === 'assistant' && !chat[i].memory);
+    const firstMissing = vis.findIndex(i => chat[i].role === 'assistant' && !done(i));
     if (firstMissing >= 0) cut = Math.min(cut, firstMissing);
     const batch = batchSize(memory);
     cut = Math.floor(cut / batch) * batch;
-    while (cut > 0 && at(cut - 1).role !== 'assistant') cut--;
+    const toTurnEnd = () => { while (cut > 0 && at(cut - 1).role !== 'assistant') cut--; };
+    toTurnEnd();
+    if (segs.length) {
+        // 已换上的段被切点劈开（第一条成员在切点前、锚在切点后）：切点退到这一段开头之前。从新到旧看，切点只会往前退
+        const pos = new Map(vis.map((f, v) => [f, v]));
+        for (let k = segs.length - 1; k >= 0 && cut > 0; k--) {
+            const s = segs[k];
+            if (s.pending) continue;
+            const last = vis[cut - 1];
+            if (s.anchor <= last) break;              // 这一段整段在切点前：更早的段也一样
+            if (s.members[0] > last) continue;        // 整段在切点后：照发原文，和切点无关
+            cut = pos.get(segmentStart(chat, s));
+            toTurnEnd();
+        }
+    }
+    const cutFloor = cut ? vis[cut - 1] + 1 : 0;
     const rows = [];
     for (let v = 0; v < cut; v++) {
-        if (at(v).role === 'assistant' && at(v).memory !== MEMORY_SKIP) rows.push({ index: vis[v], text: at(v).memory });
+        const m = at(v);
+        if (m.role !== 'assistant') continue;
+        const s = segOf.get(vis[v]);
+        if (s && segmentInUse(s, cutFloor)) {
+            if (vis[v] === s.anchor) rows.push({ index: s.anchor, text: s.text, merged: { from: segmentStart(chat, s), to: s.anchor, count: s.members.length } });
+            continue;
+        }
+        if (m.memory !== MEMORY_SKIP) rows.push({ index: vis[v], text: m.memory });
     }
-    return { cut: cut ? vis[cut - 1] + 1 : 0, rows };
+    return { cut: cutFloor, rows };
+}
+
+/** 把若干行摘要拼成发给模型的记忆块。没有合并段时和以前逐字相同；有合并段时开头那句说明多半句 */
+export function memoryBlock(rows) {
+    const head = rows.some(r => r.merged)
+        ? '[此前剧情的记忆：按先后顺序，每行是一轮的摘要；较早的若干轮合并成了一段]'
+        : '[此前剧情的记忆：按先后顺序，每行是一轮的摘要]';
+    return head + '\n' + rows.map((r, k) => `${k + 1}. ${r.text}`).join('\n');
+}
+
+// ───────────────────────────── 记忆再压缩：合并段（规则见文件头「合并段」） ─────────────────────────────
+
+/** 「每 x 条记忆再次压缩」的上下限。0 = 不做 */
+export const MERGE_EVERY_MIN = 4;
+export const MERGE_EVERY_MAX = 200;
+
+/**
+ * 设置里的 mergeEvery → 实际用的 x：缺失、0、负数、小数、文字……一律 0（不做）；1–3 按 4 算（合并两三行省不了几个字，
+ * 而且会让合并请求太频繁）；超过 200 按 200。界面写入前也按同样的规则换算（ui/memory.js），所以存储里通常只会有 4–200。
+ */
+export function mergeEveryOf(memory) {
+    const v = memory?.mergeEvery;
+    if (typeof v !== 'number' && typeof v !== 'string') return 0;
+    if (typeof v === 'string' && !/^\s*\d+\s*$/.test(v)) return 0;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1) return 0;
+    return Math.min(Math.max(n, MERGE_EVERY_MIN), MERGE_EVERY_MAX);
+}
+
+/** 合并段的目标字数 = 每条摘要的字数 × 4（默认 60 → 240） */
+export const mergeLenOf = memory => summaryLenOf(memory) * 4;
+
+/** 合并用的提示词（发给摘要模型）。len = 合并段的目标字数 */
+export function mergeSystem(len = MEMORY_SUMMARY_LEN_DEFAULT * 4) {
+    return [
+        '你是剧情记录员。下面是一段角色扮演里按时间顺序排列的若干行剧情摘要，每行是一轮交互。',
+        `请把它们合并成连贯的一段中文摘要，不超过 ${len} 个字：保留出场人物、关键事件、人物关系和状态的变化，以及还没有了结的事。`,
+        '按时间顺序写，只写摘要里有的内容，不加评论、不评价、不推测后续。你不参与扮演，也不要续写剧情。',
+        '只输出这一段摘要本身：不要标题、不要序号、不要「以下是合并后的摘要」之类的引子、不要解释、不要换行。',
+    ].join('\n');
+}
+
+/** 发给摘要模型的合并请求正文：若干行摘要按时间顺序编号 */
+export const mergeBody = texts => '【按时间顺序的剧情摘要】\n' + texts.map((t, k) => `${k + 1}. ${t}`).join('\n');
+
+const isObjM = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** 聊天里有没有合并段相关的字段（没有就走和以前完全一样的快路） */
+const hasMergeFields = chat => chat.some(m => m?.memoryMerged !== undefined || m?.memoryIn !== undefined);
+
+/** memoryMerged 的形状对不对：text 非空字符串、count 正整数、wait 没有或是非负整数 */
+const segShape = mm => isObjM(mm) && typeof mm.text === 'string' && mm.text.trim() !== '' && Number.isInteger(mm.count) && mm.count >= 1
+    && (mm.wait === undefined || (Number.isInteger(mm.wait) && mm.wait >= 0));
+
+/** 这条回复被一段已换上的合并段覆盖了（不再自己压缩）。只看自己身上的标记；结构对不对由 normalizeMerged 保证 */
+export const coveredByMerge = m => m?.memoryIn === true || (isObjM(m?.memoryMerged) && m.memoryMerged.wait === undefined);
+
+/**
+ * 读出聊天里所有合法的合并段（不改 chat）。
+ * @returns {{segs: {anchor: number, members: number[], pending: boolean, text: string, wait?: number}[], bad: number[], orphans: number[]}}
+ *   segs 按时间顺序，members 旧 → 新、含锚；bad = 不合法的段的锚；orphans = 带 memoryIn 却不属于任何合法的已换上的段的楼
+ */
+export function mergedSegments(chat) {
+    const segs = [], bad = [], claimed = new Set(), coveredOk = new Set();
+    for (let a = chat.length - 1; a >= 0; a--) {
+        const m = chat[a];
+        if (m?.memoryMerged === undefined) continue;
+        const mm = m.memoryMerged;
+        if (m.role !== 'assistant' || isHidden(m) || !segShape(mm) || claimed.has(a)) { bad.push(a); continue; }
+        const pending = mm.wait !== undefined;
+        const members = [];
+        let ok = true;
+        for (let k = a; k >= 0 && members.length < mm.count; k--) {
+            const x = chat[k];
+            if (isHidden(x) || x?.role !== 'assistant') continue;
+            if (k !== a && (x.memoryMerged !== undefined || claimed.has(k))) { ok = false; break; }
+            const fits = pending
+                ? typeof x.memory === 'string' && x.memory !== '' && x.memoryIn === undefined                    // 待换上：成员的行都在、没有标记
+                : x.memory === undefined && (k === a ? x.memoryIn === undefined : x.memoryIn === true);          // 已换上：行已删、锚以外带标记
+            if (!fits) { ok = false; break; }
+            members.unshift(k);
+        }
+        if (!ok || members.length !== mm.count) { bad.push(a); continue; }
+        for (const k of members) { claimed.add(k); if (!pending) coveredOk.add(k); }
+        segs.unshift(pending ? { anchor: a, members, pending, text: mm.text, wait: mm.wait } : { anchor: a, members, pending, text: mm.text });
+    }
+    const orphans = [];
+    chat.forEach((m, i) => { if (m?.memoryIn !== undefined && !coveredOk.has(i)) orphans.push(i); });
+    return { segs, bad: bad.sort((x, y) => x - y), orphans };
+}
+
+/** 一段的范围从哪一楼起：第一条成员那一轮的第一条可见输入（没有输入就是它自己） */
+export function segmentStart(chat, seg) {
+    const m0 = seg.members[0];
+    return turnInputs(chat, m0)[0] ?? m0;
+}
+
+/** 这一段现在用不用（cutFloor = 完整记录里的切点）：已换上的整段在切点前就用；待换上的还要等切点比写下时再往后挪 */
+const segmentInUse = (s, cutFloor) => s.anchor < cutFloor && (!s.pending || cutFloor - (s.anchor + 1) > s.wait);
+
+/**
+ * 读档 / 兜底的规范化（原地改 chat）：删掉不合法的段（memoryMerged）和孤儿标记（memoryIn）。
+ * 被删掉标记、又没有自己摘要的轮回到待压缩（ensureMemories 会重压）；待换上的段被删，成员的行原本就在，不受影响。
+ * @returns {boolean} 改没改
+ */
+export function normalizeMerged(chat) {
+    if (!Array.isArray(chat) || !hasMergeFields(chat)) return false;
+    let changed = false;
+    // 删掉一段坏的之后，别的段的判断不受影响（每段只看自己的成员）；保险起见做到不再变化为止
+    for (let round = 0; round < 5; round++) {
+        const { bad, orphans } = mergedSegments(chat);
+        if (!bad.length && !orphans.length) break;
+        for (const a of bad) delete chat[a].memoryMerged;
+        for (const i of orphans) delete chat[i].memoryIn;
+        changed = true;
+    }
+    return changed;
+}
+
+/** 拆掉一段（seg 来自 mergedSegments）。已换上的：成员的标记一起删，成员没有摘要了，交给 ensureMemories 逐轮重压 */
+function dissolve(chat, seg) {
+    delete chat[seg.anchor].memoryMerged;
+    if (!seg.pending) for (const k of seg.members) delete chat[k].memoryIn;
+}
+
+/** 第 r 条回复所在的段（没有返回 null） */
+function segmentOfReply(chat, r) {
+    if (!hasMergeFields(chat)) return null;
+    return mergedSegments(chat).segs.find(s => s.members.includes(r)) ?? null;
+}
+
+/**
+ * 拆掉第 r 条回复所在的那一段（它是那一段的成员时）。给「记忆」页、以及换候选 / 重新生成之后的调用方用。
+ * @returns {number[]} 被拆的段的成员（没拆返回 []）
+ */
+export function dropMergedAt(chat, r) {
+    const s = segmentOfReply(chat, r);
+    if (!s) return [];
+    dissolve(chat, s);
+    return s.members;
+}
+
+/** 「记忆」页的「重压」/ 清空段文字：拆掉锚在第 anchor 楼的那一段。@returns {boolean} */
+export function dissolveMerged(chat, anchor) {
+    const s = hasMergeFields(chat) ? mergedSegments(chat).segs.find(x => x.anchor === anchor) : null;
+    if (!s) return false;
+    dissolve(chat, s);
+    return true;
+}
+
+/** 一段的「取材范围」起点：第一条成员前面最近的可见非用户楼（改它的隐藏状态 / 删掉它都会让第一条成员的输入变）；没有就是 0 */
+function touchStart(chat, seg) {
+    for (let j = seg.members[0] - 1; j >= 0; j--) {
+        if (isHidden(chat[j]) || chat[j]?.role === 'user') continue;
+        return j;
+    }
+    return 0;
+}
+
+/** floors 里有落在某一段取材范围 [touchStart, 锚] 里的，就拆那一段。按【现在】的隐藏状态算（调用方在改之前调）。@returns {number[]} 被拆的已换上的段的成员 */
+function dissolveTouched(chat, floors) {
+    if (!floors.length || !hasMergeFields(chat)) return [];
+    const out = [];
+    for (const s of mergedSegments(chat).segs) {
+        const lo = touchStart(chat, s);
+        if (!floors.some(f => f >= lo && f <= s.anchor)) continue;
+        dissolve(chat, s);
+        if (!s.pending) out.push(...s.members);
+    }
+    return out;
+}
+
+/**
+ * 「删除这一楼及之后」（截断到 i 楼，chat.js deleteFrom）之前调：锚在被删范围里的段（被切进了覆盖范围，或整段都要删）拆掉。
+ * 留下来的成员没有摘要了，交给 ensureMemories 重压。原地改 chat。@returns {number} 拆了几段
+ */
+export function invalidateBeforeTruncate(chat, i) {
+    if (!hasMergeFields(chat)) return 0;
+    let n = 0;
+    for (const s of mergedSegments(chat).segs) if (s.anchor >= i) { dissolve(chat, s); n++; }
+    return n;
+}
+
+/**
+ * 下一组该合并的回复（楼层号，旧 → 新）；没有返回 null。规则见文件头「什么时候合并」。
+ * @param {object[]} chat
+ * @param {object} memory   和 foldCut 一样的设置（运行时 batch 已盖成 10）
+ * @param {number} every    mergeEveryOf 的结果；0 = 不做
+ */
+export function nextMergeGroup(chat, memory, every) {
+    if (!memory?.enabled || !(every >= 1)) return null;
+    const { cut } = foldCut(chat, memory);
+    const inSeg = new Set();
+    if (hasMergeFields(chat)) for (const s of mergedSegments(chat).segs) for (const k of s.members) inSeg.add(k);
+    let run = [], rows = 0;
+    for (let i = 0; i < cut; i++) {
+        const m = chat[i];
+        if (isHidden(m) || m?.role !== 'assistant') continue;
+        if (inSeg.has(i) || typeof m.memory !== 'string' || !m.memory) { run = []; rows = 0; continue; }
+        run.push(i);
+        if (m.memory !== MEMORY_SKIP) rows++;
+        if (rows >= every) return run;
+    }
+    return null;
+}
+
+/** 一组成员的「取材指纹」：合并请求发出去时记下，结果回来时核对（成员的原文、输入、摘要行、范围里有哪些可见回复都没变才写） */
+export function mergeFingerprint(chat, members) {
+    if (!Array.isArray(chat) || !members.length) return '';
+    const lo = members[0], hi = members.at(-1);
+    const replies = [];
+    for (let k = lo; k <= hi && k < chat.length; k++) if (!isHidden(chat[k]) && chat[k]?.role === 'assistant') replies.push(k);
+    return JSON.stringify([replies, members.map(k => {
+        const m = chat[k];
+        return m ? [m.role, isHidden(m), m.content, m.memory ?? null, turnInputs(chat, k).map(j => chat[j].content)] : null;
+    })]);
+}
+
+/**
+ * 合并结果写下（待换上）。调用方先用 mergeFingerprint 核对过、确认这些楼都还不在任何段里。原地改 chat。
+ * wait = 这一刻的切点 − (锚 + 1)：切点再往后挪一次才换上（见文件头「不额外打断缓存」）
+ */
+export function applyMerge(chat, members, text, memory) {
+    const anchor = members.at(-1);
+    const { cut } = foldCut(chat, memory);
+    chat[anchor].memoryMerged = { text, count: members.length, wait: Math.max(0, cut - (anchor + 1)) };
+}
+
+/**
+ * 把已经用上了的待换上的段「换上」：删掉成员各自的行、打上 memoryIn、去掉 wait。前后 foldCut 的结果逐字相同（只是存储上的收尾）。
+ * @returns {number} 换上了几段
+ */
+export function commitMerged(chat, memory) {
+    if (!memory?.enabled || !hasMergeFields(chat)) return 0;
+    const { cut } = foldCut(chat, memory);
+    let n = 0;
+    for (const s of mergedSegments(chat).segs) {
+        if (!s.pending || !segmentInUse(s, cut)) continue;
+        for (const k of s.members) {
+            delete chat[k].memory;
+            delete chat[k].memoryError;
+            if (k !== s.anchor) chat[k].memoryIn = true;
+        }
+        const { wait: _w, ...rest } = chat[s.anchor].memoryMerged;
+        chat[s.anchor].memoryMerged = rest;
+        n++;
+    }
+    return n;
 }
 
 /** 第 i 楼所在的那一轮的回复：它自己是回复就是它；是用户输入（或旁白）就是它后面第一条回复；没有返回 -1 */
@@ -211,6 +542,15 @@ function dropMemory(msg) {
     delete msg.memory;
     delete msg.memoryError;
     return true;
+}
+
+/**
+ * 第 r 条回复这一轮作废：它在某一段合并段里就先拆那一段（成员回到待压缩），再去掉它自己的摘要。
+ * 返回有没有真的作废什么。没有合并段时等于 dropMemory。
+ */
+function dropTurn(chat, r) {
+    const hit = dropMergedAt(chat, r).length > 0;
+    return dropMemory(chat[r]) || hit;
 }
 
 /**
@@ -235,9 +575,11 @@ function visibleReplyOf(chat, i) {
  */
 export function invalidateTurnAt(chat, i) {
     const r = turnReplyIndex(chat, i);
-    if (r >= 0) dropMemory(chat[r]);
+    if (r >= 0) dropTurn(chat, r);
     const v = visibleReplyOf(chat, i);
-    if (v >= 0 && v !== r) dropMemory(chat[v]);
+    if (v >= 0 && v !== r) dropTurn(chat, v);
+    // 兜底：换候选时 chatfile.js selectSwipe / appendSwipe 先删了这一楼的摘要，待换上的段因此数不齐成员、上面找不到它——这里清掉
+    normalizeMerged(chat);
     return r;
 }
 
@@ -255,6 +597,8 @@ export function invalidateTurnAt(chat, i) {
  */
 export function invalidateAfterDelete(chat, drop) {
     const gone = new Set([...drop].map(Number).filter(i => Number.isInteger(i) && i >= 0 && i < chat.length));
+    // 合并段：删掉的楼落在哪一段的取材范围里（含删掉成员、锚本身），先拆掉那一段（规则见文件头「合并段」）
+    dissolveTouched(chat, [...gone]);
     const hit = new Set();
     for (const i of gone) {
         for (let k = i + 1; k < chat.length; k++) {
@@ -272,6 +616,6 @@ export function invalidateAfterDelete(chat, drop) {
             }
         }
     }
-    for (const k of hit) dropMemory(chat[k]);
+    for (const k of hit) dropTurn(chat, k);
     return [...hit].sort((a, b) => a - b);
 }

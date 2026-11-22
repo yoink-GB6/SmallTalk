@@ -75,6 +75,9 @@ function applyDisabled() {
 
 /** 写一处改动。被拦下就提示并把框恢复成存着的值 */
 function commit(patch) {
+    // 框里填的还是【上一个存档】的内容（存档切走了，但焦点在框里，重画被推迟，见 tab-archive.js draw()）：
+    // 这时再打字不能写进新存档——复核实测过，旧存档的注释加上新打的字会盖掉新存档自己的注释。丢掉这次输入，重新填成新存档的值
+    if (filledEpoch !== persist.epoch) { filledEpoch = null; fill(); applyDisabled(); refreshDerived(); return; }
     const why = !persist.chatMeta ? '还没有存档' : chatWriteBlocked(persist.epoch, '改作者注释');
     if (why !== null) {
         if (why) toast(why, 'error');

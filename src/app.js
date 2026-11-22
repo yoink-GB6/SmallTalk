@@ -6,7 +6,7 @@ import { $ } from './ui/dom.js';
 import { state, ui, card, save } from './ui/state.js';
 import { permanentRegex, refreshPreview } from './ui/pipeline.js';
 import { ensureMemories } from './ui/memory.js';
-import { scrollChatToEnd, send } from './ui/chat.js';
+import { scrollChatToEnd, send, swipedTurn } from './ui/chat.js';
 import { appendSwipe } from './chatfile.js';
 import { importFiles } from './ui/importer.js';
 import { restoreActive } from './ui/backup.js';
@@ -66,6 +66,7 @@ function bind() {
         ui.manualTarget = null;
         if (target && state.chat.at(-1) === target) {
             appendSwipe(target, permanentRegex(text, 'assistant'));   // 顺带作废这一楼旧候选的记忆摘要
+            swipedTurn(target);                                        // 它在合并段里的话那一段也作废（chat.js）
             ui.rendered.delete(state.chat.length - 1);
         } else state.chat.push({ role: 'assistant', name: card().name, content: permanentRegex(text, 'assistant') });
         $('#manual-reply').value = '';

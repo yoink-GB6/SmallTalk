@@ -7,7 +7,7 @@ import { $, h, toast } from './dom.js';
 import { state, ui, card, save, preset, persist, STOPPED_TEXT } from './state.js';
 import { macroContext, permanentRegex, displayText, computePrompt, displayDepth, hiddenSummary } from './pipeline.js';
 import { ensureMemories, renderMemoryIfActive } from './memory.js';
-import { invalidateTurnAt, turnReplyIndex, isHidden, setHidden } from '../memory-fold.js';
+import { invalidateTurnAt, turnReplyIndex, isHidden, setHidden, invalidateBeforeTruncate } from '../memory-fold.js';
 import { restoreActive } from './backup.js';   // 循环依赖（backup.js 经 archive.js 间接导入本文件）：只在函数体里调用
 import { frameHostFor } from './frame-host.js';
 import { readSwipes, swipeTarget, selectSwipe, appendSwipe, ensureSwipes, syncSwipeSlot } from '../chatfile.js';
@@ -246,11 +246,15 @@ export function editMessage(i, epoch = persist.epoch) {
         row.classList.remove('editing');
         if (!stillCurrent(epoch)) return;   // 编辑期间切换了存档：这次编辑作废，不能写进新存档的第 i 楼
         if (commit) {
+            const before = state.chat[i].content;
             state.chat[i].content = permanentRegex(ta.value, state.chat[i].role, true);
             syncSwipeSlot(state.chat[i]);   // 改的是当前这个候选（酒馆 messageEditDone：mes.swipes[mes.swipe_id] = text）
-            // 原文改了，这一轮的摘要作废重压：改的是回复就是它自己，改的是用户输入就是紧跟着的那条回复（规则见 memory-fold.js）
-            invalidateTurnAt(state.chat, i);
-            setTimeout(ensureMemories, 0);
+            // 原文改了，这一轮的摘要作废重压：改的是回复就是它自己，改的是用户输入就是紧跟着的那条回复（规则见 memory-fold.js）。
+            // 没改内容就点了保存：什么都不作废——这一楼要是在合并段里，作废会把整段拆掉、白白重压几十轮（复核实测 x=20 就是 20 轮）
+            if (state.chat[i].content !== before) {
+                invalidateTurnAt(state.chat, i);
+                setTimeout(ensureMemories, 0);
+            }
         }
         ui.rendered.delete(i);
         save();
@@ -278,6 +282,8 @@ export function deleteFrom(i, epoch) {
     // 删的是用户输入、后面还有这一轮的回复时，把「回复也会一起删掉」说出来（只删最后一楼时照旧不问）
     const reply = state.chat[i]?.role !== 'assistant' && turnReplyIndex(state.chat, i) > i;
     if (n > 1 && !confirm(`删除第 ${i} 楼及之后共 ${n} 楼？${reply ? '\n这一轮的回复（连同它的候选和记忆摘要）也会一起删掉。' : ''}`)) return;
+    // 外置记忆的合并段被切进了覆盖范围（锚在被删的楼里）：这一段作废，留下的那几轮回到待压缩（memory-fold.js 文件头「合并段」）
+    if (invalidateBeforeTruncate(state.chat, i)) setTimeout(ensureMemories, 0);
     state.chat.length = i;
     ui.rendered.clear();
     $('#chat').replaceChildren();
@@ -401,8 +407,10 @@ export async function generateReply({ swipe = false } = {}) {
             },
         });
         const text = permanentRegex(full, 'assistant');
-        if (target) appendSwipe(target, text);   // 顺带作废这一楼旧候选的记忆摘要
-        else {
+        if (target) {
+            appendSwipe(target, text);   // 顺带作废这一楼旧候选的记忆摘要
+            swipedTurn(target);          // 它在合并段里的话，那一段也作废
+        } else {
             msg.content = text;
             // 酒馆 saveReply：回复一保存就带上 swipes=[mes]、swipe_id=0（~6800）
             msg.swipes = [text];
@@ -412,7 +420,7 @@ export async function generateReply({ swipe = false } = {}) {
     } catch (e) {
         if (e.name !== 'AbortError') showGenError(e.message);
         if (target) {
-            if (streamed) { appendSwipe(target, streamed); setTimeout(ensureMemories, 0); }
+            if (streamed) { appendSwipe(target, streamed); swipedTurn(target); setTimeout(ensureMemories, 0); }
         } else if (!msg.content) {
             // 按对象删占位：生成中聊天可能被别的入口改过（前端卡的 createChatMessages 等），最后一楼不一定还是它。
             // 已经不在聊天里（被删掉了）就什么都不做
@@ -465,6 +473,16 @@ export function regenerate(i, epoch) {
 
 // ───────────────────────────── swipe ─────────────────────────────
 // 规则在 src/chatfile.js 的 swipe 小节（对照酒馆 script.js swipe() / isMessageSwipeable）。这里只管界面。
+
+/**
+ * 换了候选（selectSwipe / appendSwipe 之后调）：chatfile.js 那两个函数只删这一楼自己的摘要，不知道合并段；
+ * 这里按「这一轮原文变了」走一遍 invalidateTurnAt，它在合并段里的话那一段作废（memory-fold.js 文件头「合并段」）。
+ * 也给 app.js 的手动模式用
+ */
+export function swipedTurn(msg) {
+    const i = state.chat.indexOf(msg);
+    if (i >= 0) invalidateTurnAt(state.chat, i);
+}
 
 /**
  * 这一楼能不能滑：酒馆 isMessageSwipeable（~9183）——最后一楼、不是用户消息。我们另外有两处收紧：
@@ -524,6 +542,7 @@ export function swipe(i, dir, epoch) {
     }
     ensureSwipes(msg);   // 老存档：从 st 里提升出来；当前格先写成 content
     if (!selectSwipe(msg, to)) return;   // 只有一个候选时向左 = 不动
+    swipedTurn(msg);                     // 它在合并段里的话，那一段也作废（keep 设成 0 时最后一楼也可能已经被合并）
     // 外置记忆：selectSwipe 已经删掉了旧候选的摘要。重新压缩交给 ensureMemories：它用原文快照判断结果还作不作数，
     // 所以连续快速切换时，压到一半的旧结果会被丢掉，不会把别的候选的摘要写到这一楼上
     setTimeout(ensureMemories, 0);
