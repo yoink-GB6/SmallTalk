@@ -30,3 +30,7 @@
 
 !/.gitignore
 !/.gitattributes
+
+# 许可证；Cloudflare / 其它构建环境用的 Node 版本
+!/LICENSE
+!/.node-version
