@@ -334,16 +334,18 @@ export function frameStubMain(BOOT) {
         if (!m) throw new Error('getMessageId: 无法从 ' + name + ' 解析出楼层号');
         return Number(m[1]);
     };
+    // 酒馆助手 errorCatched：记下错误（它还弹 toastr）之后【再抛出】（2026-11-23 第 2 期改：以前吞掉了）
     impl.errorCatched = function (fn) {
         return function () {
             try {
                 var r = fn.apply(this, arguments);
                 if (r && typeof r.then === 'function') {
-                    return r.then(null, function (err) { hostLog('error', toText(err) + hint(toText(err))); });
+                    return r.then(null, function (err) { hostLog('error', toText(err) + hint(toText(err))); throw err; });
                 }
                 return r;
             } catch (err) {
                 hostLog('error', toText(err) + hint(toText(err)));
+                throw err;
             }
         };
     };
@@ -450,11 +452,12 @@ export const BRIDGED_API = Object.freeze([
     { name: 'createChatMessages', args: '[messages: {role, message, name?, is_hidden?, data?}[], option?: {insert_at?, refresh?}]', returns: 'void' },
     { name: 'deleteChatMessages', args: '[message_ids: number[], option?: {refresh?}]', returns: 'void' },
     { name: 'getLastMessageId', args: '[]', returns: 'number（酒馆助手里是同步的，这里是 Promise）' },
-    { name: 'getVariables', args: '[option?: {type?: "chat"|"global"|"message"|"character"|"script", message_id?}]', returns: 'Record<string, any>（同上，Promise）' },
+    { name: 'getVariables', args: '[option?: {type?: "chat"|"global"|"message"|"character", message_id?}]', returns: 'Record<string, any>（同上，Promise）。type 真的生效（作用域见 ui/frame-host.js 文件头）；"script" 只有脚本里有，前端卡调会被拒绝' },
     { name: 'replaceVariables', args: '[variables: object, option?]', returns: 'void' },
-    { name: 'insertOrAssignVariables', args: '[variables: object, option?]', returns: 'void' },
-    { name: 'insertVariables', args: '[variables: object, option?]', returns: 'void' },
-    { name: 'deleteVariable', args: '[path: string, option?]', returns: '{variables, delete_occurred}' },
+    { name: 'insertOrAssignVariables', args: '[variables: object, option?]', returns: '新表（深合并，数组整体替换）' },
+    { name: 'insertVariables', args: '[variables: object, option?]', returns: '新表（只补没有的）' },
+    { name: 'deleteVariable', args: '[path: string, option?]', returns: '{variables, delete_occurred}（path 是 lodash 路径 a.b / a[0]）' },
+    { name: 'getAllVariables', args: '[]', returns: '全局 → 角色卡 → 聊天 → 0 楼到本楼的楼层变量，浅合并（酒馆助手 _getAllVariables）' },
     { name: 'triggerSlash', args: '[command: string]', returns: 'string（triggerSlashWithResult 是别名）' },
     { name: 'substitudeMacros', args: '[text: string]', returns: 'string（拼写沿用酒馆助手）' },
     { name: 'getCharData', args: '[name?: string]', returns: '角色卡原始 JSON 或 null' },
@@ -495,5 +498,5 @@ export const UNIMPLEMENTED_API = Object.freeze([
     'getChatWorldbookName', 'getOrCreateChatWorldbook', 'getWorldbook', 'replaceWorldbook', 'updateWorldbookWith',
     'createWorldbookEntries', 'deleteWorldbookEntries', 'rebindGlobalWorldbooks', 'rebindCharWorldbooks',
     'rebindChatWorldbook', 'initializeGlobal', 'waitGlobalInitialized', 'getScriptButtons', 'replaceScriptButtons',
-    'getButtonEvent', 'reloadIframe', 'getAllVariables',
+    'getButtonEvent', 'reloadIframe',
 ]);

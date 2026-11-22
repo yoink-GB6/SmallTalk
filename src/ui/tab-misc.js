@@ -34,11 +34,14 @@ export function renderMiscTab() {
     renderMiscLog();
 }
 
+/** 一条日志的文字：前端卡写楼层号（#3），酒馆助手脚本写脚本名（「名字」）；「脚本」页的日志区也用它 */
+export const logLineText = l => `${l.time} ${l.scriptId !== undefined ? `「${l.scriptName ?? l.scriptId ?? '脚本沙箱'}」` : `#${l.messageId}`} [${l.level}] ${l.text}`;
+
 export function renderMiscLog() {
     const box = $('#frame-log');
     if (!box) return;
     box.replaceChildren(...(ui.frameLog.length
-        ? ui.frameLog.slice(-120).map(l => h('div', { class: `log-line ${l.level}` }, `${l.time} #${l.messageId} [${l.level}] ${l.text}`))
+        ? ui.frameLog.slice(-120).map(l => h('div', { class: `log-line ${l.level}` }, logLineText(l)))
         : [h('span', { class: 'dim' }, '（暂无）')]));
     box.scrollTop = box.scrollHeight;
 }

@@ -41,16 +41,19 @@ import { buildBackup, backupFileName, parseBackup, planBackupImport, mergeIndex,
 import { encryptBackup, decryptBackup, cryptoAvailable, BackupCryptoError } from '../backup-crypto.js';
 import { listEndpoints, createEndpoint, updateEndpoint, exportEndpointsForBackup, backendKind } from '../llm.js';
 import { h, toast, uid, download } from './dom.js';
-import { ui, persist, presets, flushNow, presetBlocked, reloadGlobalFromStore, stopSaving, STOPPED_TEXT } from './state.js';
+import { ui, persist, presets, flushNow, presetBlocked, reloadGlobalFromStore, reloadCardVars, stopSaving, STOPPED_TEXT } from './state.js';
 import { runArchiveOp, openChat, showStoreError } from './archive.js';
 import { renderAll } from './shell.js';
+import { stopScripts, reconcileScripts } from './script-host.js';   // 循环依赖：只在函数体里调用
+import { CARDVARS_PREFIX, cardVarsKey, unionCardVars } from '../cardvars.js';
 import { invalidateArchiveTab } from './tab-archive.js';
 import { refreshEndpoints } from './tab-provider.js';   // 循环依赖：只在函数体里调用
 
 let exporting = false;
 let importing = false;
 
-const isBackupKey = k => k === 'global' || k.startsWith('card:') || k.startsWith('chat:') || k.startsWith('preset:');
+// cardvars:<cardId>（脚本变量、角色卡变量，cardvars.js）跟着卡进备份（buildBackup 把它挂在卡那一项的 vars 上）
+const isBackupKey = k => k === 'global' || k.startsWith('card:') || k.startsWith('chat:') || k.startsWith('preset:') || k.startsWith(CARDVARS_PREFIX);
 const isLegacyKey = k => k === 'state' || k.startsWith('state.v1.bak');
 const MIN_PW_WITH_KEYS = 8;
 
@@ -513,6 +516,7 @@ export async function importBackupFile(file) {
     } finally {
         parsed = null;
         importing = false;
+        reconcileScripts();   // 恢复期间脚本是停着的（doImport 开头 stopScripts）：现在按当前卡重新跑
     }
 }
 
@@ -539,6 +543,7 @@ export async function importBackupObject(backup) {
         return result;
     } finally {
         importing = false;
+        reconcileScripts();   // 同 importBackupFile
     }
 }
 
@@ -595,6 +600,7 @@ async function importEndpoints(items) {
  */
 async function doImport(backup, { applySettings, fresh }) {
     persist.paused = true;
+    stopScripts();   // 恢复期间不运行任何脚本（它们的变量写、改聊天都会被拒，但定时器还在跑没意义）；结束后 reconcileScripts 按当前卡重建
     let wroteGlobal = false;
     let outcome = '没有写入任何东西，原有数据没有动';   // 失败时提示里说清楚停在哪一步
     try {
@@ -622,16 +628,20 @@ async function doImport(backup, { applySettings, fresh }) {
             ...plan.cards.map(c => ({ set: cardKey(c.id), value: c })),
             ...plan.chats.map(c => ({ set: chatKey(c.cardId, c.id), value: c })),
             ...plan.indexes.map(i => ({ set: indexKey(i.cardId), value: i })),
+            // 新建的卡带过来的脚本变量 / 角色卡变量（cardvars:<新卡 id>）
+            ...plan.cardvars.map(c => ({ set: cardVarsKey(c.cardId), value: c.value })),
         ];
         // 新 id 都是刚生成的随机 uuid，理论上不会和已有的键撞；真撞了宁可不导入，也不覆盖
         const taken = new Set(keys);
         const clash = sets.find(s => taken.has(s.set));
         if (clash) throw new Error(`新记录的键已经存在（${clash.set}），为了不覆盖已有数据，没有导入`);
-        if (!sets.length && !plan.global) return { plan, switchTo: null };
+        if (!sets.length && !plan.global && !plan.cardvarsMerges.length) return { plan, switchTo: null };
 
-        // 写：一个事务。并进已有卡的目录和旧 global 在同一个事务里现读
+        // 写：一个事务。并进已有卡的目录、并进已有卡的 cardvars、旧 global 都在同一个事务里现读
         const mergeKeys = plan.merges.map(m => indexKey(m.cardId));
-        const readKeys = [...mergeKeys, 'global'];
+        const cvKeys = plan.cardvarsMerges.map(m => cardVarsKey(m.cardId));
+        const readKeys = [...mergeKeys, ...cvKeys, 'global'];
+        const cvMerged = new Map();   // cardvars 键 → 合并后的值（读回校验、撤销用）
         let before = [];
         const merged = new Map();   // 目录键 → 补好的目录
         const planned = JSON.stringify(storedGlobal);
@@ -644,6 +654,12 @@ async function doImport(backup, { applySettings, fresh }) {
             plan.merges.forEach((m, i) => {
                 const next = mergeIndex(values[i], m.cardId, m.chats);
                 if (next) { ops.push({ set: mergeKeys[i], value: next }); merged.set(mergeKeys[i], next); }
+            });
+            // 并进本机已有的卡：按键取并集，本机已有的键保留本机的值（cardvars.js unionCardVars）；没有新东西就不写
+            plan.cardvarsMerges.forEach((m, i) => {
+                const mine = values[mergeKeys.length + i];
+                const u = unionCardVars(mine, m.value);
+                if (u.added && u.value) { ops.push({ set: cvKeys[i], value: u.value }); cvMerged.set(cvKeys[i], u.value); }
             });
             if (plan.global) ops.push({ set: 'global', value: plan.global });
             return ops;
@@ -661,11 +677,17 @@ async function doImport(backup, { applySettings, fresh }) {
                 const idx = await store.get(ik);
                 if (!m.chats.every(c => idx?.chats?.[c.id])) throw new Error(`读回校验不一致：${ik}`);
             }
+            for (const [k, v] of cvMerged) if (JSON.stringify(await store.get(k)) !== JSON.stringify(v)) throw new Error(`读回校验不一致：${k}`);
             if (plan.global && JSON.stringify(await store.get('global')) !== JSON.stringify(plan.global)) throw new Error('读回校验不一致：global');
         } catch (e) {
-            // 撤掉：删的只有这次新生成 id 的键（不可能是已有的数据），目录和 global 还原成写之前读到的
+            // 撤掉：删的只有这次新生成 id 的键（不可能是已有的数据），目录、cardvars 和 global 还原成写之前读到的
             const undo = sets.map(s => ({ del: s.set }));
             mergeKeys.forEach((k, i) => { if (merged.has(k) && before[i] !== undefined) undo.push({ set: k, value: before[i] }); });
+            cvKeys.forEach((k, i) => {
+                if (!cvMerged.has(k)) return;
+                const old = before[mergeKeys.length + i];
+                undo.push(old === undefined ? { del: k } : { set: k, value: old });
+            });
             if (wroteGlobal) undo.push(before.at(-1) === undefined ? { del: 'global' } : { set: 'global', value: before.at(-1) });
             try {
                 await store.batch(undo);
@@ -691,6 +713,8 @@ async function doImport(backup, { applySettings, fresh }) {
         // 写了 global（内容有新增，或应用了备份里的设置）：重读全局层，人设 / 世界书 / 正则 / 便签 / 全局变量和设置一起进 state。
         // 预设引用是本机原来的（或空浏览器时刚恢复进来的第一个），找不到也不是这次恢复改的，不另外报
         if (plan.global) await reloadGlobalFromStore();
+        // 并进的正是当前卡的 cardvars：内存里那份是恢复前的，重读（不然下次保存会拿它把合并进来的键盖掉）
+        if (plan.cardvarsMerges.some(m => m.cardId === persist.cardId && cvMerged.has(cardVarsKey(m.cardId)))) await reloadCardVars();
         const target = plan.target;
         return { plan, switchTo: !hadCards && target ? target : null };
     } catch (e) {

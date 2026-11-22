@@ -185,11 +185,23 @@ export const STORE_KEYS = {
         key: 'card:<cardId>', what: '角色卡（CardRecord：卡本体 + 头像 + 停在哪个存档）',
         kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「存档」页：卡的导出（酒馆 PNG / JSON）；导入走拖文件 / 导入…；「杂项」页「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（characters/）；「脚本」页：单个脚本 / 文件夹的导出导入（酒馆助手脚本 JSON）',
         how: '恢复时换新 id；内容相同（cardSig，不看卡自带世界书的开关 card.worldDisabled）的不新建，存档并进已有的卡，本机那张的开关不动；开关跟着卡记录进备份，不进导出的酒馆卡。'
-            + '酒馆助手脚本（card.scripts，2026-11-23 第 1 期，不运行；缺省 = 跟着 raw，见 types.js Card.scripts、src/scripts.js）是卡内容的一部分：'
+            + '酒馆助手脚本（card.scripts，2026-11-23 第 1 期加、第 2 期起运行；缺省 = 跟着 raw，见 types.js Card.scripts、src/scripts.js）是卡内容的一部分：'
             + '跟着卡记录进整体备份；判重时算内容（代码、名字、开关 enabled 都算，和卡自带正则的 disabled 一样——它们都写在卡文件里），用 cardScripts 的值比，'
             + '「没改过、跟着 raw」和「写了但一样」判成同一张卡；新加进来的卡先规范化（不是数组的删掉、坏条目丢掉）。'
             + '导出卡（PNG / JSON、酒馆目录 zip）时合并回 data.extensions.tavern_helper，没改过的卡和原文件逐字相同；从酒馆 zip 导入时跟着 raw 自然带进来。'
-            + '单个脚本 / 文件夹另有导出导入（「脚本」页，酒馆助手的脚本文件格式）。不发给模型；前端卡读不到',
+            + '单个脚本 / 文件夹另有导出导入（「脚本」页，酒馆助手的脚本文件格式）。不发给模型；前端卡读不到。'
+            + '脚本运行时写的变量不在这里，在 cardvars:<cardId>（见 STORE_KEYS.cardvars）',
+    },
+    cardvars: {
+        key: 'cardvars:<cardId>', what: '每张卡的酒馆助手运行时数据（types.js CardVars：角色卡变量 character、脚本变量 scripts[脚本 id]，以后还有前端卡的 localStorage 小设置 storage）',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'remap', export: null,
+        how: '2026-11-23 第 2 期加。三个字段默认不写，都没有时整条不存在。进整体备份：挂在备份文件里卡那一项的 vars 上（backup.js buildBackup）。'
+            + '恢复时卡是新建的 → 整条带过来（卡 id 换算成新的，所以登记成 fresh = remap）；卡和本机已有的判成同一张（cardSig，不看 cardvars）→ '
+            + '按键取并集、本机已有的键保留本机的值（character 按变量名，scripts 先按脚本 id 再按变量名，storage 按键；cardvars.js unionCardVars，'
+            + '和全局变量一个规矩），在恢复的写入事务里做；备份里判成同一张的两张卡各带一份时也按键并起来。'
+            + '读入容错 normalizeCardVars：不是对象 = 没有，坏字段丢掉，变量值过 vars-ops.js sanitize。删卡时和卡在同一个事务里删；同名卡「更新」时保留（卡 id 不变）。'
+            + '没有单独的导入导出；导出卡时【不写回】卡文件（运行时状态不随分享的卡走；卡文件里的 tavern_helper.variables 和脚本的 data 只当初值）。'
+            + '不发给模型；只有这张卡的前端卡和脚本读写得到（frame-host.js 的变量作用域）',
     },
     chat: {
         key: 'chat:<cardId>:<chatId>', what: '存档（ChatRecord：消息、局部变量、名字、作者注释 authorNote（默认值时不写）……）',
@@ -202,7 +214,9 @@ export const STORE_KEYS = {
             + '外置记忆的摘要（ChatMessage.memory）和再压缩的合并段 / 覆盖标记（memoryMerged / memoryIn，2026-11-23 加，规则见 memory-fold.js 文件头「合并段」）'
             + '都挂在消息上：跟着存档进整体备份、参与 chatSig 判重（只差合并状态的两个存档不算重复）、跟着 .jsonl 的 extra.smalltalk 往返；'
             + '会发给模型（记忆块）；前端卡读不到（getChatMessages / getContextSnapshot 不给 memory 一类字段）。读档时 normalizeMerged 清掉坏段和孤儿标记'
-            + '（按旧规矩存下的、成员跳过隐藏回复的已换上的段先升级再判断）。隐藏标记（hidden）不碰记忆：隐藏的楼已有的摘要照旧发',
+            + '（按旧规矩存下的、成员跳过隐藏回复的已换上的段先升级再判断）。隐藏标记（hidden）不碰记忆：隐藏的楼已有的摘要照旧发。'
+            + '楼层变量（ChatMessage.variables，酒馆助手的 message 作用域，2026-11-23 第 2 期加）挂在消息上：跟着存档进备份、参与 chatSig、'
+            + '跟着 .jsonl 的 variables 往返；不发给模型，前端卡和脚本读写得到',
     },
     index: {
         key: 'index:<cardId>', what: '每张卡的存档目录（名字、楼数、时间），切换时只读它',

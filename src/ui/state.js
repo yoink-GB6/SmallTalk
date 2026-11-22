@@ -21,6 +21,7 @@ import {
 import { sanitizePreset } from '../preset-sanitize.js';
 import { storedAuthorNote } from '../author-note.js';
 import { normalizeMerged } from '../memory-fold.js';
+import { cardVarsKey, normalizeCardVars } from '../cardvars.js';
 
 // ───────────────────────────── 状态 ─────────────────────────────
 
@@ -112,6 +113,12 @@ export const persist = {
                         // 不然这期间排出去的保存可能带着旧的 global / 目录，排在导入的事务后面把刚导入的盖掉
     onFlushed: null,    // 写完一次后的回调（archive.js 用它刷新存档列表）
     onSwap: null,       // state 刚换成另一个存档时【同步】调用（archive.js 在这里拆掉旧存档的 DOM 和 iframe）
+    onSave: null,       // 每次 save() 被调用时【同步】调用（script-host.js 在这里排一次「把改动推给脚本沙箱」，见那个文件头）
+    // 当前卡的运行时数据 'cardvars:<cardId>'（cardvars.js、types.js CardVars）。不放进 state（state 的形状不变）。
+    //   undefined = 还没从存储读回来（换卡后异步读，见 loadCardVars）；null = 读过了，这张卡没有；对象 = 有。
+    // cardVarsFor：上面这份属于哪张卡（读回来时核对，免得读的期间换了卡、把 A 卡的数据装到 B 卡上）
+    cardVars: undefined,
+    cardVarsFor: null,
 };
 
 /** epoch → 那时 state 对应的 {cardId, chatId}。没卡状态下第一次保存才分配 id（epoch 不变），所以要随时记 */
@@ -127,7 +134,64 @@ export function queueDelete(key) { pendingDeletes.add(key); }
 // （比如正则页切开关直接改 state.card.regexScripts[i].disabled），这样也不会漏掉。
 // 不能和「最近一次写成功的值」比：A 正在写（还没完成）时值又改回去，就会以为没变而漏写（A→B→A）。
 // 写失败时把对应的快照作废（置 null），下次保存一定重写。
-const snap = { global: null, meta: null, card: null, avatar: null, cardMeta: null, chatMsgs: null, chatVars: null, chatMeta: null, index: null, preset: null };
+const snap = { global: null, meta: null, card: null, avatar: null, cardMeta: null, chatMsgs: null, chatVars: null, chatMeta: null, index: null, preset: null, cardVars: null };
+
+// ───────────────────────────── 当前卡的运行时数据（cardvars:<cardId>） ─────────────────────────────
+// 换卡时（applyCardChat）开始异步读，读回来之前 persist.cardVars 是 undefined：这期间 buildWrites 不写它（不会拿「空」盖掉存储里的），
+// 要读写它的人先 await cardVarsReady()。读排在已经在路上的写后面（writing），所以不会读到切走之前还没落盘的旧值。
+// 快照 snap.cardVars 记的是「存储里现在是什么」的 JSON（'null' = 没有这个键），和别的记录一样：变了才写，空了就删键。
+
+let cardVarsWait = null;   // {cardId, promise}
+
+function loadCardVars(cardId, { fresh = false } = {}) {
+    persist.cardVarsFor = cardId;
+    if (!cardId || fresh || typeof indexedDB === 'undefined') {
+        // 没卡 / 刚建的卡（存储里不可能有）/ Node 里：直接当作「读过了，没有」
+        persist.cardVars = null;
+        snap.cardVars = 'null';
+        cardVarsWait = { cardId, promise: Promise.resolve() };
+        return;
+    }
+    persist.cardVars = undefined;
+    snap.cardVars = null;
+    const read = () => store.get(cardVarsKey(cardId));
+    const promise = writing.then(read, read).then(stored => {
+        if (persist.cardVarsFor !== cardId || persist.cardVars !== undefined) return;
+        const v = normalizeCardVars(stored);
+        persist.cardVars = v;
+        snap.cardVars = JSON.stringify(v);   // 按规范化之后的记：只是读一下不会引起重写，存储里的坏值等下次真的改了再换掉
+    });
+    // 读失败：persist.cardVars 一直是 undefined（不写，免得盖掉存储里读不出来的数据），等它的人收到失败
+    promise.catch(e => console.error('读这张卡的脚本变量失败', e?.message ?? e));
+    cardVarsWait = { cardId, promise };
+}
+
+/** 等当前卡的运行时数据读回来。读失败 / 读的期间换了卡 → reject（调用方放弃这次读写） */
+export async function cardVarsReady() {
+    const w = cardVarsWait;
+    if (!w) throw new Error('当前没有打开角色卡');
+    await w.promise;
+    if (persist.cardVarsFor !== w.cardId || w.cardId !== persist.cardId) throw new Error('角色卡已经换了');
+    if (persist.cardVars === undefined) throw new Error('读不出这张卡的脚本变量（存储出错），这次没有读写');
+}
+
+/**
+ * 改当前卡的运行时数据：field = 'character' | 'scripts' | 'storage'；value 是那个字段的新值（undefined = 去掉这个字段）。
+ * 调用前必须已经 cardVarsReady。调用方自己 save()。
+ */
+export function setCardVarsField(field, value) {
+    if (persist.cardVars === undefined) throw new Error('这张卡的脚本变量还没读回来');
+    const next = { ...(persist.cardVars ?? {}) };
+    if (value === undefined) delete next[field]; else next[field] = value;
+    persist.cardVars = Object.keys(next).length ? next : null;
+}
+
+/** 备份恢复把当前卡的 cardvars 合并进了存储：重读一次（恢复期间保存是暂停的，内存里的就是恢复前的那份） */
+export async function reloadCardVars() {
+    if (!persist.cardId) return;
+    loadCardVars(persist.cardId);
+    try { await cardVarsReady(); } catch { /* 已经记过控制台 */ }
+}
 
 /** 新存档记录（还没写入） */
 export function newChatRecord(cardId, cardName, now = new Date(), skipChatId = null) {
@@ -285,6 +349,8 @@ export function applyCardChat(cardRec, chatRec, { freshCard = false, freshChat =
         state.card = c ?? emptyCard();
         state.avatar = avatar ?? '';
         if (persist.cardId !== cardRec.id) { persist.index = null; snap.index = null; }
+        // 换了卡（或者这是刚建的卡）：这张卡的运行时数据重新读。同一张卡换了卡定义（「更新」同名卡）时 id 不变，不重读——cardvars 跟着卡 id 走
+        if (persist.cardId !== cardRec.id || freshCard || persist.cardVarsFor !== cardRec.id) loadCardVars(cardRec.id, { fresh: freshCard });
         persist.cardId = cardRec.id;
         persist.cardMeta = meta;
         snap.card = freshCard ? null : JSON.stringify(state.card);
@@ -295,6 +361,7 @@ export function applyCardChat(cardRec, chatRec, { freshCard = false, freshChat =
         state.card = null; state.avatar = '';
         persist.cardId = null; persist.cardMeta = null; persist.index = null;
         snap.card = snap.avatar = snap.cardMeta = snap.index = null;
+        loadCardVars(null);
     }
     if (chatRec) {
         const { messages, variables, ...meta } = chatRec;
@@ -423,6 +490,14 @@ function buildWrites() {
             ops.push({ set: cardKey(persist.cardId), value: { id: persist.cardId, card: structuredClone(state.card ?? emptyCard()), avatar: state.avatar ?? '', ...structuredClone(persist.cardMeta) } });
             Object.assign(next, { card: cardJson, avatar: state.avatar, cardMeta });
         }
+        // 这张卡的运行时数据（脚本变量、角色卡变量）：读回来了、确实是这张卡的才写；空了就删键（默认不写）
+        if (persist.cardVars !== undefined && persist.cardVarsFor === persist.cardId) {
+            const cvJson = JSON.stringify(persist.cardVars);
+            if (cvJson !== snap.cardVars) {
+                ops.push(persist.cardVars === null ? { del: cardVarsKey(persist.cardId) } : { set: cardVarsKey(persist.cardId), value: structuredClone(persist.cardVars) });
+                next.cardVars = cvJson;
+            }
+        }
     }
 
     persist.meta = { ...persist.meta, version: SCHEMA_VERSION, activeCardId: persist.cardId };
@@ -431,7 +506,7 @@ function buildWrites() {
     return { ops, next, cardId: persist.cardId, chatId: persist.chatId, presetId: presets.activeId };
 }
 
-const CARD_SNAP = ['card', 'avatar', 'cardMeta', 'index'];
+const CARD_SNAP = ['card', 'avatar', 'cardMeta', 'index', 'cardVars'];
 const CHAT_SNAP = ['chatMsgs', 'chatVars', 'chatMeta'];
 
 // 所有写入排成一条链，保证先后顺序；flushNow 返回的 Promise 在「到目前为止的改动都落盘」后才 resolve
@@ -475,10 +550,17 @@ export function flushNow() {
 
 /** 防抖保存：其它模块改完 state 就调它，和以前一样 */
 export function save() {
+    // 脚本沙箱的同步副本（script-host.js）：有改动就排一次推送（它自己合并成一次、做首尾比对）。
+    // 放在 stopped 判断之前：停止保存之后页面上的改动不再落盘，但脚本照样该看到页面上的样子（实际上停止保存时沙箱已经拆了）
+    try { persist.onSave?.(); } catch (e) { console.error(e); }
     if (persist.stopped) return;
+    // 防抖，但最多推迟 2 秒：脚本 / 前端卡用定时器每几百毫秒写一次变量时，纯防抖会被一直往后推、永远不落盘（第 2 期实测撞上过）
+    const now = Date.now();
+    if (timer === null) firstPending = now;
     clearTimeout(timer);
-    timer = setTimeout(flushNow, 400);
+    timer = setTimeout(flushNow, Math.max(0, Math.min(400, firstPending + 2000 - now)));
 }
+let firstPending = 0;
 
 /**
  * 停止保存之后（persist.stopped：「清空所有数据」之后，或者备份恢复撤销失败时），所有会改数据的操作统一用这句拒绝。

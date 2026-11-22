@@ -1,5 +1,5 @@
 // 酒馆助手（JS-Slash-Runner）脚本的数据层：从卡的原始 JSON 里读出脚本树、规范化、判断改没改、导出时合并回原始 JSON。
-// 纯函数，不碰 DOM / IndexedDB，浏览器和 Node 都能直接加载。第 1 期只有数据和「脚本」页，脚本【不运行】。
+// 纯函数，不碰 DOM / IndexedDB，浏览器和 Node 都能直接加载。运行脚本在 ui/script-host.js（第 2 期），这里只管数据。
 //
 // 格式依据（只学格式、字段名，实现是自己写的；酒馆助手的许可是 PolyForm Noncommercial，不搬它的代码）：
 //   酒馆助手 4.12.2 的 src/type/scripts.ts（新格式 Script / ScriptFolder）、src/type/backward.ts（旧格式）、
@@ -34,7 +34,9 @@
 //       认不出来的原条目原样留着（跟在它在原文件里前面那一条后面）。
 //     - 旧键的卡：照酒馆助手自己的迁移写成新格式 tavern_helper = {scripts, variables: 旧的角色卡变量}，删掉两个旧键（酒馆助手读到旧键也会这么做）。
 //     - 原来没有脚本的卡：写 tavern_helper = {scripts, variables: {}}；V1 卡先升级成 V2（和世界书 / 正则一样，由 card-export.js 处理）。
-//   export_with（导出时清空脚本变量 / 按钮）这一期【不做】：脚本不运行，data 只是卡里原来带的，原样带出最忠实。第 2 期有了运行时的脚本变量再说。
+//   export_with（导出时清空脚本变量 / 按钮）导出卡时【不做】：卡文件里的 data 只是作者给的初值，原样带出最忠实。
+//   第 2 期定的：脚本运行时写的变量（cardvars:<cardId>，见 cardvars.js）也【不写回】卡文件——没改过的卡导出逐字不变是硬要求，
+//   运行时状态像聊天记录一样不跟着分享出去的卡走（要带走用整体备份）。export_with 只在「脚本」页导出单个脚本时生效（scriptFileObject）。
 //
 // ── 判重（backup.js cardSig）──
 //   脚本树算卡的内容：代码、名字、开关（enabled）都算——和卡自带正则的 disabled 一样（它们都写在卡文件里，导出卡时带走）；
@@ -280,7 +282,7 @@ export function flattenScripts(tree) {
     return out;
 }
 
-/** 会运行的脚本：启用的顶层脚本 + 启用的文件夹里启用的脚本（酒馆助手 store/scripts.ts 的规则）。第 1 期没人用，留给第 2 期 */
+/** 会运行的脚本：启用的顶层脚本 + 启用的文件夹里启用的脚本（酒馆助手 store/scripts.ts 的规则）。ui/script-host.js 用它决定沙箱里装哪些 */
 export function enabledScriptsOf(tree) {
     const out = [];
     for (const t of Array.isArray(tree) ? tree : []) {
@@ -288,6 +290,19 @@ export function enabledScriptsOf(tree) {
         else if (t?.enabled) out.push(t);
     }
     return out;
+}
+
+/**
+ * 卡文件里带的角色卡变量（酒馆助手 getVariables({type:'character'}) 的初值）：新格式 tavern_helper.variables，
+ * 只有旧键时是 TavernHelper_characterScriptVariables。不是普通对象 → {}。只读（返回原对象，调用方不要改）。
+ * 运行时写的值不写回卡文件，放在 cardvars:<cardId>.character（见 cardvars.js）。
+ * @param {Object} raw
+ * @returns {Object}
+ */
+export function cardCharacterVars(raw) {
+    const loc = locate(raw);
+    const v = loc.kind === 'new' ? loc.settings.variables : loc.kind === 'legacy' ? loc.vars : undefined;
+    return isObj(v) ? v : {};
 }
 
 /** 新脚本（「脚本」页的「新增」）。默认值照酒馆助手的 Script 定义 */
@@ -299,7 +314,7 @@ export function newScript(id, name = '新脚本') {
 }
 
 /**
- * 代码整段被 ``` 围起来时剥掉外层围栏（酒馆助手运行前也这么做）。第 1 期不运行，留给第 2 期
+ * 代码整段被 ``` 围起来时剥掉外层围栏（酒馆助手运行前也这么做；ui/script-host.js 装进沙箱前调它）
  * @param {string} code
  */
 export function stripCodeFence(code) {

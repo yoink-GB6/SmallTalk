@@ -15,6 +15,7 @@ import { renderMiscTab } from './tab-misc.js';
 import { renderPersonaTab } from './tab-persona.js';
 import { renderProviderTab, refreshHealth, paintChatWarn } from './tab-provider.js';
 import { renderModelPicker } from './model-picker.js';
+import { reconcileScripts } from './script-host.js';
 
 // ───────────────────────────── 顶栏与总渲染 ─────────────────────────────
 
@@ -71,4 +72,6 @@ export function renderAll() {
     renderChat();
     if (ui.previewIsSent && ui.preview) renderInspector();
     else refreshPreview();
+    // 酒馆助手脚本的沙箱：换了卡就重建、换了存档就推新聊天 + CHAT_CHANGED、别的改动推副本（只比引用，便宜；规则见 script-host.js 文件头）
+    reconcileScripts();
 }

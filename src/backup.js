@@ -25,6 +25,7 @@ import { alignPersonas, mergePersonas, switchPersona } from './personas.js';
 import { bookContent, bookScopeOf, remapBookCards, setBookScope, setBookName, isBookActiveFor } from './books.js';
 import { storedAuthorNote } from './author-note.js';
 import { cardScripts } from './scripts.js';
+import { CARDVARS_PREFIX, normalizeCardVars, unionCardVars } from './cardvars.js';
 
 export const BACKUP_FORMAT = 'smalltalk-backup';
 export const BACKUP_VERSION = 1;
@@ -98,10 +99,14 @@ export function backupFileName(date, { hasKeys = false, encrypted = false } = {}
  *          orphanChats：找不到所属卡的存档数（界面上本来就看不见，没导出）；legacyKeys：没导出的旧版本数据的键
  */
 export function buildBackup(entries, { now }) {
-    const cards = [], presets = [], chatsByCard = new Map(), legacyKeys = [];
+    const cards = [], presets = [], chatsByCard = new Map(), legacyKeys = [], varsByCard = new Map();
     let orphanChats = 0;
     for (const [key, value] of Object.entries(entries)) {
-        if (key.startsWith('card:')) {
+        if (key.startsWith(CARDVARS_PREFIX)) {
+            // 卡的运行时数据（脚本变量、角色卡变量）：挂在那张卡的那一项上（vars）。规范化后是空的不带；卡不在了的丢掉
+            const v = normalizeCardVars(value);
+            if (v) varsByCard.set(key.slice(CARDVARS_PREFIX.length), v);
+        } else if (key.startsWith('card:')) {
             // 键和记录里的 id 对不上的不要：archive.js 按 id 去拼键，这种记录在界面上本来就找不到
             if (isObj(value) && `card:${value.id}` === key) cards.push(value);
         } else if (key.startsWith('preset:')) {
@@ -128,7 +133,7 @@ export function buildBackup(entries, { now }) {
             // 去掉「当前在用的选择」（当前预设、人设、接口和模型……；规则见下面「全局记录的三类字段」）
             global: globalForBackup(entries.global),
             presets: presets.sort(byTime),
-            cards: cards.sort(byTime).map(card => ({ card, chats: (chatsByCard.get(card.id) ?? []).sort(byTime) })),
+            cards: cards.sort(byTime).map(card => ({ card, chats: (chatsByCard.get(card.id) ?? []).sort(byTime), ...(varsByCard.has(card.id) ? { vars: varsByCard.get(card.id) } : {}) })),
         },
         orphanChats, legacyKeys,
     };
@@ -856,6 +861,8 @@ function unionContent(g, localG, backupG, { summary, newId, now, cardIdMap }) {
  *   presets: Object[],            新预设的 PresetRecord（新 id）
  *   indexes: Object[],            新卡的存档目录（buildIndex 的结果）
  *   merges: {cardId: string, chats: Object[]}[],   并进【已有的卡】的存档（它们的目录要在写入的事务里读出来再补条目）
+ *   cardvars: {cardId: string, value: CardVars}[],        新建的卡的 cardvars:<id>（规范化过）
+ *   cardvarsMerges: {cardId: string, value: CardVars}[],  并进【已有的卡】的 cardvars（写入事务里和本机那条按键取并集，见 cardvars.js unionCardVars）
  *   global: Object|null,          要写进 'global' 的新记录；null = 不用动
  *   settingsApplied: string[],    实际用了备份里的哪几样设置（SETTING_KEYS 里的键；空浏览器是备份里有的那几样）
  *   target: {cardId: string, chatId: string|null}|null,  备份里原来的当前卡 / 存档在导入后的 id（取最近使用的那张卡）
@@ -872,7 +879,7 @@ export function planBackupImport(backup, existing, { newId, now, fresh = false, 
     const summary = { cardsAdded: 0, cardsMerged: 0, chatsAdded: 0, chatsDup: 0, presetsAdded: 0, presetsDup: 0,
         personasAdded: 0, personasDup: 0, booksAdded: 0, booksDup: 0, booksRenamed: 0, booksRebound: 0, regexAdded: 0, regexDup: 0, notesAdded: 0, notesDup: 0, varsAdded: 0, varsDup: 0,
         settingsApplied: [], renamed: [], skipped: [], notes: [], worldKept: [], worldReenabled: [] };
-    const out = { cards: [], chats: [], presets: [], indexes: [], merges: [], global: null, settingsApplied: summary.settingsApplied, target: null, summary };
+    const out = { cards: [], chats: [], presets: [], indexes: [], merges: [], cardvars: [], cardvarsMerges: [], global: null, settingsApplied: summary.settingsApplied, target: null, summary };
     const ex = { cards: existing?.cards ?? [], chats: existing?.chats ?? [], presets: existing?.presets ?? [] };
 
     // ── 预设 ──
@@ -967,6 +974,16 @@ export function planBackupImport(backup, existing, { newId, now, fresh = false, 
             summary.cardsAdded++;
         }
         if (typeof src.id === 'string' && src.id !== '' && !cardIdMap.has(src.id)) cardIdMap.set(src.id, target.id);
+        // 这张卡的运行时数据（cardvars：脚本变量、角色卡变量；形状不对 = 没有）。新建的卡整条带过来；
+        // 并进本机已有的卡：在写入事务里和本机那条按键取并集（本机已有的键不动，ui/backup.js doImport）。
+        // 备份里两张判成同一张的卡各带一份：也按键并起来，先出现的那份优先
+        const cv = normalizeCardVars(entry.vars);
+        if (cv) {
+            const list = target.isNew ? out.cardvars : out.cardvarsMerges;
+            const hit = list.find(x => x.cardId === target.id);
+            if (hit) hit.value = unionCardVars(hit.value, cv).value;
+            else list.push({ cardId: target.id, value: cv });
+        }
         if (!chatSigs.has(target.id)) chatSigs.set(target.id, new Map());
         const sigs = chatSigs.get(target.id);
         const chatMap = new Map();   // 备份里的存档 id → 导入后的 id（重复的指向已有的那个）

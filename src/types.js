@@ -41,9 +41,11 @@ export {};
 
 /**
  * 变量仓库，会被宏（setvar 等）原地修改。
+ * 值：宏写的是字符串 / 数字；酒馆助手的前端卡和脚本可以写任何能 JSON 化的值（嵌套对象、数组；2026-11-23 第 2 期起契约上放宽，
+ * 以前其实也已经这样存了）。写进来之前一律过 vars-ops.js sanitize：任何一层的 __proto__ / constructor / prototype 键丢掉、超过 5 MB 不收。
  * @typedef {Object} Variables
- * @property {Record<string, string|number>} local   对应酒馆 chat_metadata.variables
- * @property {Record<string, string|number>} global  对应酒馆 extension_settings.variables.global
+ * @property {Record<string, any>} local   对应酒馆 chat_metadata.variables
+ * @property {Record<string, any>} global  对应酒馆 extension_settings.variables.global
  */
 
 // ───────────────────────────── 角色卡 card.js / png.js ─────────────────────────────
@@ -74,7 +76,8 @@ export {};
  *   （public/scripts/world-info.js getCharacterLore）；内嵌的那份只是保存角色时服务端写进卡里的拷贝（src/endpoints/characters.js
  *   ~L628–640），可能是旧的。酒馆 zip 导入时，卡绑定的书文件一起导进来了，就把卡自带的这份关掉（tavern-convert.js applyWorldRules）。
  *   单独导入一张卡：启用（不写）。同名卡「更新」时保留旧卡的这个开关（archive.js addCard）。
- * @property {ScriptTree[]} [scripts]          酒馆助手脚本（2026-11-23 第 1 期：只能在「脚本」页看、开关、增删、改代码，【不运行】）。
+ * @property {ScriptTree[]} [scripts]          酒馆助手脚本（2026-11-23 第 1 期：「脚本」页看、开关、增删、改代码；第 2 期起【运行】：
+ *   当前卡启用的脚本在一个沙箱 iframe 里跑，见 ui/script-host.js。运行时数据（脚本变量、角色卡变量）不在这里，在 'cardvars:<cardId>'，见 CardVars）。
  *   【缺省 = 跟着 raw】：没有这个键时，脚本树现场从 raw 解析（src/scripts.js cardScripts / parseCardScripts：
  *   data.extensions.tavern_helper.scripts，对象或 [[k,v]] 数组；没有它才看旧键 TavernHelper_scripts）。parseCard 不写这个键，
  *   所以已导入的卡不用迁移，不用这个功能的卡存储形状不变。用户在「脚本」页第一次改动时才把整棵规范化的树写进来，之后一直有（删光了是 []）。
@@ -84,7 +87,7 @@ export {};
  *   不同 → 只改动过的条目 / 字段，规则见 scripts.js 文件头。
  *   整体备份：跟着卡记录走，【算卡的内容】（含 enabled 开关，和卡自带正则的 disabled 一样；backup.js cardSig 用 cardScripts 的值比）。
  *   同名卡「更新」：以新卡文件为准（parseCard 的结果没有这个键，旧的改动丢掉——和正则一样）。
- *   不发给模型（拼装不读它），消息里的前端卡也读不到（frame-host.js 没有接口）。
+ *   不发给模型（拼装不读它），消息里的前端卡也读不到（frame-host.js 没有接口）。脚本自己能读到自己的名字 / 说明 / 按钮（getScriptName 等）。
  */
 
 /**
@@ -97,7 +100,8 @@ export {};
  * @property {string} content         代码（''）。整段被 ``` 围起来时运行前剥掉外层（scripts.js stripCodeFence，第 2 期用）
  * @property {string} info            作者写的说明（''）
  * @property {{enabled: boolean, buttons: {name: string, visible: boolean}[]}} button   脚本按钮（enabled 缺省 true；第 4 期用）
- * @property {Object} data            脚本变量的初值（{}）。第 1 期只原样保留
+ * @property {Object} data            脚本变量的【初值】（{}）。运行时 getVariables({type:'script'}) 读：CardVars.scripts[id] 有就用它，没有才用这里的 data；
+ *                                    写一律写进 CardVars.scripts[id]，不改这里（卡文件只读，没改过的卡导出逐字不变）。导出卡时不把运行时的值写回 data（2026-11-23 定的，见 CardVars）
  * @property {{data: boolean, button: boolean}} export_with   导出时带不带 data / 按钮（都缺省 true）。只在单个脚本导出时生效，导出卡时这一期不处理
  *
  * 文件夹（只有一层，里面只能是脚本）。
@@ -111,6 +115,29 @@ export {};
  * @property {Script[]} scripts
  *
  * @typedef {Script|ScriptFolder} ScriptTree
+ */
+
+/**
+ * 一张卡的运行时数据（酒馆助手第 2 期）：存储键 'cardvars:<cardId>'（纯逻辑 src/cardvars.js；读写 ui/state.js persist.cardVars、ui/frame-host.js 的变量作用域）。
+ * 三个字段都【默认不写】，三个都没有时整条记录不存在（写空了就删键）——不用脚本的卡存储里没有这个键。
+ * @typedef {Object} CardVars
+ * @property {Object} [character]   角色卡变量（getVariables({type:'character'})）。没有 = 用卡文件里带的初值（data.extensions.tavern_helper.variables，
+ *                                  旧卡是 TavernHelper_characterScriptVariables；scripts.js cardCharacterVars）。写过就以这里为准，哪怕是空表 {}
+ * @property {Record<string, Object>} [scripts]   脚本变量，按脚本 id（getVariables({type:'script'})）。没有某个 id = 用卡里那个脚本的 data（初值）。
+ *                                  脚本在「脚本」页被删掉后它的这一项留着不管（不影响任何东西，删卡时整条删）
+ * @property {Record<string, string>} [storage]   前端卡 / 脚本的 localStorage「小设置」（第 6 期接上，这一期没人写）；值只能是字符串，总长上限 5 MB（STORAGE_LIMIT）
+ *
+ * 为什么不放进卡记录：卡记录里有头像（可能几 MB），脚本可能每条消息都写变量；也不该让「玩着玩着」改变卡的内容签名（backup.js cardSig 不看它）。
+ * 读入容错（normalizeCardVars）：不是对象 = 没有；某个字段形状不对 = 那个字段没有；变量值过 vars-ops.js sanitize；storage 的非字符串值丢掉、超长从后面截掉。
+ * 读的时机：换卡时异步读（state.js loadCardVars），读回来之前不写它、要读写它的先 await cardVarsReady()。
+ * 整体备份：跟着卡走（备份文件里卡那一项的 vars 字段，backup.js buildBackup）。恢复时新建的卡整条带过来（卡 id 换算）；
+ *   并进本机已有的卡（cardSig 判成同一张）：按键取并集、本机已有的键保留本机的值（character 按变量名，scripts 先按脚本 id 再按变量名，storage 按键；
+ *   和全局变量的规矩一致，cardvars.js unionCardVars），在恢复的写入事务里做。空浏览器 = 按备份。
+ * 删卡：和卡在同一个事务里删（archive.js deleteCard）。同名卡「更新」：卡 id 不变，cardvars 保留（脚本数据、小设置不丢）。
+ * 导出卡（PNG / JSON、导出成酒馆目录）：【不写回】卡文件（2026-11-23 定的）。理由：卡文件只读，没改过的卡导出逐字不变是硬要求；
+ *   运行时数据是「玩出来的状态」，像聊天记录一样不该跟着分享出去的卡走；要带走用整体备份。代价：导出给酒馆后，酒馆里的脚本从卡里的初值重新开始。
+ *   export_with（单个脚本的导出开关）照旧只在「脚本」页导出单个脚本时生效。
+ * 不发给模型（拼装、宏都不读它）；只有这张卡的前端卡（character）和脚本（character、自己的 script）读写得到。
  */
 
 /**
@@ -461,8 +488,12 @@ export {};
  * iframe 前端卡 → 宿主页面的桥。前端卡里调用的酒馆 / 酒馆助手 API 会通过 postMessage 落到这里。
  * @typedef {Object} FrameHost
  * @property {(method: string, args: any[], messageId: number) => any|Promise<any>} call
- *           处理一次 API 调用；不认识的方法 throw 或返回 undefined 均可
+ *           处理一次 API 调用；不认识的方法 throw 或返回 undefined 均可。args 就是卡传来的参数，不追加任何东西
+ *           （ui/frame-host.js 把 messageId 包成上下文 {kind:'message', messageId} 交给宿主方法；脚本沙箱用 {kind:'script', cardId, scriptId}，见那个文件头）
  * @property {(entry: {messageId: number, level: 'call'|'unimplemented'|'error'|'console', text: string}) => void} log
+ *
+ * 日志条目（ui.frameLog，「杂项」页和「脚本」页共用一份，最多 500 条）：前端卡 {time, messageId, level, text}；
+ * 酒馆助手脚本 {time, scriptId（认不出是哪个脚本时为 null）, scriptName, cardId, level, text}。level 还可能是 'warn' / 'unsupported'（脚本用：SmallTalk 做不到的事）
  */
 
 /**
@@ -527,6 +558,7 @@ export {};
 // 版本 1 是单独一个键 'state'（把上面所有东西打包在一起）。迁移规则见 MigrateV1。
 //
 // 实现过程中追加的（数据丢失复核之后）：
+//   'cardvars:<cardId>' → CardVars（酒馆助手脚本的运行时数据：脚本变量、角色卡变量；2026-11-23 第 2 期加，见 CardVars）
 //   'index:<cardId>'  → {cardId, chats: {[chatId]: {name, count, updatedAt, createdAt}}}
 //                       每张卡的存档目录，和存档写入在同一个事务里维护；缺失或对不上时自动重建
 //   'state.v1.bak'    → 迁移时旧数据里有认不出的内容才会写：旧 state 的完整备份，不会被自动删除
@@ -729,6 +761,10 @@ export {};
  *                                 content 才是当前候选的唯一真相：任何 swipe 操作之前、以及导出时，先把 content 写回 swipes[swipeId]。
  *                                 我们生成的回复一写完就带上 [content]（同酒馆 saveReply）；没有时等同于 [content]。
  * @property {number} [swipeId]   当前显示 / 发送的是第几个候选（酒馆的 swipe_id），0 起
+ * @property {Object[]} [variables]   楼层变量（酒馆助手 getVariables({type:'message'})、getChatMessages 返回的 data；酒馆聊天文件每行的 variables），
+ *                                 每个候选一份，下标同 swipes。【默认不写】：前端卡 / 脚本第一次写这一楼的楼层变量时才有（script-sync.js setMessageVars）。
+ *                                 从酒馆 .jsonl 导入的消息原来的值在 st.variables 里：读的时候两处都认，第一次写时从 st 提升到这里；导出 .jsonl 时写回 variables。
+ *                                 不发给模型，不碰记忆（改它不作废摘要）
  * @property {Object} [st]        从酒馆 jsonl 导入时这一行里我们不认识的字段（swipe_info、force_avatar、
  *                                 插件数据、extra 里的其它键……），原样保留，导出时放回去。
  *                                 例外：swipe 操作会读写 st.swipe_info / st.extra / st.send_date 等（每个候选各一份，照酒馆换进换出），
@@ -876,7 +912,8 @@ export {};
  * @property {string} exportedAt               ISO 时间
  * @property {GlobalRecord|null} global        存储里的 'global' 原样（从没保存过则 null；可能是旧形状，导入时会转成新形状）
  * @property {PresetRecord[]} presets
- * @property {{card: CardRecord, chats: ChatRecord[]}[]} cards
+ * @property {{card: CardRecord, chats: ChatRecord[], vars?: CardVars}[]} cards
+ *           vars：这张卡的 'cardvars:<cardId>'（2026-11-23 第 2 期加，可选；没有 / 形状不对 = 没有）。version 仍是 1：老版本读到会忽略这个字段
  * @property {{name: string, baseUrl: string, models: string[], apiKey?: string}[]} [endpoints]   可选：接口列表（没有 id / hasKey / ready）。
  *           只含用户自己加的 OpenAI 类接口，内置的 Claude Code 不导出；没有接口就没有这个字段。version 仍是 1：老版本读到不认识的字段会忽略。
  *           apiKey：只有网页版导出、且这个接口填了 key 时才有；有它的备份一定是加密的（见上）。本地服务版导出的永远没有这个字段。

@@ -1,12 +1,16 @@
-// 检查器「脚本」页：当前角色卡自带的酒馆助手脚本（2026-11-23 第 1 期：只能看、开关、新增、删除、改代码、导入导出，【不运行】）。
+// 检查器「脚本」页：当前角色卡自带的酒馆助手脚本（第 1 期：看、开关、新增、删除、改代码、导入导出；第 2 期：运行状态、日志、重新运行）。
 // 数据层在 src/scripts.js（解析、规范化、导出时合并回卡的原始 JSON），契约见 types.js Card.scripts。
+// 运行在 ui/script-host.js（一张卡一个沙箱）：这里改完脚本调 restartScripts()（启用的脚本或代码变了才重建沙箱）。
 //
 // 数据存在哪：卡记录的 state.card.scripts。【缺省 = 跟着 raw】：没有这个键时现场从卡的原始 JSON 解析（cardScripts），
 // 第一次改动时（ownTree）才把整棵树写进 state.card.scripts，之后照常 save()。导出卡时 card-export.js 合并回 data.extensions.tavern_helper。
-// 这一期脚本不运行、也不进拼装，所以改完只存盘、重画本页，不用让聊天区 / 预览 / 记忆失效。
+// 脚本不进拼装，所以改完只存盘、重画本页、通知 script-host，不用让聊天区 / 预览 / 记忆失效。
 //
-// 界面（照「人设」「世界书」页精简后的样子）：首行「新增」「导入」「批量」；一行灰字说明现在不运行；
+// 界面（照「人设」「世界书」页精简后的样子）：首行「新增」「导入」「批量」「重新运行」；一行灰字安全告知（用户定的，不弹窗）；
+// 只读标签页再多一行「只读标签页不运行脚本」；
 // 每个脚本一个可折叠的框（框头：启用开关、名字、按钮数、没保存的标记 •），文件夹是一个带开关的框，里面是它的脚本。
+// 框头还有一个运行状态的小点（运行中 / 出错 / 没启用 / 这个标签页不运行，悬停看文字）。页面最下面一个可折叠的「日志」：按脚本过滤、可清空，
+// 条目就是「杂项」页前端卡日志的同一份 ui.frameLog（带 scriptId 的那些），不另造一套。
 // 展开后：名字、说明、代码编辑器、「保存」「还原」「导出」「删除」。名字 / 说明 / 代码先改在草稿里（drafts，内存里，刷新就丢），点「保存」或 Ctrl+S 才写进卡。
 // 批量：进入后点框头整块即选中，工具条换成「全选」「导出」「删除」「取消」。
 //
@@ -20,8 +24,10 @@
 import { $, h, toast, uid, download } from './dom.js';
 import { state, ui, save, persist, STOPPED_TEXT } from './state.js';
 import { restoreActive } from './backup.js';   // 循环依赖：只在函数体里调用
-import { cardScripts, newScript, parseScriptFile, scriptFileObject } from '../scripts.js';
+import { cardScripts, newScript, parseScriptFile, scriptFileObject, flattenScripts } from '../scripts.js';
 import { safeFileName } from '../card-export.js';
+import { restartScripts, reconcileScripts, scriptStatus, scriptsRunState } from './script-host.js';   // 循环依赖：只在函数体里调用
+import { logLineText, renderMiscLog } from './tab-misc.js';   // 同上
 
 /** 每张卡（state.card 对象）一份的界面状态：展开的 id、草稿。换卡 / 重新读档换了对象，自然清掉 */
 const perCard = new WeakMap();
@@ -68,7 +74,7 @@ function locate(tree, id) {
     return null;
 }
 
-function commit() { save(); renderScriptsTab(true); }
+function commit() { save(); renderScriptsTab(true); restartScripts(); }
 
 const displayName = s => s.name || '(未命名)';
 const isDirty = (s, d) => !!d && (d.name !== s.name || d.info !== s.info || d.content !== s.content);
@@ -99,6 +105,7 @@ function saveDraft(id) {
     hit.item.name = d.name; hit.item.info = d.info; hit.item.content = d.content;
     v.drafts.delete(id);
     save();
+    restartScripts();   // 这个脚本在运行就重建沙箱；没开的不动（script-host 比较启用的脚本和代码）
     return hit.item;   // 写进卡里的那个对象（第一次改动时树刚被拷进 state.card.scripts，和画面上的不是同一个）
 }
 
@@ -277,7 +284,7 @@ function scriptBox(s, locked) {
     const dot = h('span', { class: 'scr-dirty', 'data-fk': 'scr-dirty', title: '有没保存的改动', hidden: !isDirty(s, v.drafts.get(s.id)) }, '•');
     const nBtn = s.button?.buttons?.length ?? 0;
     const head = h('summary', { class: `scr-head${batch.on ? ' batch-row' : ''}${batch.on && batch.picked.has(s.id) ? ' batch-picked' : ''}`, title: s.info ? s.info.slice(0, 200) : null },
-        pickBox(s.id), enableBox(s, locked), nameEl,
+        pickBox(s.id), enableBox(s, locked), statusDot(s.id), nameEl,
         nBtn ? h('span', { class: 'badge', 'data-fk': 'scr-btn-count', title: '这个脚本带的按钮（以后运行脚本时显示在输入框上方）' }, `按钮 ${nBtn}`) : null,
         dot);
     batchHead(head, s.id);
@@ -360,7 +367,9 @@ function renderBar(locked) {
             h('button', { type: 'button', 'data-fk': 'scr-add', disabled: locked, title: locked ? why : '新建一个脚本', onclick: addScript }, '新增'),
             h('button', { type: 'button', 'data-fk': 'scr-import', disabled: locked, title: locked ? why : '导入酒馆助手导出的脚本 / 文件夹 JSON（可多选）', onclick: importFiles }, '导入'),
             h('button', { type: 'button', 'data-fk': 'scr-batch', title: '勾选几个脚本，一起导出或删除',
-                onclick: () => { batch.on = true; batch.picked.clear(); renderScriptsTab(true); } }, '批量'));
+                onclick: () => { batch.on = true; batch.picked.clear(); renderScriptsTab(true); } }, '批量'),
+            h('button', { type: 'button', 'data-fk': 'scr-rerun', disabled: scriptsRunState() !== 'running', title: '把这张卡启用的脚本全部重新运行一遍',
+                onclick: () => { reconcileScripts({ force: true }); toast('已重新运行这张卡的脚本', 'ok'); } }, '重新运行'));
         return;
     }
     const tree = cardScripts(state.card);
@@ -406,11 +415,82 @@ export function renderScriptsTab(force = false) {
     if (force !== true && sig === lastSig && tab.firstChild) return;
     lastSig = sig;
     const locked = !!scriptsBlocked();
-    tab.replaceChildren(
+    tab.replaceChildren(...[   // replaceChildren 不像 h() 那样跳过 null，先滤掉
         h('div', { class: 'row scr-bar', 'data-fk': 'scr-bar' }),
-        h('div', { class: 'dim scr-note', 'data-fk': 'scr-note' }, '仅查看和编辑，暂不运行'),
+        // 安全告知（用户定的：一行灰字，不弹窗）
+        h('div', { class: 'dim scr-note', 'data-fk': 'scr-note' }, '脚本是卡作者写的代码，能读到这张卡的聊天并联网。'),
+        persist.readOnly ? h('div', { class: 'dim scr-note', 'data-fk': 'scr-readonly' }, '只读标签页不运行脚本') : null,
         tree.length
             ? h('div', { class: 'plist scr-list', 'data-fk': 'scr-list' }, tree.map(t => (t.type === 'folder' ? folderBox(t, locked) : scriptBox(t, locked))))
-            : h('div', { class: 'empty', 'data-fk': 'scr-empty' }, '这张卡没有脚本。'));
+            : h('div', { class: 'empty', 'data-fk': 'scr-empty' }, '这张卡没有脚本。'),
+        tree.length ? logSection() : null].filter(Boolean));
     renderBar(locked);
+    paintScriptStatus();
+    renderScriptLog();
+}
+
+// ───────────────────────────── 运行状态 / 日志（第 2 期）─────────────────────────────
+
+const STATUS_TEXT = {
+    running: '运行中', loading: '正在加载', error: '出错了', off: '没在运行（没启用，或所在的文件夹关着）',
+    readonly: '这个标签页是只读的，不运行脚本', restoring: '正在恢复备份，脚本暂停', stopped: '已停止保存，不运行脚本',
+};
+
+/** 框头上的运行状态小点（颜色用 class 区分；文字在 title 里）。内容由 paintScriptStatus 填 */
+function statusDot(id) {
+    return h('span', { class: 'scr-status', 'data-fk': 'scr-status', 'data-id': id, role: 'img' });
+}
+
+/**
+ * 把每个脚本的运行状态画到框头的小点上（就地改，不重建整页：脚本状态变化时焦点可能正在代码框里）。
+ * script-host.js 在沙箱报状态 / 建 / 拆时调它
+ */
+export function paintScriptStatus() {
+    const tab = $('#tab-scripts');
+    if (!tab) return;
+    for (const dot of tab.querySelectorAll('[data-fk="scr-status"]')) {
+        const { status, text } = scriptStatus(dot.dataset.id);
+        dot.dataset.status = status;
+        const label = STATUS_TEXT[status] ?? status;
+        dot.title = status === 'error' && text ? `${label}：${text}` : label;
+        dot.setAttribute('aria-label', dot.title);
+    }
+    const rerun = tab.querySelector('[data-fk="scr-rerun"]');
+    if (rerun) rerun.disabled = scriptsRunState() !== 'running';
+}
+
+/** 日志区的过滤：'' = 全部脚本，否则是脚本 id（选中的脚本不在当前卡里就当作全部） */
+let logFilter = '';
+let logOpen = false;
+
+/** 当前卡的脚本日志（ui.frameLog 里带 scriptId、属于当前卡的那些） */
+const scriptEntries = () => ui.frameLog.filter(l => l.scriptId !== undefined && l.cardId === persist.cardId);
+
+function logSection() {
+    const ids = flattenScripts(cardScripts(state.card));
+    if (logFilter && !ids.some(s => s.id === logFilter)) logFilter = '';
+    const sel = h('select', { 'data-fk': 'scr-log-filter', 'aria-label': '只看某个脚本的日志',
+        onchange: e => { logFilter = e.target.value; renderScriptLog(); } },
+        h('option', { value: '' }, '全部'), ...ids.map(s => h('option', { value: s.id }, displayName(s))));
+    sel.value = logFilter;
+    const box = h('details', { class: 'scr-log', 'data-fk': 'scr-log', open: logOpen },
+        h('summary', { class: 'scr-log-head' }, '日志'),
+        h('div', { class: 'row scr-log-bar' }, sel,
+            h('button', { type: 'button', 'data-fk': 'scr-log-clear', title: '清空这张卡的脚本日志',
+                onclick: () => {
+                    for (let i = ui.frameLog.length - 1; i >= 0; i--) { const l = ui.frameLog[i]; if (l.scriptId !== undefined && l.cardId === persist.cardId) ui.frameLog.splice(i, 1); }
+                    renderScriptLog(); renderMiscLog();
+                } }, '清空')),
+        h('div', { class: 'scr-log-box', 'data-fk': 'scr-log-box' }));
+    box.addEventListener('toggle', () => { logOpen = box.open; });
+    return box;
+}
+
+/** 重画日志区（就地，只换日志行）。frame-host.js 记了一条脚本日志后调它 */
+export function renderScriptLog() {
+    const box = $('#tab-scripts [data-fk="scr-log-box"]');
+    if (!box) return;
+    const list = scriptEntries().filter(l => !logFilter || l.scriptId === logFilter).slice(-200);
+    box.replaceChildren(...(list.length ? list.map(l => h('div', { class: `log-line ${l.level}` }, logLineText(l))) : [h('span', { class: 'dim' }, '（暂无）')]));
+    box.scrollTop = box.scrollHeight;
 }

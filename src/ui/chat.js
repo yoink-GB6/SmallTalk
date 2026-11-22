@@ -13,6 +13,7 @@ import { frameHostFor } from './frame-host.js';
 import { readSwipes, swipeTarget, selectSwipe, appendSwipe, ensureSwipes, syncSwipeSlot } from '../chatfile.js';
 import { renderAll } from './shell.js';
 import { chatChanged } from './chat-search.js';
+import { emitScriptEvent } from './script-host.js';   // 循环依赖：只在函数体里调用
 
 export function startChat(greetingIndex = 0) {
     const c = card();
@@ -320,6 +321,8 @@ export async function send() {
         state.chat.push({ role: 'user', name: state.persona.name || 'User', content: permanentRegex(text, 'user') });
         $('#input').value = '';
         fitInput();   // 发出去了：输入框缩回一行
+        // 酒馆助手脚本的 MESSAGE_SENT(楼层号)：酒馆在用户消息进了聊天之后发（script-host.js 先把新楼推给沙箱再发事件）
+        emitScriptEvent('message_sent', state.chat.length - 1);
     }
     await generateReply();
 }
@@ -401,6 +404,7 @@ export async function generateReply({ swipe = false } = {}) {
     setBusy(true);
     ui.abort = new AbortController();
     let streamed = '';
+    let received = false; // 回复（或中断时收到的那部分）写进了聊天：结束时给脚本发 MESSAGE_RECEIVED
     let removedAt = -1;   // 失败后删掉的占位原来在第几楼（finally 里决定渲染缓存作废多少）
     if (target) { unmountMessage(body); body.innerHTML = '…'; }   // 旧候选里可能有前端卡 iframe，先释放；酒馆这时也先显示「...」
     try {
@@ -430,18 +434,19 @@ export async function generateReply({ swipe = false } = {}) {
             msg.swipes = [text];
             msg.swipeId = 0;
         }
+        received = true;
         setTimeout(ensureMemories, 0);   // 回复写完后，后台把这一轮压成一句话
     } catch (e) {
         if (e.name !== 'AbortError') showGenError(e.message);
         if (target) {
-            if (streamed) { appendSwipe(target, streamed); swipedTurn(target); setTimeout(ensureMemories, 0); }
+            if (streamed) { appendSwipe(target, streamed); swipedTurn(target); setTimeout(ensureMemories, 0); received = true; }
         } else if (!msg.content) {
             // 按对象删占位：生成中聊天可能被别的入口改过（前端卡的 createChatMessages 等），最后一楼不一定还是它。
             // 已经不在聊天里（被删掉了）就什么都不做
             removedAt = state.chat.indexOf(msg);
             if (removedAt >= 0) state.chat.splice(removedAt, 1);
         }
-        else { msg.swipes = [msg.content]; msg.swipeId = 0; }
+        else { msg.swipes = [msg.content]; msg.swipeId = 0; received = true; }
     } finally {
         row.classList.remove('streaming');
         ui.abort = null;
@@ -454,6 +459,9 @@ export async function generateReply({ swipe = false } = {}) {
         save();
         renderAll();
         scrollChatToEnd();
+        // 酒馆助手脚本的 MESSAGE_RECEIVED(楼层号, 类型)：回复写进聊天之后（失败 / 中断但留下了一部分时也发，同酒馆）。
+        // 先推副本再发（script-host.js），所以脚本在回调里 getChatMessages(id) 读到的就是这条回复
+        if (received && at >= 0) emitScriptEvent('message_received', at, target ? 'swipe' : 'normal');
     }
 }
 

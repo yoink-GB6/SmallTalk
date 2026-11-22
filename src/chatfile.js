@@ -238,6 +238,9 @@ function messageToLine(msg, sendDateFallback) {
     if (typeof line.mes === 'string' && Array.isArray(line.swipes) && Number.isInteger(line.swipe_id) && line.swipe_id >= 0 && line.swipe_id < line.swipes.length) {
         line.swipes[line.swipe_id] = line.mes;
     }
+    // 楼层变量（酒馆助手的 message 作用域，每个候选一份的数组；types.js ChatMessage.variables）：写过才有，写回酒馆的 variables 字段。
+    // 没写过的导入消息，原值还在 st.variables 里，上面已经原样带上了
+    if (Array.isArray(msg.variables)) line.variables = structuredClone(msg.variables);
     return line;
 }
 

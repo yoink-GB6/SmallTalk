@@ -28,6 +28,7 @@ import { invalidateArchiveTab } from './tab-archive.js';
 import { askRegexFate, moveAndFlush, undoMove, refreshRegexViews, moveSummary } from './regex-delete.js';
 import { enabledScripts } from '../regex-move.js';
 import { restoreActive } from './backup.js';   // 循环依赖（backup.js 导入本文件）：只在函数体里调用
+import { cardVarsKey } from '../cardvars.js';
 
 // ───────────────────────────── 读列表 ─────────────────────────────
 
@@ -347,7 +348,8 @@ function teardownChatUi() {
     ui.preview = null;
     ui.previewIsSent = false;
     ui.openMsgs.clear();
-    ui.frameLog.length = 0;                 // 前端卡日志记的是旧存档里那些 iframe 的调用
+    // 前端卡日志记的是旧存档里那些 iframe 的调用：清掉。脚本的日志留着（同一张卡换存档时脚本不重建；换卡时「脚本」页只显示当前卡的脚本）
+    for (let i = ui.frameLog.length - 1; i >= 0; i--) if (ui.frameLog[i].scriptId === undefined) ui.frameLog.splice(i, 1);
     $('#gen-error').hidden = true;
     $('#manual-panel').hidden = true;
     $('#manual-reply').value = '';
@@ -632,7 +634,8 @@ export const deleteCard = (cardId, { confirmed = false } = {}) => op(async () =>
         if (!fate) return;
         if (fate === 'move') { moved = await moveAndFlush(enabled); if (!moved) return; refreshRegexViews(); }
     } else if (!confirmed && !confirm(what)) return;
-    const keys = [cardKey(cardId), indexKey(cardId), ...await store.keys(chatPrefix(cardId))];
+    // 卡的运行时数据（脚本变量、角色卡变量，cardvars.js）和卡在同一个事务里删
+    const keys = [cardKey(cardId), indexKey(cardId), cardVarsKey(cardId), ...await store.keys(chatPrefix(cardId))];
     const isCurrent = cardId === persist.cardId;
     if (isCurrent) applyCardChat(null, null);   // 先离开，之后的保存不会再写回这张卡
     const booksBefore = state.books;
