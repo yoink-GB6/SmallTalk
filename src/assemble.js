@@ -605,7 +605,8 @@ export function assemble(args) {
         const text = substitute(override, { ...ctx, original });
         collection[idx] = {
             ...target,
-            parts: text ? [part(text, { kind: 'prompt', id, label: `${target.name}（角色卡 ${field} 覆盖）` })] : [],
+            // cardField：这一段的原文是角色卡的哪个字段（「拼装」页就地编辑靠它找到原文，见 ui/prompt-edit.js）
+            parts: text ? [part(text, { kind: 'prompt', id, label: `${target.name}（角色卡 ${field} 覆盖）`, cardField: field })] : [],
         };
         info(`${id} 被角色卡 ${field} 覆盖${override.match(/{{original}}/i) ? '（{{original}} 展开为预设原文）' : ''}`);
     }

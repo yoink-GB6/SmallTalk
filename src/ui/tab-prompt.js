@@ -11,6 +11,7 @@ import { estimateTokens } from '../tokens.js';
 import { lastSent, lastUsage } from './sent-log.js';
 import { explainFirstDiff, scanUnstable, worldInfoRisk } from '../cache-hints.js';
 import { DEFAULT_CONTEXT_LIMIT } from '../migrate.js';   // 上下文上限的默认值只在 migrate.js 定义一处
+import { segView, resolveSource, messageHasEdit } from './prompt-edit.js';   // 就地编辑；循环依赖：只在函数体里调用
 
 // ───────────────────────────── 检查器：拼装 ─────────────────────────────
 
@@ -67,8 +68,10 @@ export function renderPromptTab() {
     kids.push(h('div', { class: 'legend' }, Object.entries(SOURCE_KINDS).map(([k, label]) =>
         h('span', null, h('i', { style: `background: var(--src-${k})` }), label))));
 
+    const shown = new Set();   // 这次重画里已经画过编辑框的来源（prompt-edit.js segView）
     p.messages.forEach((m, i) => {
-        const open = ui.openMsgs.has(i);
+        // 有一段正在就地编辑的消息强制展开：重画（输入框打字、记忆压缩完成……）不能把编辑框收起来
+        const open = ui.openMsgs.has(i) || messageHasEdit(m);
         const cardEl = h('div', { class: 'card' + (cmp ? (i < cmp.count ? ' cmp-same' : ' cmp-diff') : '') },
             h('header', { onclick: () => { open ? ui.openMsgs.delete(i) : ui.openMsgs.add(i); renderPromptTab(); } },
                 h('span', { class: 'dim mono' }, String(i).padStart(2, '0')),
@@ -77,7 +80,7 @@ export function renderPromptTab() {
                     m.sources.length > 8 ? h('span', { class: 'dim' }, `+${m.sources.length - 8}`) : null),
                 h('span', { class: 'dim' }, `${m.content.length} 字`),
             ),
-            open ? h('div', { class: 'body' }, segments(m)) : null,
+            open ? h('div', { class: 'body' }, segments(m, shown)) : null,
         );
         kids.push(cardEl);
     });
@@ -94,10 +97,17 @@ export function renderPromptTab() {
     tab.replaceChildren(...kids);
 }
 
-/** 把一条消息按出处切成段显示。切不准（长度对不上）时退回整段显示。 */
-export function segments(m) {
+/**
+ * 把一条消息按出处切成段显示。切不准（长度对不上）时退回整段显示。
+ * 每段交给 prompt-edit.js segView：能就地改的段带一个「编辑」，正在编辑的段画成编辑框。
+ * 只有一个出处的消息：能就地改时也画成一段（要有地方放「编辑」），不能改的照旧整段一个 <pre>。
+ * @param {Set<string>} [shown]  同一次重画里共用（同一来源出现在几条消息里时，编辑框只画在第一处）
+ */
+export function segments(m, shown = new Set()) {
     // assemble.js 保证：content.length === Σ sources.chars + (sources.length − 1)，各段之间恰好一个 '\n'
     const expected = m.sources.reduce((n, s) => n + s.chars, 0) + m.sources.length - 1;
+    const labelOf = s => `${SOURCE_KINDS[s.kind] ?? s.kind} · ${s.label}${s.depth != null ? ` · 深度 ${s.depth}` : ''}`;
+    if (m.sources.length === 1 && resolveSource(m.sources[0])) return segView(m.sources[0], m.content, labelOf(m.sources[0]), shown);
     if (m.sources.length <= 1 || expected !== m.content.length) return h('pre', null, m.content);
     const parts = [];
     let pos = 0;
@@ -105,9 +115,7 @@ export function segments(m) {
         parts.push({ s, body: m.content.slice(pos, pos + s.chars) });
         pos += s.chars + 1;
     }
-    return parts.map(({ s, body }) => h('div', { class: 'seg', style: `--c: var(--src-${s.kind})` },
-        h('div', { class: 'seg-label' }, `${SOURCE_KINDS[s.kind] ?? s.kind} · ${s.label}${s.depth != null ? ` · 深度 ${s.depth}` : ''}`),
-        h('pre', null, body)));
+    return parts.map(({ s, body }) => segView(s, body, labelOf(s), shown));
 }
 
 // ───────────────────────────── 字数去向 + 和上次发送的对比 ─────────────────────────────
