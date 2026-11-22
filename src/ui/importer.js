@@ -8,6 +8,7 @@ import { state, ui, save, addPreset, persist, STOPPED_TEXT } from './state.js';
 import { cleanPresetBody, cleanRegexList, uniquePresetName } from '../migrate.js';
 import { sanitizeNotice } from '../preset-sanitize.js';
 import { replaceBookEntries, cardBookNameOf } from '../books.js';
+import { parseCardScripts, flattenScripts } from '../scripts.js';
 import { addCard, importChatFile } from './archive.js';
 import { renderAll } from './shell.js';
 import { importPersonasJson } from './tab-persona.js';   // 循环依赖：只在函数体里调用
@@ -117,7 +118,9 @@ export async function setCard(parsed, avatar) {
     const bits = [];
     if (parsed.worldEntries.length) bits.push(`世界书 ${parsed.worldEntries.length} 条`);
     if (parsed.regexScripts.length) bits.push(`正则 ${parsed.regexScripts.length} 条`);
-    if (parsed.raw?.data?.extensions?.tavern_helper?.scripts?.length) bits.push('含酒馆助手脚本（不会运行）');
+    // 酒馆助手脚本：新键 / 旧键、对象 / [[k,v]] 数组都认（scripts.js parseCardScripts）。第 1 期只能在「脚本」页看和改，不运行
+    const nScripts = flattenScripts(parseCardScripts(parsed.raw)).length;
+    if (nScripts) bits.push(`脚本 ${nScripts} 个（暂不运行）`);
     toast(`已导入角色卡「${parsed.name}」${bits.length ? '：' + bits.join('，') : ''}`, 'ok');
 }
 

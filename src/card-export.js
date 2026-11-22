@@ -15,6 +15,7 @@
 //   node_modules/sanitize-filename             酒馆处理文件名用的库
 
 import { parseCard } from './card.js';
+import { scriptsChanged, writeScriptsInto } from './scripts.js';
 
 /** @typedef {import('./types.js').Card} Card */
 /** @typedef {import('./types.js').WorldEntry} WorldEntry */
@@ -224,7 +225,8 @@ function upgradeV1(raw, card) {
 
 /**
  * 把我们的 Card 还原成酒馆的卡 JSON。以 card.raw（导入时原样保留的原始 JSON）为底，
- * 只覆盖我们这边会被用户改的两块：卡内嵌世界书（card.worldEntries）和卡自带正则（card.regexScripts）。
+ * 只覆盖我们这边会被用户改的三块：卡内嵌世界书（card.worldEntries）、卡自带正则（card.regexScripts）
+ * 和酒馆助手脚本（card.scripts → data.extensions.tavern_helper，合并规则在 scripts.js writeScriptsInto）。
  * 其余字段一个不动；没改过的卡导出结果与 card.raw JSON 语义相同。不修改 card.raw。
  *
  * 注意：酒馆导出时会跑 unsetPrivateFields（fav 设成 false、删 chat）。为了让「没改过 = 原样」可验证，
@@ -249,12 +251,14 @@ export function exportCardJson(card, options = {}) {
 
     const bookChanged = !jsonEqual(entries, baseEntries) || worldName !== (baseline?.worldName ?? '');
     const regexChanged = !jsonEqual(regex, baseRegex);
+    // 酒馆助手脚本（card.scripts，规则见 scripts.js 文件头「导出」）：没在「脚本」页改过 = 不碰 raw
+    const scriptsDirty = scriptsChanged(card);
 
-    // V1：只有真要写世界书 / 正则（V1 没地方放）时才升级。什么都没改就原样还回去，
+    // V1：只有真要写世界书 / 正则 / 脚本（V1 没地方放）时才升级。什么都没改就原样还回去，
     // 酒馆导入 V1 时自己会升级，结果和我们升级后再导入是一样的，原样更不容易出错。
     // raw 解析不出卡（迁移来的空卡 emptyCard() 的 raw = {}）：没有底可用，直接用 Card 的字段拼一张 V2。
     const isV1 = !isObj(out.data);
-    if (!baseline || (isV1 && (bookChanged || regexChanged))) out = upgradeV1(out, card);
+    if (!baseline || (isV1 && (bookChanged || regexChanged || scriptsDirty))) out = upgradeV1(out, card);
 
     if (bookChanged) {
         const rawBook = isObj(out.data.character_book) ? out.data.character_book : null;
@@ -273,6 +277,8 @@ export function exportCardJson(card, options = {}) {
         if (!isObj(out.data.extensions)) out.data.extensions = {};
         out.data.extensions.regex_scripts = regex;
     }
+
+    if (scriptsDirty) writeScriptsInto(out, card);
 
     if (options.stripPrivate) unsetPrivateFields(out);
     return out;

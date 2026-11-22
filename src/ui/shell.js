@@ -9,6 +9,7 @@ import { renderWorldTab } from './tab-world.js';
 import { renderArchiveTab } from './tab-archive.js';
 import { renderPresetTab } from './tab-preset.js';
 import { renderRegexTab } from './tab-regex.js';
+import { renderScriptsTab } from './tab-scripts.js';
 import { renderMemoryTab } from './memory.js';
 import { renderMiscTab } from './tab-misc.js';
 import { renderPersonaTab } from './tab-persona.js';
@@ -62,7 +63,7 @@ export function renderInspector(force = false) {
         if (vars) vars.textContent = JSON.stringify(ui.preview?.variables ?? state.variables, null, 2);
         return;
     }
-    ({ prompt: renderPromptTab, world: renderWorldTab, persona: renderPersonaTab, archive: renderArchiveTab, preset: renderPresetTab, regex: renderRegexTab, memory: renderMemoryTab, provider: renderProviderTab, misc: renderMiscTab })[active](force === true);
+    ({ prompt: renderPromptTab, world: renderWorldTab, persona: renderPersonaTab, archive: renderArchiveTab, preset: renderPresetTab, regex: renderRegexTab, scripts: renderScriptsTab, memory: renderMemoryTab, provider: renderProviderTab, misc: renderMiscTab })[active](force === true);
 }
 
 export function renderAll() {

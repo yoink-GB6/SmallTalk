@@ -8,6 +8,7 @@ import { sanitizeRegexScript } from './regex.js';
 import { sanitizePreset } from './preset-sanitize.js';
 import { parseWorldbook } from './card.js';
 import { normalizeBookScope } from './books.js';
+import { normalizeScriptTree } from './scripts.js';
 
 export const SCHEMA_VERSION = 2;
 
@@ -237,6 +238,11 @@ export function normalizeCard(card) {
     if (!Array.isArray(out.regexScripts) || c.list.length !== out.regexScripts.length || c.list.some((x, i) => x !== out.regexScripts[i])) out.regexScripts = c.list;
     // 卡自带世界书的整本开关（types.js Card.worldDisabled）：只认 true，别的值（false、'yes'、1……）一律当作启用、删掉这个键（默认值不写）
     if (out.worldDisabled !== true) delete out.worldDisabled;
+    // 酒馆助手脚本（types.js Card.scripts）：没有 = 跟着 raw（不补这个键）；不是数组 = 坏数据，删掉回到跟着 raw；是数组就规范化（已经规范的还是同一个数组）
+    if (Object.hasOwn(out, 'scripts')) {
+        const t = normalizeScriptTree(out.scripts);
+        if (t === null) delete out.scripts; else out.scripts = t;
+    }
     return out;
 }
 

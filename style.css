@@ -1047,3 +1047,30 @@ body:not(:has(#manual-mode:checked)) .smalltalk-frontend-source { display: none;
 /* 批量：点整行选中 */
 .batch-row, .arch-card > header.batch-row { cursor: pointer; }   /* 后一个选择器是为了压过 .arch-card > header 的 cursor: default */
 .batch-row.batch-picked { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* 脚本页（src/ui/tab-scripts.js）：框沿用 .plist / .pitem（两个主题都已照顾到），这里只补框头、编辑区、文件夹的缩进 */
+.scr-bar { margin-bottom: 6px; }
+.scr-bar [data-fk="scr-picked"] { font-size: var(--font-size-sm); }
+.scr-note { font-size: var(--font-size-sm); margin-bottom: 8px; }
+.scr-head { display: flex; align-items: center; gap: 6px; padding: 3px 8px; cursor: pointer; min-width: 0; list-style: none; }
+.scr-head::-webkit-details-marker { display: none; }
+.scr-head::before { content: '▸'; flex: none; color: var(--dim); }
+details[open] > .scr-head::before { content: '▾'; }
+.scr-head > input[type="checkbox"] { flex: none; margin: 0; }
+.scr-head > .badge { flex: none; }
+.scr-head .scr-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scr-folder > .scr-head .scr-name { font-weight: 600; }
+.scr-item.off > .scr-head .scr-name, .scr-folder.off > .scr-head .scr-name { opacity: .55; }
+.scr-dirty { flex: none; color: var(--accent); font-weight: 700; }
+.scr-dirty[hidden] { display: none; }
+.scr-body { border-top: var(--border-width) solid var(--line); padding: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.scr-body .scr-row { display: flex; }
+.scr-body .scr-row input { flex: 1; min-width: 0; }
+.scr-body textarea { width: 100%; box-sizing: border-box; }
+.pitem textarea.scr-info { font-family: inherit; font-size: inherit; min-height: 0; resize: vertical; }
+.pitem textarea.scr-code { white-space: pre; overflow: auto; tab-size: 2; min-height: 8em; max-height: 70vh; resize: vertical; }
+.scr-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-start; }
+.scr-actions button.danger, .scr-bar button.danger { color: var(--bad); border-color: var(--bad); }
+.scr-children { border-top: var(--border-width) solid var(--line); padding: 6px 6px 6px 18px; }
+.scr-folder:not([open]) > .scr-children { display: none; }
+.scr-empty-folder { font-size: var(--font-size-sm); padding: 2px 4px; }

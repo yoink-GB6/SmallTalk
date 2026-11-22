@@ -24,6 +24,7 @@ import { normalizeNotes, mergeNotes } from './notes.js';
 import { alignPersonas, mergePersonas, switchPersona } from './personas.js';
 import { bookContent, bookScopeOf, remapBookCards, setBookScope, setBookName, isBookActiveFor } from './books.js';
 import { storedAuthorNote } from './author-note.js';
+import { cardScripts } from './scripts.js';
 
 export const BACKUP_FORMAT = 'smalltalk-backup';
 export const BACKUP_VERSION = 1;
@@ -52,7 +53,14 @@ export function canonical(v) {
 
 // 卡自带世界书的整本开关（Card.worldDisabled）不算内容：它是「这张卡在这个浏览器里怎么用」，和正则的 disabled 一样。
 // 只差这个开关的两张卡是同一张卡——备份里的卡并进本机那张，本机的开关不动（酒馆 zip 导入同理，见 tavern-convert.js applyWorldRules）
-const cardContent = card => { const { worldDisabled: _w, ...rest } = normalizeCard(card); return rest; };
+// 酒馆助手脚本（Card.scripts）算内容，开关（enabled）也算——它写在卡文件里、导出时带走，和卡自带正则的 disabled 一样。
+// 按「现在的树」比（scripts.js cardScripts：没有 card.scripts 时从 raw 解析），所以「没改过、跟着 raw」和「写了但一样」是同一张卡。
+// 没有脚本的卡不加这个键：签名和加脚本功能之前逐字相同
+const cardContent = card => {
+    const { worldDisabled: _w, scripts: _s, ...rest } = normalizeCard(card);
+    const scripts = cardScripts({ ...rest, ...(_s !== undefined ? { scripts: _s } : {}) });
+    return scripts.length ? { ...rest, scripts } : rest;
+};
 export const cardSig = rec => canonical([cardContent(rec?.card), typeof rec?.avatar === 'string' ? rec.avatar : '']);
 // 作者注释（ChatRecord.authorNote）算存档的内容：规范化后不是默认值时追加在最后。没有 / 坏到全是默认值的存档（包括作者注释出现之前的所有备份）
 // 签名和以前【逐字相同】，判重结果不变。只差作者注释的两个存档是两个存档（宁可多一个，也不丢掉一份注释）
@@ -944,6 +952,14 @@ export function planBackupImport(backup, existing, { newId, now, fresh = false, 
                 const before = newCard.card.regexScripts;
                 const fixed = normalizeCard(newCard.card).regexScripts;
                 if (fixed !== before) newCard.card = { ...newCard.card, regexScripts: fixed };
+            }
+            // 酒馆助手脚本同理（不是数组的删掉 = 回到跟着 raw；坏条目丢掉）。读档时 normalizeCard 也会再做一遍，这里先做是为了存进去的就是干净的
+            if (isObj(newCard.card) && Object.hasOwn(newCard.card, 'scripts')) {
+                const fixed = normalizeCard(newCard.card);
+                if (fixed.scripts !== newCard.card.scripts) {
+                    const { scripts: _old, ...restCard } = newCard.card;
+                    newCard.card = fixed.scripts === undefined ? restCard : { ...restCard, scripts: fixed.scripts };
+                }
             }
             target = { id: newCard.id, isNew: true, rec: newCard };
             cardBySig.set(sig, target);

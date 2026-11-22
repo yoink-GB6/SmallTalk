@@ -183,8 +183,13 @@ export const STORE_KEYS = {
     },
     card: {
         key: 'card:<cardId>', what: '角色卡（CardRecord：卡本体 + 头像 + 停在哪个存档）',
-        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「存档」页：卡的导出（酒馆 PNG / JSON）；导入走拖文件 / 导入…；「杂项」页「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（characters/）',
-        how: '恢复时换新 id；内容相同（cardSig，不看卡自带世界书的开关 card.worldDisabled）的不新建，存档并进已有的卡，本机那张的开关不动；开关跟着卡记录进备份，不进导出的酒馆卡',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「存档」页：卡的导出（酒馆 PNG / JSON）；导入走拖文件 / 导入…；「杂项」页「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（characters/）；「脚本」页：单个脚本 / 文件夹的导出导入（酒馆助手脚本 JSON）',
+        how: '恢复时换新 id；内容相同（cardSig，不看卡自带世界书的开关 card.worldDisabled）的不新建，存档并进已有的卡，本机那张的开关不动；开关跟着卡记录进备份，不进导出的酒馆卡。'
+            + '酒馆助手脚本（card.scripts，2026-11-23 第 1 期，不运行；缺省 = 跟着 raw，见 types.js Card.scripts、src/scripts.js）是卡内容的一部分：'
+            + '跟着卡记录进整体备份；判重时算内容（代码、名字、开关 enabled 都算，和卡自带正则的 disabled 一样——它们都写在卡文件里），用 cardScripts 的值比，'
+            + '「没改过、跟着 raw」和「写了但一样」判成同一张卡；新加进来的卡先规范化（不是数组的删掉、坏条目丢掉）。'
+            + '导出卡（PNG / JSON、酒馆目录 zip）时合并回 data.extensions.tavern_helper，没改过的卡和原文件逐字相同；从酒馆 zip 导入时跟着 raw 自然带进来。'
+            + '单个脚本 / 文件夹另有导出导入（「脚本」页，酒馆助手的脚本文件格式）。不发给模型；前端卡读不到',
     },
     chat: {
         key: 'chat:<cardId>:<chatId>', what: '存档（ChatRecord：消息、局部变量、名字、作者注释 authorNote（默认值时不写）……）',

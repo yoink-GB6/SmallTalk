@@ -583,7 +583,7 @@ export const addCard = (parsed, avatar) => op(async () => {
         // 卡自带世界书的整本开关（Card.worldDisabled）是用户在这里设的，不是卡文件的内容：更新卡的定义时保留它
         //（和拖入同名世界书文件时保留它的开关是一个道理，见 books.js replaceBookEntries）
         if (rec.card?.worldDisabled === true) parsed.worldDisabled = true;
-        rec.card = parsed;
+        rec.card = parsed;   // 酒馆助手脚本（Card.scripts）以新卡文件为准：parsed 里没有这个键，旧卡在「脚本」页的改动随之丢掉（和卡自带正则一样）
         if (avatar) rec.avatar = avatar;   // JSON 卡没有头像：保留原来的
         if (same.id === persist.cardId) {
             state.card = rec.card; state.avatar = rec.avatar;

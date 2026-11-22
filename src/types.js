@@ -74,6 +74,43 @@ export {};
  *   （public/scripts/world-info.js getCharacterLore）；内嵌的那份只是保存角色时服务端写进卡里的拷贝（src/endpoints/characters.js
  *   ~L628–640），可能是旧的。酒馆 zip 导入时，卡绑定的书文件一起导进来了，就把卡自带的这份关掉（tavern-convert.js applyWorldRules）。
  *   单独导入一张卡：启用（不写）。同名卡「更新」时保留旧卡的这个开关（archive.js addCard）。
+ * @property {ScriptTree[]} [scripts]          酒馆助手脚本（2026-11-23 第 1 期：只能在「脚本」页看、开关、增删、改代码，【不运行】）。
+ *   【缺省 = 跟着 raw】：没有这个键时，脚本树现场从 raw 解析（src/scripts.js cardScripts / parseCardScripts：
+ *   data.extensions.tavern_helper.scripts，对象或 [[k,v]] 数组；没有它才看旧键 TavernHelper_scripts）。parseCard 不写这个键，
+ *   所以已导入的卡不用迁移，不用这个功能的卡存储形状不变。用户在「脚本」页第一次改动时才把整棵规范化的树写进来，之后一直有（删光了是 []）。
+ *   规范化的形状 = 酒馆助手新格式（字段名原样，见下面 Script / ScriptFolder），我们不认识的字段原样保留。
+ *   读档（migrate.js normalizeCard）：不是数组 → 删掉这个键（回到跟着 raw）；是数组 → 规范化（坏条目丢掉、字段校正、id 补齐）。
+ *   导出（card-export.js exportCardJson → scripts.js writeScriptsInto）：和 parseCardScripts(raw) 相同 → raw 一字不动；
+ *   不同 → 只改动过的条目 / 字段，规则见 scripts.js 文件头。
+ *   整体备份：跟着卡记录走，【算卡的内容】（含 enabled 开关，和卡自带正则的 disabled 一样；backup.js cardSig 用 cardScripts 的值比）。
+ *   同名卡「更新」：以新卡文件为准（parseCard 的结果没有这个键，旧的改动丢掉——和正则一样）。
+ *   不发给模型（拼装不读它），消息里的前端卡也读不到（frame-host.js 没有接口）。
+ */
+
+/**
+ * 酒馆助手的一个脚本（新格式，酒馆助手 4.12.2 src/type/scripts.ts；括号里是缺省值）。规范化后每个字段都有。
+ * @typedef {Object} Script
+ * @property {'script'} type
+ * @property {boolean} enabled        卡作者 / 用户设的开关（false）
+ * @property {string} name            ('')
+ * @property {string} id              酒馆助手里是 uuid；缺失 / 重复时我们补一个确定的 'st-<位置>'
+ * @property {string} content         代码（''）。整段被 ``` 围起来时运行前剥掉外层（scripts.js stripCodeFence，第 2 期用）
+ * @property {string} info            作者写的说明（''）
+ * @property {{enabled: boolean, buttons: {name: string, visible: boolean}[]}} button   脚本按钮（enabled 缺省 true；第 4 期用）
+ * @property {Object} data            脚本变量的初值（{}）。第 1 期只原样保留
+ * @property {{data: boolean, button: boolean}} export_with   导出时带不带 data / 按钮（都缺省 true）。只在单个脚本导出时生效，导出卡时这一期不处理
+ *
+ * 文件夹（只有一层，里面只能是脚本）。
+ * @typedef {Object} ScriptFolder
+ * @property {'folder'} type
+ * @property {boolean} enabled        关着的文件夹里的脚本都不运行
+ * @property {string} name
+ * @property {string} id
+ * @property {string} icon            ('fa-solid fa-folder')
+ * @property {string} [color]         原来没有就不写（酒馆助手缺省用主题的引用色）
+ * @property {Script[]} scripts
+ *
+ * @typedef {Script|ScriptFolder} ScriptTree
  */
 
 /**
