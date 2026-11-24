@@ -22,7 +22,7 @@ readme和功能一样没写完~
 不用开termux！
 
 网页仅支持api
-exe支持本地模型or subscription，走原生Claude Code / Codex / …… session非反代（←这个省略号一看就是还没做）
+exe额外支持subscription，走原生Claude Code / Codex / …… session非反代（←这个省略号一看就是没买过其他会员）
 
 # 声明
 素材灵感东拼西凑，有问题告诉我就行
