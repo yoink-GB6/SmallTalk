@@ -1,7 +1,18 @@
 # 哇~这是什么
-无需搭建sillytavern的轻量（无量？）工具
-因为smalltalk和sillytavern缩写都是st所以做了！
+约会app？
+small talk练习器？
+无需termux的酒馆！
 
-点击即用：https://still-snowflake-14c7.xl18745709810.workers.dev/
+猜猜它为什么出现？
+因为我发现small talk和silly tavern缩写都是st！
 
-readme和功能一样没写完！
+（temp）点击即用：https://still-snowflake-14c7.xl18745709810.workers.dev/
+
+readme和功能一样没写完~
+
+## TL;DR：
+网页仅支持api
+exe支持本地模型or subscription，走原生Claude Code/Codex/…… session非反代
+
+# 声明
+素材灵感东拼西凑，有问题告诉我就行
