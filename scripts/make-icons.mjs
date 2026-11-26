@@ -20,7 +20,7 @@
 //   start_url "." / scope "."：全部用相对路径，网页版可能挂在子路径（/仓库名/）下，写 "/" 会跑到站点根。
 //   icons 的 src 同理是相对路径。
 //   background_color #f4f2ee：启动画面的底色，取浅色主题 --bg。
-//   theme_color #ffffff：系统标题栏 / 状态栏的颜色，取浅色主题 --panel，因为页面顶栏（#topbar）就是 --panel 色。
+//   theme_color #ffffff：系统标题栏 / 状态栏的颜色，取浅色主题 --panel，因为页面顶栏（#top-bar）就是 --panel 色。
 //     清单只能写一个 theme_color，没法跟随深色模式；深色的那条放在 index.html 里用 media 区分
 //     （深色顶栏 --panel 是 #1f2125），页面打开后以 <meta name="theme-color"> 为准。
 

@@ -34,7 +34,8 @@
      「允许直接操作页面」的美化脚本会给它设背景图。拆掉脚本时它上面的东西清掉（ui/page-guard.js 的空位） -->
 <div id="bg1"></div>
 
-<header id="topbar">
+<!-- 顶栏 #top-bar、聊天区 #sheld：酒馆的名字（2026-11-27 从 #topbar / #chat-pane 改的，「允许直接操作页面」的美化 CSS / 脚本按这些名字找元素） -->
+<header id="top-bar">
   <!-- 标题：兼开合右侧面板的按钮（窄屏开合抽屉，宽屏收起 / 展开面板；role / tabindex / aria-expanded / title 由 src/ui/drawer.js 加，
        前面的 ☰ 图标是 CSS 伪元素，所以 textContent 仍是干净的 "SmallTalk"）。id 沿用 drawer-toggle -->
   <div id="drawer-toggle" class="brand">SmallTalk</div>
@@ -55,7 +56,7 @@
 <div id="store-error" hidden><b>存储出了问题</b> <span id="store-error-text"></span></div>
 
 <main id="layout">
-  <section id="chat-pane">
+  <section id="sheld">
     <!-- 聊天区顶上不再有工具栏（存档名、楼数、开场白、手动徽标都挪走了，见 tab-archive.js / 顶栏）。
          #chat-info 只在有话要说时出现：上下文上限丢了楼、有隐藏楼层（chat.js renderChatInfo）；平时 hidden -->
     <div id="chat-info" class="dim" hidden></div>
@@ -87,8 +88,9 @@
     <div id="script-buttons" hidden></div>
     <!-- 输入框和发送按钮的 id 用酒馆的名字（#send_textarea / #send_but，2026-11-24 从 #input / #send 改的），
          两边的 #leftSendForm / #rightSendForm 是酒馆输入框左右放按钮的位置：我们自己不往里放东西，留给「允许直接操作页面」的脚本挂按钮，
-         没有子元素时不占位置（style.css :empty）。标签之间不要留空白，否则 :empty 不成立 -->
-    <form id="composer">
+         没有子元素时不占位置（style.css :empty）。标签之间不要留空白，否则 :empty 不成立。
+         输入区本身的 id 也是酒馆的 #send_form（2026-11-27 从 #composer 改的，美化 CSS 按这个名字找输入区） -->
+    <form id="send_form">
       <div id="leftSendForm"></div><textarea id="send_textarea" rows="1" placeholder="Enter发送，Shift+Enter换行"></textarea><div id="rightSendForm"></div>
       <div class="col">
         <button id="send_but" class="primary" type="submit">发送</button>

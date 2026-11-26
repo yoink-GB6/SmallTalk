@@ -365,7 +365,7 @@
 :root[data-theme="princesse"] table.grid th { font-weight: 400; letter-spacing: .04em; }   /* 表头列窄，字距拉太开会折行 */
 /* 引号里的对白：同色（不加别的彩色）。字体不在这里设：这条选择器比卡的 <style>（`.mes_text q`、`.mes_text *`）更具体，
    设了字体会盖掉卡自己指定的字体；q 本来就继承容器的字体（主题的衬线，或卡给祖先元素设的字体）。 */
-:root[data-theme="princesse"] .mes_text q { color: inherit; }
+:root[data-theme="princesse"] .mes_text q { color: var(--chat-quote); }   /* 没定义 = 继承（同色）；美化设了引号色时用它（ui/theme-link.js） */
 :root[data-theme="princesse"] .mes_text { font-size: var(--pr-font-size-chat); }
 
 /* ── Princesse：按钮 ── */
@@ -543,7 +543,7 @@ textarea { width: 100%; resize: vertical; }
 .mono { font-family: var(--font-mono); font-size: var(--font-size-sm); }
 
 /* ── 顶栏 ── */
-#topbar {
+#top-bar {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 14px; background: var(--panel); border-bottom: var(--border-width) solid var(--line);
 }
@@ -557,7 +557,7 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; color: var(-
 
 /* ── 布局 ── */
 #layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-#chat-pane { display: flex; flex-direction: column; min-height: 0; border-right: var(--border-width) solid var(--line); }
+#sheld { display: flex; flex-direction: column; min-height: 0; border-right: var(--border-width) solid var(--line); }
 #inspector { display: flex; flex-direction: column; min-height: 0; background: var(--panel-2); }
 /* 原先这里有一条 max-width:900px 的规则，把聊天区和检查器改成上下排列（很难用）。
    已删除：窄屏改成「检查器收进右侧抽屉」，规则集中在文件末尾的「窄屏：检查器抽屉」块。 */
@@ -580,7 +580,7 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; color: var(-
 #chat { flex: 1; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px;
   background-color: var(--bg-chat); background-image: var(--bg-image-chat); background-repeat: var(--bg-image-repeat); background-size: var(--bg-image-size); }
 .mes { border: var(--border-width) solid var(--line); border-radius: var(--radius-message); background: var(--bot-bg); padding: 8px 12px; box-shadow: var(--shadow-card); }
-.mes[data-role="user"] { background: var(--user-bg); }
+.mes:where([data-role="user"]) { background: var(--user-bg); }   /* :where：和 .mes 同优先级，美化脚本塞的 `.mes { background: … }` 对用户楼也生效 */
 .mes_head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
 .mes_name { font-weight: 600; }
 .mes_idx { color: var(--dim); font-size: var(--font-size-sm); }
@@ -588,7 +588,13 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; color: var(-
 .mes:hover .mes_actions, .mes:focus-within .mes_actions { opacity: 1; }
 .mes_text { overflow-wrap: anywhere; font-family: var(--font-chat); }
 .mes_text p { margin: .45em 0; }
-.mes_text q { color: var(--accent); }
+.mes_text q { color: var(--chat-quote, var(--accent)); }
+/* 斜体 / 下划线 / 引号的颜色：平时都不定义（--chat-em 等只在「允许直接操作页面」的美化改了酒馆的 --SmartThemeEmColor 等时，
+   由 ui/theme-link.js 写在聊天区上）。没定义时 var() 在计算值阶段无效、color 退回 unset = 继承，和没有这几条规则时完全一样；
+   卡自己的 <style>（`.mes_text em` 之类，同样的优先级、排在后面）照样压得过。规则照酒馆 style.css 的 .mes_text i / em / u / q i */
+.mes_text :is(i, em) { color: var(--chat-em); }
+.mes_text u { color: var(--chat-underline); }
+.mes_text q :where(i, em) { color: inherit; }   /* :where：和上一条同优先级（靠排在后面赢），不压过卡自己的 `.mes_text em` */
 .mes_text q::before, .mes_text q::after { content: none; }
 .mes_text pre { background: var(--panel-2); border: var(--border-width) solid var(--line); border-radius: var(--radius-control); padding: 8px; overflow: auto; }
 .mes_text code { font-family: var(--font-mono); font-size: 12.5px; }
@@ -597,13 +603,13 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; color: var(-
 .mes.streaming .mes_text::after { content: "▍"; color: var(--accent); animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .mes_edit { display: flex; flex-direction: column; gap: 6px; }
-#composer { display: flex; gap: 8px; padding: 10px 14px; border-top: var(--border-width) solid var(--line); background: var(--panel); }
+#send_form { display: flex; gap: 8px; padding: 10px 14px; border-top: var(--border-width) solid var(--line); background: var(--panel); }
 /* 输入框默认一行高，随内容变高（chat.js fitInput 定高度），最高半个可见屏幕（dvh：手机软键盘弹出后按剩下的可见区域算；不认 dvh 的旧浏览器用 vh）。
    发送 / 停止占同一个位置（同一时刻只显示一个），和一行的输入框等高，输入框变高时贴在底部、不跟着拉长 */
-#composer { align-items: flex-end; }
-#composer textarea { flex: 1; resize: none; box-sizing: border-box; min-height: var(--control-height); max-height: 50vh; max-height: 50dvh; overflow-y: auto; }
-#composer .col { display: flex; flex-direction: column; }
-#composer .col button { height: var(--control-height); box-sizing: border-box; }
+#send_form { align-items: flex-end; }
+#send_form textarea { flex: 1; resize: none; box-sizing: border-box; min-height: var(--control-height); max-height: 50vh; max-height: 50dvh; overflow-y: auto; }
+#send_form .col { display: flex; flex-direction: column; }
+#send_form .col button { height: var(--control-height); box-sizing: border-box; }
 /* 酒馆的元素名（给「允许直接操作页面」的美化脚本用，ui/script-host.js 文件头）：
    #leftSendForm / #rightSendForm：输入框左右放按钮的位置，我们自己不放东西；空着时不占位置（也不占 flex 的 gap），脚本挂了按钮才出现。
    #bg1：铺满全屏的背景层，在一切内容下面（z-index 负数：在页面底色之上、所有内容之下），默认透明、不拦点击——没有脚本时外观和没有它一样 */
@@ -830,10 +836,10 @@ button.chip-card::after { content: '▾'; color: var(--dim); font-weight: 400; }
 @media (max-width: 900px) {
   /* 聊天区占满；inspector 变成 fixed 后不再占格子 */
   #layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
-  #chat-pane { border-right: 0; }
+  #sheld { border-right: 0; }
   /* 触屏：点击区域至少约 36px 高 */
-  #topbar button, #topbar select, #topbar input:not([type="checkbox"]), .arch-greeting-slot select, #composer button { min-height: 36px; }
-  #topbar { gap: 6px 8px; padding: 6px 10px; }
+  #top-bar button, #top-bar select, #top-bar input:not([type="checkbox"]), .arch-greeting-slot select, #send_form button { min-height: 36px; }
+  #top-bar { gap: 6px 8px; padding: 6px 10px; }
   /* --topbar-h 由 drawer.js 量出来：抽屉和遮罩从顶栏下沿开始，这样顶栏上的切换按钮始终点得到。
      z-index：遮罩 15 < 抽屉 16 < 拖放提示 20 < 导出面板 25 < 模型下拉 28 < toast 30，浮层不会被盖住 */
   #drawer-mask { display: block; position: fixed; left: 0; right: 0; bottom: 0; top: var(--topbar-h, 48px); z-index: 15;
@@ -861,7 +867,7 @@ button.chip-card::after { content: '▾'; color: var(--dim); font-weight: 400; }
 
 /* ── 顶栏精简 ── */
 /* 顶栏只剩：标题（窄屏下兼作抽屉按钮）、卡片名、告警 / 状态灯。一律单行不换行；放不下时只截断卡片名。 */
-#topbar { flex-wrap: nowrap; min-width: 0; }
+#top-bar { flex-wrap: nowrap; min-width: 0; }
 .brand { flex: none; white-space: nowrap; user-select: none; display: flex; align-items: center; cursor: pointer; }
 /* 标题兼开合按钮（窄屏开合抽屉、宽屏收起 / 展开右侧面板）：前面带 ☰，整块可点；伪元素不进 textContent */
 .brand::before { content: '☰'; margin-right: 6px; }
@@ -874,15 +880,15 @@ button.chip-card::after { content: '▾'; color: var(--dim); font-weight: 400; }
 @media (min-width: 901px) {
   body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); }
   #layout { display: contents; }
-  #topbar { grid-column: 1; grid-row: 1; }
+  #top-bar { grid-column: 1; grid-row: 1; }
   #store-error { grid-column: 1; grid-row: 2; }
-  #chat-pane { grid-column: 1; grid-row: 3; }
+  #sheld { grid-column: 1; grid-row: 3; }
   #inspector { grid-column: 2; grid-row: 1 / -1; }
-  #topbar, #tabs { height: 53px; flex: none; }
+  #top-bar, #tabs { height: 53px; flex: none; }
   #tabs { align-items: stretch; padding: 0 10px; }
   body.panel-collapsed { grid-template-columns: minmax(0, 1fr); }
   body.panel-collapsed #inspector { display: none; }
-  body.panel-collapsed #chat-pane { border-right: 0; }
+  body.panel-collapsed #sheld { border-right: 0; }
 }
 .chip-card { flex: 0 1 auto; min-width: 0; }
 .chip-card img, button.chip-card::after { flex: none; }
@@ -1165,7 +1171,7 @@ details[open] > .scr-head::before { content: '▾'; }
 #script-buttons { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
   padding: 4px 14px 0; background: var(--panel); border-top: var(--border-width) solid var(--line); }
 #script-buttons[hidden] { display: none; }
-#script-buttons + #composer { border-top: 0; }
+#script-buttons + #send_form { border-top: 0; }
 #script-buttons .sb-btn { flex: none; white-space: nowrap; font-size: var(--font-size-sm); }
 #script-buttons .sb-sep { flex: none; align-self: stretch; width: var(--border-width); margin: 4px 2px; background: var(--line); }
 /* 「脚本」页里的按钮编辑 */
@@ -1179,15 +1185,20 @@ details[open] > .scr-head::before { content: '▾'; }
 .scr-trust-warn, .trust-warn { color: var(--bad); }
 .scr-trust-warn { margin-top: 2px; }
 /* 悬浮区（ui/script-host.js「悬浮区」）：沙箱 iframe 盖在聊天区上，透明，按脚本画出的区域裁剪（clip-path 由脚本宿主设）。
-   #chat-pane 成为它的定位参照，并用 isolation 建自己的层叠上下文：iframe 的 z-index 关在聊天区里，永远在顶栏、右侧面板 / 窄屏抽屉、
+   #sheld 成为它的定位参照，并用 isolation 建自己的层叠上下文：iframe 的 z-index 关在聊天区里，永远在顶栏、右侧面板 / 窄屏抽屉、
    弹框、模型下拉、提示条之下。高度由宿主算（到输入区上沿为止），不盖输入框和按钮排 */
-#chat-pane { position: relative; isolation: isolate; }
+#sheld { position: relative; isolation: isolate; }
 .script-sandbox { position: absolute; left: 0; top: 0; width: 100%; height: 0; border: 0; margin: 0; padding: 0; z-index: 1;
   background: transparent; pointer-events: none; clip-path: inset(0 calc(100% - 1px) calc(100% - 1px) 0); }
 /* 卡 / 脚本发来的提示条：标明来源（文字里），中性样式（虚线色条），和系统自己的成功 / 错误提示区分开 */
 .toast.from-card { border-left-style: dashed; border-left-color: var(--dim); }
 /* 「正则」页下面的脚本区（index.html #tab-scripts 并进 #tab-regex）：和上面的正则分开一点 */
 #tab-regex > .scripts-title { margin-top: 18px; }
+/* 「允许直接操作页面」的颜色联动（ui/theme-link.js）：美化换了配色时顶栏跟着变、右侧页签栏不变，宽屏下两条本来连成一条，
+   在接缝处补一条竖线，免得两种底色硬接在一起。全用 :where 包着（只剩 #top-bar 的优先级），美化自己给 #top-bar 写的边框照样压得过 */
+@media (min-width: 901px) {
+  :where(body:not(.panel-collapsed)) #top-bar:where([data-theme-linked]) { border-right: var(--border-width) solid var(--line); }
+}
 /* 拼装页就地编辑 */
 .seg > .seg-label { display: flex; align-items: center; gap: 6px; }
 .seg-edit-btn { margin-left: auto; padding: 0 6px; font-size: var(--font-size-xs); font-weight: 400; }

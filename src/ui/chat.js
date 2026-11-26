@@ -46,8 +46,13 @@ export function renderChat() {
         let row = box.children[i];
         if (!row) {
             // 后面那些 class（ch_name、name_text、mes_buttons、swipes-counter）和下面设的属性是酒馆 #message_template 里的名字（1.19.0
-            // public/index.html、script.js addOneMessage）：我们自己的样式和代码不用它们，是给「允许直接操作页面」的美化脚本 / CSS 认楼层用的
-            row = h('div', { class: 'mes' },
+            // public/index.html、script.js addOneMessage）：我们自己的样式和代码不用它们，是给「允许直接操作页面」的美化脚本 / CSS 认楼层用的。
+            // .mes_block 是一层真的包裹（2026-11-27）：酒馆里每楼是 .mes > 头像列 + .mes_block（名字那一行 + 正文 .mes_text），很多美化把气泡的
+            // 内边距 / 背景 / 圆角写在 .mes_block 上，没有这一层那些规则就落空。我们没有头像列（用户不要），所以 .mes 里只有它一个子元素；
+            // 它自己没有任何样式（普通块级 div），默认外观不变。脚注行（重新生成、候选箭头）也包在里面——酒馆的候选箭头在 .mes_block 外面
+            // 左右两侧，我们的在正文下面一行，放外面反而会被美化给 .mes 设的 flex 横排挤到旁边去。
+            // 楼层内的元素一律按 class 在 row 里找（$('.mes_text', row) 之类），不按 children 下标找，所以多一层不影响代码
+            row = h('div', { class: 'mes' }, h('div', { class: 'mes_block' },
                 h('div', { class: 'mes_head ch_name' },
                     h('span', { class: 'mes_name name_text' }),
                     h('span', { class: 'mes_idx' }),
@@ -71,7 +76,7 @@ export function renderChat() {
                         h('button', { class: 'ghost swipe_right', title: '下一个候选', onclick: () => swipe(i, 1, epoch) }, '▶'),
                     ),
                 ),
-            );
+            ));
             box.append(row);
         }
         row.dataset.role = msg.role;

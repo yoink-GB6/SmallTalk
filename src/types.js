@@ -160,7 +160,11 @@ export {};
  * 直通模式的运行方式：同源、无 sandbox 的隐藏 iframe（挂在 <body> 下，1×1 透明），桩（script-stub.js）和沙箱同一份、协议同一套，
  * 只换传输：宿主挂在 iframe 元素上的桥 frameElement.__smalltalkBridge = {receive(msg), pull(), toStub}，不走 postMessage。
  * 脚本的 $ / jQuery 是在 iframe 里另装的一份、绑着主页面 window / document 的 jQuery（照酒馆助手：$ 指向酒馆页面）。
- * 拆的时候：移除 iframe（浏览器同步发 pagehide）→ page-guard.js restorePage 把脚本加在 <html>/<head>/<body> 上和几个给脚本的空位里的东西清掉。
+ * 拆的时候：移除 iframe（浏览器同步发 pagehide）→ 停掉颜色联动 → page-guard.js restorePage 把脚本加在 <html>/<head>/<body> 上和几个给脚本的空位里的东西清掉。
+ *
+ * 颜色联动（ui/theme-link.js，2026-11-27）：直通期间脚本改了 --SmartTheme* / --mainFontFamily / --mainFontSize，聊天一侧（#top-bar、#sheld）的我们的变量跟着变，
+ * 内联写在这两个容器上，右侧面板不跟；拆的时候撤销。接口：startThemeLink() / stopThemeLink() / themeLinkInfo() → {active, styled, changed: 酒馆变量名[], applied}
+ * （scriptSandboxInfo().themeLink）。只改界面外观，不碰任何存储。
  */
 
 /**

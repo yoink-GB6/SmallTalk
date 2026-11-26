@@ -43,11 +43,11 @@ export function initDrawer() {
     };
     closeDrawerImpl = () => { if (mq.matches) setOpen(false); };
     // 抽屉和遮罩从顶栏下沿开始（顶栏高度随屏宽变），所以把实际高度量出来交给 CSS
-    const measure = () => document.documentElement.style.setProperty('--topbar-h', document.querySelector('#topbar').offsetHeight + 'px');
+    const measure = () => document.documentElement.style.setProperty('--topbar-h', document.querySelector('#top-bar').offsetHeight + 'px');
     measure();
     syncToggleAttrs();
     addEventListener('resize', measure);
-    new ResizeObserver(measure).observe(document.querySelector('#topbar'));
+    new ResizeObserver(measure).observe(document.querySelector('#top-bar'));
 
     const flip = () => {
         if (mq.matches) { measure(); setOpen(!body.classList.contains('drawer-open')); }
