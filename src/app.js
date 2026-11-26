@@ -40,10 +40,10 @@ function bind() {
     });
 
     $('#composer').addEventListener('submit', e => { e.preventDefault(); send(); });
-    $('#input').addEventListener('keydown', e => {
+    $('#send_textarea').addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     });
-    $('#input').addEventListener('input', () => { fitInput(); ui.previewIsSent = false; refreshPreview(); });
+    $('#send_textarea').addEventListener('input', () => { fitInput(); ui.previewIsSent = false; refreshPreview(); });
     window.addEventListener('resize', fitInput);   // 窗口变窄变宽后折行变了，高度要重算
     fitInput();
     $('#stop').addEventListener('click', () => ui.abort?.abort());

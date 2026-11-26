@@ -186,7 +186,7 @@ export function computePrompt(chat, { commit }) {
 
 export const refreshPreview = debounce(() => {
     if (ui.busy) return;
-    const pending = $('#input').value.trim();
+    const pending = $('#send_textarea').value.trim();
     const chat = pending
         ? [...state.chat, { role: 'user', name: state.persona.name, content: pending }]
         : state.chat;

@@ -45,13 +45,15 @@ export function renderChat() {
     state.chat.forEach((msg, i) => {
         let row = box.children[i];
         if (!row) {
+            // 后面那些 class（ch_name、name_text、mes_buttons、swipes-counter）和下面设的属性是酒馆 #message_template 里的名字（1.19.0
+            // public/index.html、script.js addOneMessage）：我们自己的样式和代码不用它们，是给「允许直接操作页面」的美化脚本 / CSS 认楼层用的
             row = h('div', { class: 'mes' },
-                h('div', { class: 'mes_head' },
-                    h('span', { class: 'mes_name' }),
+                h('div', { class: 'mes_head ch_name' },
+                    h('span', { class: 'mes_name name_text' }),
                     h('span', { class: 'mes_idx' }),
                     // 隐藏楼层的标记（酒馆是一个幽灵图标 .mes_ghost，title「This message is invisible for the AI」）。用文字，不依赖图标字体
                     h('span', { class: 'mes_hidden_tag', 'data-fk': 'mes-hidden-tag', hidden: true, title: '这一楼已隐藏：留在记录里、能看能改，但不会发给模型' }, '已隐藏'),
-                    h('span', { class: 'mes_actions' },
+                    h('span', { class: 'mes_actions mes_buttons' },
                         h('button', { class: 'ghost', title: '编辑', onclick: () => editMessage(i, epoch) }, '✎'),
                         // 文字和 title 在下面按状态更新（酒馆是同一位置的两个按钮 .mes_hide / .mes_unhide，按 is_system 二选一显示）
                         h('button', { class: 'ghost mes_hide_btn', 'data-fk': 'mes-hide', onclick: () => toggleHidden(i, epoch) }),
@@ -65,7 +67,7 @@ export function renderChat() {
                     h('button', { class: 'ghost mes_regen', 'data-fk': 'mes-regen', type: 'button', title: '重新生成', 'aria-label': '重新生成', hidden: true, onclick: () => regenerate(i, epoch) }, '↻'),
                     h('div', { class: 'mes_swipes', hidden: true },
                         h('button', { class: 'ghost swipe_left', title: '上一个候选（第一个时绕回最后一个）', onclick: () => swipe(i, -1, epoch) }, '◀'),
-                        h('span', { class: 'swipes_counter' }),
+                        h('span', { class: 'swipes_counter swipes-counter' }),
                         h('button', { class: 'ghost swipe_right', title: '下一个候选', onclick: () => swipe(i, 1, epoch) }, '▶'),
                     ),
                 ),
@@ -75,6 +77,14 @@ export function renderChat() {
         row.dataset.role = msg.role;
         const hid = isHidden(msg);
         row.classList.toggle('mes-hidden', hid);
+        // 酒馆的楼层属性（addOneMessage）：mesid = 楼层号，swipeid = 当前候选，ch_name = 名字，is_user / is_system 是字符串 "true" / "false"
+        // （is_system = 隐藏楼，和我们的 hidden 互认，见下面「隐藏楼层」）；最后一楼带 class last_mes（酒馆每次加楼都挪这个 class）
+        row.setAttribute('mesid', String(i));
+        row.setAttribute('swipeid', String(readSwipes(msg)?.id ?? 0));
+        row.setAttribute('ch_name', String(msg.name ?? ''));
+        row.setAttribute('is_user', String(msg.role === 'user'));
+        row.setAttribute('is_system', String(hid));
+        row.classList.toggle('last_mes', i === state.chat.length - 1);
         $('.mes_hidden_tag', row).hidden = !hid;
         const hideBtn = $('.mes_hide_btn', row);
         hideBtn.textContent = hid ? '取消隐藏' : '隐藏';
@@ -321,8 +331,8 @@ export function deleteFrom(i, epoch) {
 export function setBusy(busy) {
     ui.busy = busy;
     // 发送和停止占同一个位置：平时只有「发送」，生成中只有「停止」（发送仍然同时 disabled，别处和测试靠它判断是否空闲）
-    $('#send').disabled = busy;
-    $('#send').hidden = busy;
+    $('#send_but').disabled = busy;
+    $('#send_but').hidden = busy;
     $('#stop').hidden = !busy;
     const box = $('#chat');
     if (box?.lastElementChild) updateSwipeControls(box.lastElementChild, box.children.length - 1);
@@ -333,7 +343,7 @@ export function setBusy(busy) {
  * 做法：先让它缩回去量出内容高度（scrollHeight），再定成这个高度；上限交给 CSS，超过时 CSS 自己出滚动条。
  */
 export function fitInput() {
-    const ta = $('#input');
+    const ta = $('#send_textarea');
     if (!ta) return;
     ta.style.height = 'auto';
     ta.style.height = `${ta.scrollHeight + (ta.offsetHeight - ta.clientHeight)}px`;   // 加上上下边框，不然每次差两像素、会冒出滚动条
@@ -342,13 +352,13 @@ export function fitInput() {
 export async function send() {
     // switching：archive.js 正在切换卡 / 存档（中间有异步读写）。这时发出的消息会落进即将被换掉的那个存档，干脆不让发
     if (ui.busy || ui.switching) return;
-    const text = $('#input').value.trim();
+    const text = $('#send_textarea').value.trim();
     // 酒馆 Generate('normal')：第一件事就发 GENERATION_STARTED（~4299），然后 sendMessageAsUser 把用户消息放进聊天、
     // 发 MESSAGE_SENT(楼层号)、画出来、发 USER_MESSAGE_RENDERED(楼层号)（~5917）
     emitGenerationStarted('normal');
     if (text) {
         state.chat.push({ role: 'user', name: state.persona.name || 'User', content: permanentRegex(text, 'user') });
-        $('#input').value = '';
+        $('#send_textarea').value = '';
         fitInput();   // 发出去了：输入框缩回一行
         emitTavernEvent('message_sent', state.chat.length - 1);
         renderChat();

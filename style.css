@@ -394,7 +394,7 @@
   background: transparent; border: 0; border-bottom: var(--border-width) solid var(--control-line); border-radius: 0; padding: var(--control-pad-y) var(--control-pad-x);
 }
 /* 多行的大文本框只有底线看不出范围：加一圈很淡的发丝线，底边仍是黑线（聊天输入框除外，它是"一行起步"的，只留底线） */
-:root[data-theme="princesse"] textarea:not(#input) { border-width: var(--border-width); border-color: var(--line) var(--line) var(--control-line); background: var(--panel); }
+:root[data-theme="princesse"] textarea:not(#send_textarea) { border-width: var(--border-width); border-color: var(--line) var(--line) var(--control-line); background: var(--panel); }
 
 /* ── Princesse：焦点 ── */
 /* 一律用金色。输入类：底线变金（再加一条内阴影成 2px，不改尺寸） */
@@ -604,6 +604,12 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; color: var(-
 #composer textarea { flex: 1; resize: none; box-sizing: border-box; min-height: var(--control-height); max-height: 50vh; max-height: 50dvh; overflow-y: auto; }
 #composer .col { display: flex; flex-direction: column; }
 #composer .col button { height: var(--control-height); box-sizing: border-box; }
+/* 酒馆的元素名（给「允许直接操作页面」的美化脚本用，ui/script-host.js 文件头）：
+   #leftSendForm / #rightSendForm：输入框左右放按钮的位置，我们自己不放东西；空着时不占位置（也不占 flex 的 gap），脚本挂了按钮才出现。
+   #bg1：铺满全屏的背景层，在一切内容下面（z-index 负数：在页面底色之上、所有内容之下），默认透明、不拦点击——没有脚本时外观和没有它一样 */
+#leftSendForm, #rightSendForm { display: flex; align-items: center; gap: 4px; align-self: stretch; }
+#leftSendForm:empty, #rightSendForm:empty { display: none; }
+#bg1 { position: fixed; inset: 0; z-index: -1; pointer-events: none; background: transparent; }
 #manual-panel { padding: 10px 14px; border-top: var(--border-width) solid var(--line); background: var(--panel); display: flex; flex-direction: column; gap: 6px; }
 #manual-panel[hidden] { display: none; }
 #gen-error { margin: 0 14px 10px; padding: 8px 12px; border: var(--border-width) solid var(--bad); border-left-width: var(--bar-width); border-radius: var(--radius-card); background: var(--panel); }
@@ -1168,6 +1174,10 @@ details[open] > .scr-head::before { content: '▾'; }
 .scr-btn-row { display: flex; align-items: center; gap: 6px; padding-left: 18px; }
 .scr-btn-row .scr-btn-name { flex: 1; min-width: 0; }
 .scr-float { margin-bottom: 8px; font-size: var(--font-size-sm); }
+/* 「允许直接操作页面」（tab-scripts.js trustRow）：开关 + 一行常驻的红色小字；确认框里那段警告也用同一个颜色 */
+.scr-trust { margin-bottom: 8px; font-size: var(--font-size-sm); }
+.scr-trust-warn, .trust-warn { color: var(--bad); }
+.scr-trust-warn { margin-top: 2px; }
 /* 悬浮区（ui/script-host.js「悬浮区」）：沙箱 iframe 盖在聊天区上，透明，按脚本画出的区域裁剪（clip-path 由脚本宿主设）。
    #chat-pane 成为它的定位参照，并用 isolation 建自己的层叠上下文：iframe 的 z-index 关在聊天区里，永远在顶栏、右侧面板 / 窄屏抽屉、
    弹框、模型下拉、提示条之下。高度由宿主算（到输入区上沿为止），不盖输入框和按钮排 */

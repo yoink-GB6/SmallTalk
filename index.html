@@ -22,11 +22,17 @@
      不依赖任何模块，读不了就当默认。值只接受简单的 id（字母数字下划线连字符），'default' 不设属性；清单里有没有这个 id 由 src/ui/theme.js 启动时再校验 -->
 <script>try{var t=localStorage.getItem('smalltalk.theme');if(t&&t!=='default'&&/^[A-Za-z0-9_-]{1,32}$/.test(t))document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
 <link rel="stylesheet" href="style.css">
+<!-- 酒馆页面上放「用户自定义 CSS」的那个 <style>（酒馆的 #custom-style）。我们自己不用它，留着空的给「允许直接操作页面」的脚本改；
+     拆掉脚本时内容换回空的（ui/page-guard.js） -->
+<style id="custom-style"></style>
 <!-- 渲染用的两个库，和酒馆本体用的是同一套：showdown 做 markdown，DOMPurify 做净化 -->
 <script src="vendor/showdown/2.1.0/showdown.min.js"></script>
 <script src="vendor/dompurify/3.2.4/purify.min.js"></script>
 </head>
 <body>
+<!-- 酒馆的 #bg1：铺满全屏的背景层，在最底下（style.css「酒馆的元素名」）。默认透明、不拦点击，外观和没有它时一样；
+     「允许直接操作页面」的美化脚本会给它设背景图。拆掉脚本时它上面的东西清掉（ui/page-guard.js 的空位） -->
+<div id="bg1"></div>
 
 <header id="topbar">
   <!-- 标题：兼开合右侧面板的按钮（窄屏开合抽屉，宽屏收起 / 展开面板；role / tabindex / aria-expanded / title 由 src/ui/drawer.js 加，
@@ -79,10 +85,13 @@
     </div>
     <!-- 酒馆助手脚本的按钮（src/ui/script-buttons.js）：只在当前卡有运行中的脚本带了看得见的按钮时出现，一行、放不下横向滚动 -->
     <div id="script-buttons" hidden></div>
+    <!-- 输入框和发送按钮的 id 用酒馆的名字（#send_textarea / #send_but，2026-11-24 从 #input / #send 改的），
+         两边的 #leftSendForm / #rightSendForm 是酒馆输入框左右放按钮的位置：我们自己不往里放东西，留给「允许直接操作页面」的脚本挂按钮，
+         没有子元素时不占位置（style.css :empty）。标签之间不要留空白，否则 :empty 不成立 -->
     <form id="composer">
-      <textarea id="input" rows="1" placeholder="Enter发送，Shift+Enter换行"></textarea>
+      <div id="leftSendForm"></div><textarea id="send_textarea" rows="1" placeholder="Enter发送，Shift+Enter换行"></textarea><div id="rightSendForm"></div>
       <div class="col">
-        <button id="send" class="primary" type="submit">发送</button>
+        <button id="send_but" class="primary" type="submit">发送</button>
         <button id="stop" type="button" hidden>停止</button>
       </div>
     </form>
