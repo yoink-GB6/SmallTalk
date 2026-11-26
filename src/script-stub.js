@@ -832,6 +832,9 @@ export function scriptStubMain(BOOT, LIB) {
     var JQ = null;
     var jqCache = Object.create(null);
     function jqFor(sid) {
+        // 直通模式：$ 就是绑着主页面的那份 jQuery 本身（照酒馆助手），不包检测——主页面上本来就有这些元素，也不该报「不支持」。
+        // 全局那份 api（GLOBAL = makeApi(null)）在 jQuery 装好之前就建了，拿到的还是下面的代理；代理在直通时同样不检测
+        if (TRUSTED && JQ) return JQ;
         var k = sid === null ? '\u0000global' : sid;
         if (jqCache[k]) return jqCache[k];
         var p = new Proxy(function () {}, {
@@ -839,7 +842,7 @@ export function scriptStubMain(BOOT, LIB) {
                 if (!JQ) throw new Error('jQuery 还没加载');
                 var r = JQ.apply(self, args);
                 var sel = args[0];
-                if (typeof sel === 'string' && sel.trim().charAt(0) !== '<' && r && r.length === 0) domCheck(sel, sid === null ? undefined : sid);
+                if (!TRUSTED && typeof sel === 'string' && sel.trim().charAt(0) !== '<' && r && r.length === 0) domCheck(sel, sid === null ? undefined : sid);
                 return r;
             },
             get: function (t, prop) { return JQ ? JQ[prop] : undefined; },
@@ -849,7 +852,8 @@ export function scriptStubMain(BOOT, LIB) {
         jqCache[k] = p;
         return p;
     }
-    ['querySelector', 'querySelectorAll', 'getElementById'].forEach(function (fnName) {
+    // 直通模式不装：脚本查的是主页面（window.parent.document 或 $），查自己这个隐藏文档查不到东西是正常的，不该报「不支持」
+    if (!TRUSTED) ['querySelector', 'querySelectorAll', 'getElementById'].forEach(function (fnName) {
         var orig = Document.prototype[fnName];
         Document.prototype[fnName] = function (s) {
             var r = orig.apply(this, arguments);
@@ -1029,14 +1033,37 @@ export function scriptStubMain(BOOT, LIB) {
         });
     }
 
-    define('__smalltalkLibsReady', function () {
-        if (libsReady) return;
+    var libsStarted = false;
+    function libsDone() {
         libsReady = true;
-        JQ = typeof W.jQuery === 'function' ? W.jQuery : null;
-        watchRegions();
-        if (JQ) { define('$', jqFor(null)); define('jQuery', jqFor(null)); }
+        if (!TRUSTED) watchRegions();
+        if (JQ) { define('$', TRUSTED ? JQ : jqFor(null)); define('jQuery', TRUSTED ? JQ : jqFor(null)); }
         try { post({ kind: 'ready' }); } catch (e) { /* ignore */ }
         maybeStart();
+    }
+    define('__smalltalkLibsReady', function () {
+        if (libsStarted) return;
+        libsStarted = true;
+        if (!TRUSTED) { JQ = typeof W.jQuery === 'function' ? W.jQuery : null; libsDone(); return; }
+        // 直通模式：要一份「在这个 iframe 里运行、但绑着主页面 window / document」的 jQuery（酒馆助手里脚本的 $ 是酒馆页面的 jQuery）。
+        // 做法：拿 jQuery 的源码，当成 CommonJS 模块执行，实参 window = 主页面。jQuery 的 UMD 头看到 module.exports 就走 factory(global, true)：
+        //   noGlobal = true，不往主页面挂 window.$ / jQuery（主页面不被污染，拆的时候也不用收拾）；它内部的 document 就是主页面的 document。
+        // 函数对象、事件回调都属于这个 iframe 的 realm：iframe 一移除，它在主页面上注册的监听、MutationObserver、定时器都不会再被调用（原型实测）。
+        // $(window) 里的 window 是脚本自己的 window（这个 iframe），所以 $(window).on('pagehide') 在拆的时候能收到。
+        // 地址是宿主算好的本站 vendor 文件（同源），不经过任何别的站点
+        fetch(BOOT.jqueryUrl).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+        }).then(function (text) {
+            var mod = { exports: {} };
+            new Function('window', 'module', 'exports', text)(HOST, mod, mod.exports);
+            JQ = typeof mod.exports === 'function' ? mod.exports : null;
+            if (!JQ) log(null, 'error', 'jQuery 没装上（脚本里的 $ 用不了）');
+            libsDone();
+        }, function (e) {
+            log(null, 'error', '没能加载 jQuery（脚本里的 $ 用不了）：' + toText(e));
+            libsDone();
+        });
     }, false);
 }
 
@@ -1106,15 +1133,23 @@ const SCRIPT_LIBS = ['fontawesome', 'jquery', 'lodash', 'vue'];
 
 /**
  * 沙箱的 srcdoc（纯函数，Node 里可测）。只有桩和库，【没有】脚本代码——代码在 boot 消息里，用 Blob URL 加载（见 script-stub.js 文件头）。
- * @param {{frameId: string, assetBase?: string}} opts
+ * 直通模式（trusted: true，见 types.js ScriptTrust）：BOOT 带 trusted 和 jqueryUrl（桩自己 fetch 来绑到主页面上，见 __smalltalkLibsReady）；
+ * 不放 jQuery / Font Awesome 的标签（Font Awesome 由宿主挂到主页面的 <head>，脚本画的图标在主页面上），也不要覆盖层那段透明样式（iframe 是隐藏的）。
+ * @param {{frameId: string, assetBase?: string, colorScheme?: string, trusted?: boolean, jqueryUrl?: string}} opts
  */
-export function buildScriptSrcdoc({ frameId, assetBase, colorScheme = 'light' }) {
+export function buildScriptSrcdoc({ frameId, assetBase, colorScheme = 'light', trusted = false, jqueryUrl = '' }) {
     const boot = { frameId: String(frameId), unimplemented: SCRIPT_UNIMPLEMENTED, versions: COMPAT_VERSIONS, tavernEvents: TAVERN_EVENTS, storageLimit: STORAGE_LIMIT };
+    if (trusted === true) { boot.trusted = true; boot.jqueryUrl = String(jqueryUrl); }
     const scheme = colorScheme === 'dark' ? 'dark' : 'light';
     const lib = `{varOps: (${varOpsFactory.toString()})(), sync: (${chatSyncFactory.toString()})()}`;
     const stub = `<script data-smalltalk-script-stub>(${scriptStubMain.toString()})(${embedJson(boot)}, ${lib});</script>`;
-    const libs = SCRIPT_LIBS.map(n => FRAME_LIBS.find(l => l.name === n)).filter(Boolean)
+    const libs = SCRIPT_LIBS.filter(n => trusted !== true || (n !== 'jquery' && n !== 'fontawesome'))
+        .map(n => FRAME_LIBS.find(l => l.name === n)).filter(Boolean)
         .map(l => (assetBase === undefined ? frameLibTag(l) : frameLibTag(l, assetBase))).join('\n');
+    if (trusted === true) {
+        return `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n${stub}\n${libs}\n`
+            + `<script>window.__smalltalkLibsReady && window.__smalltalkLibsReady();</script>\n</head>\n<body></body>\n</html>\n`;
+    }
     return `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n`
         // 覆盖层：透明（color-scheme 和主页面一致，否则 Chromium 给 iframe 画不透明的底）；body 的背景强制透明——脚本 $('body').css('background', …)
         // 在酒馆里改的是酒馆页面的背景，到这里会铺满整个聊天区，拖动时（裁剪放开）会闪一下。默认文字色跟主题，脚本没设颜色的字也看得见。
