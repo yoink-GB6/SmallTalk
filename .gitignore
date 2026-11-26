@@ -20,6 +20,7 @@
 !/vendor/
 !/icons/
 !/themes/
+!/img/
 
 # 本地版的小服务
 !/package.json

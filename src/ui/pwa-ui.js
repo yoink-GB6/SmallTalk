@@ -40,7 +40,7 @@ async function prepareReload() {
     }
     await flushNow();
     try {
-        const v = $('#input')?.value ?? '';
+        const v = $('#send_textarea')?.value ?? '';
         if (v) sessionStorage.setItem(DRAFT_KEY, v);
     } catch {}
 }
@@ -49,7 +49,7 @@ async function prepareReload() {
 function restoreDraft() {
     let v = null;
     try { v = sessionStorage.getItem(DRAFT_KEY); sessionStorage.removeItem(DRAFT_KEY); } catch {}
-    const input = $('#input');
+    const input = $('#send_textarea');
     if (v && input && !input.value) {
         input.value = v;
         input.dispatchEvent(new Event('input'));   // 让「拼装」页的预览跟上（和用户自己打字一样）

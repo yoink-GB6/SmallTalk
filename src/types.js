@@ -141,6 +141,29 @@ export {};
  */
 
 /**
+ * 「允许直接操作页面」（脚本的直通模式，2026-11-24 起）：这台设备上对某张卡的信任记录。纯逻辑 src/script-trust.js，运行时 ui/script-host.js。
+ * 存在 localStorage['smalltalk.scriptTrusted']（data-inventory.js LOCAL_STORAGE_PREFS），【不在】IndexedDB：不进整体备份、不随卡导出、恢复时不动。
+ * @typedef {Object} ScriptTrust
+ * @property {string} id      卡 id
+ * @property {string[]} fp    打开开关那一刻启用脚本的代码指纹（每个 content 的 SHA-256 十六进制，去重排序；script-trust.js scriptFingerprint）
+ *
+ * 生效条件：有这条记录，且现在每个启用脚本的哈希都在 fp 里（trustCovers）。不满足 → script-host 删掉记录、提示一次，脚本回到沙箱。
+ * 用户自己在「脚本」区保存代码时，如果保存前信任有效，保存后按新代码重记（tab-scripts.js saveDraft）——是用户自己写的，不算「没看过的新代码」。
+ * 删卡时删记录（archive.js deleteCard → forgetTrust）。
+ *
+ * script-host.js 给界面的接口：
+ *   trustedNow(cardId = 当前卡) → boolean   有记录且覆盖当前启用的脚本（只读，不删记录）
+ *   setTrusted(on)                          对当前卡打开 / 关掉（打开 = 按现在启用的脚本记指纹），然后 restartScripts()
+ *   forgetTrust(cardId)                     删记录（不重建：删卡时卡已经不在了）
+ *   scriptSandboxInfo().trusted              现在跑着的是不是直通模式
+ *
+ * 直通模式的运行方式：同源、无 sandbox 的隐藏 iframe（挂在 <body> 下，1×1 透明），桩（script-stub.js）和沙箱同一份、协议同一套，
+ * 只换传输：宿主挂在 iframe 元素上的桥 frameElement.__smalltalkBridge = {receive(msg), pull(), toStub}，不走 postMessage。
+ * 脚本的 $ / jQuery 是在 iframe 里另装的一份、绑着主页面 window / document 的 jQuery（照酒馆助手：$ 指向酒馆页面）。
+ * 拆的时候：移除 iframe（浏览器同步发 pagehide）→ page-guard.js restorePage 把脚本加在 <html>/<head>/<body> 上和几个给脚本的空位里的东西清掉。
+ */
+
+/**
  * png.js
  * @callback ReadCardFromPng
  * @param {Uint8Array} bytes  PNG 文件内容

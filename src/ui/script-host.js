@@ -36,9 +36,28 @@
 //   每次 RPC 的 ctx = {kind: 'script', cardId: 建沙箱时的卡, scriptId: 沙箱说是哪个脚本（只认登记过的）, scriptName}。
 //   换卡后迟到的调用：cardId 对不上，callHost 拒绝。
 //
+// ── 直通模式（「允许直接操作页面」，2026-11-24；契约 types.js ScriptTrust）──
+//   起因：有的卡的美化脚本直接拿 window.parent.document、往 <head> 塞 CSS、往 #leftSendForm 挂按钮——沙箱里做不到。用户知情后选了
+//   按卡放行（酒馆里本来就这样），接受这种模式下脚本能读到页面上的一切、包括 key。
+//   只对「有信任记录且指纹覆盖现在启用的脚本」的那张卡生效（wanted()）；没开的卡走上面的沙箱，一个字都不变（SCRIPT_SANDBOX、两道校验、白名单）。
+//   - iframe：同源、【不设 sandbox】、隐藏（1×1、透明、不拦点击；不用 display:none——那样 rAF 会停），挂在 <body> 下。
+//   - 传输：不走 postMessage。iframe 元素上挂一个桥 __smalltalkBridge（桩用 frameElement 拿到）：
+//       桩 → 宿主 receive(msg)：先结构化克隆（和 postMessage 一样：参数里有函数 / DOM 节点就同步抛错，脚本那边的 rpc 会接住），
+//         再排进微任务交给 dispatch（和沙箱同一套 parseSandboxMessage、frameId、白名单、拒绝条件）；
+//       宿主 → 桩 toStub(msg)：用 iframe 自己的 structuredClone 克隆一份（脚本拿到的是它自己 realm 的对象，改不到宿主的），同步送达；
+//         桩里补丁 / 结果当场生效，事件推迟到微任务分发（脚本回调不能插在宿主自己的代码中间跑）；
+//       pull()：桩同步读之前调，宿主当场 flushScripts——同步读读到的就是「现在」。
+//   - 建之前拍主页面快照（page-guard.js），在 <head> 挂 Font Awesome（脚本画在主页面上的图标要用）。
+//   - 拆：移除 iframe（浏览器同步发 pagehide，脚本在里面收拾自己）→ restorePage 兜底清掉剩下的 → 摘掉 Font Awesome。
+//   - 没有悬浮区（脚本直接画在主页面上），不裁剪、不量布局；「隐藏悬浮界面」对它没有作用。
+//   - 只读标签页 / 已停止保存 / 恢复中照旧不建（wanted() 先判这些）。
+//
 // UI 模块之间有循环依赖：这个文件顶层不调用任何从兄弟 ui 模块导入的函数。
 
-import { SCRIPT_SANDBOX, emitFrameEvent } from '../render.js';
+import { SCRIPT_SANDBOX, FRAME_LIBS, emitFrameEvent } from '../render.js';
+import { TRUST_KEY, parseTrustList, serializeTrustList, withTrust, scriptFingerprint } from '../script-trust.js';
+import { snapshotPage, restorePage } from './page-guard.js';
+import { h, toast } from './dom.js';
 import { buildScriptSrcdoc } from '../script-stub.js';
 import { diffChat } from '../script-sync.js';
 import { parseSandboxMessage, scrubSecrets, cleanButtonList, parseRegions, regionsClipPath } from '../script-args.js';
@@ -70,28 +89,107 @@ function randomToken() {
  * 启用的脚本（按卡对象缓存：renderAll 很频繁，没改过的卡每次从 raw 解析一遍不划算）。
  * 「脚本」页原地改 state.card.scripts（开关等），所以它改完调 restartScripts，那里先清掉缓存
  */
-let enabledCache = { cardObj: null, scriptsRef: undefined, list: [] };
+let enabledCache = { cardObj: null, scriptsRef: undefined, list: [], fp: null };
 function enabledNow() {
     const c = state.card;
     if (enabledCache.cardObj !== c || enabledCache.scriptsRef !== c?.scripts) {
-        enabledCache = { cardObj: c, scriptsRef: c?.scripts, list: c ? enabledScriptsOf(cardScripts(c)).filter(s => !UNSAFE_IDS.has(s.id)) : [] };
+        enabledCache = { cardObj: c, scriptsRef: c?.scripts, list: c ? enabledScriptsOf(cardScripts(c)).filter(s => !UNSAFE_IDS.has(s.id)) : [], fp: null };
     }
     return enabledCache.list;
 }
+/** 现在启用的脚本的指纹（SHA-256 是纯 JS 算的，几百 KB 的代码要几毫秒：跟着上面的缓存走，「脚本」区每次重画都要问） */
+function enabledFp() {
+    const list = enabledNow();
+    if (!enabledCache.fp) enabledCache.fp = scriptFingerprint(list);
+    return enabledCache.fp;
+}
 
-/** 现在该不该跑；该跑返回 {list}（要装的脚本），不该返回原因 */
+// ───────────────────────────── 信任记录（直通模式，见文件头）─────────────────────────────
+
+function readTrust() {
+    try { return parseTrustList(localStorage.getItem(TRUST_KEY)); } catch { return []; }
+}
+function writeTrust(list) {
+    try {
+        const s = serializeTrustList(list);
+        if (s === null) localStorage.removeItem(TRUST_KEY); else localStorage.setItem(TRUST_KEY, s);
+        return true;
+    } catch { return false; }   // 存不了（无痕窗口等）：这次不开，免得「以为开了、刷新就没了」
+}
+const trustEntry = cardId => readTrust().find(x => x.id === cardId) ?? null;
+/** 记录还覆盖得了现在启用的脚本吗（每个哈希都在记下的集合里；规则同 script-trust.js trustCovers，这里用缓存的指纹） */
+function entryCovers(entry) {
+    if (!entry) return false;
+    const have = new Set(entry.fp);
+    return enabledFp().every(x => have.has(x));
+}
+
+/**
+ * 这张卡现在是不是「允许直接操作页面」。当前卡：有信任记录且覆盖当前启用的脚本（只读，不删记录）；
+ * 别的卡：只看有没有记录（指纹要等它成为当前卡时再核对）
+ */
+export function trustedNow(cardId = persist.cardId) {
+    if (!cardId) return false;
+    if (cardId !== persist.cardId || !state.card) return !!trustEntry(cardId);
+    return entryCovers(trustEntry(cardId));
+}
+
+/**
+ * 对当前卡打开 / 关掉直通模式，然后按新状态重建（restartScripts）。打开 = 按现在启用的脚本记指纹。
+ * 确认框由调用方（tab-scripts.js → trust-confirm.js）先弹过。
+ * @returns {boolean} 记下来了没有（localStorage 用不了时 false）
+ */
+export function setTrusted(on) {
+    const id = persist.cardId;
+    if (!id || !state.card) return false;
+    const ok = writeTrust(withTrust(readTrust(), id, on ? { fp: enabledFp() } : null));
+    restartScripts();
+    return ok;
+}
+/** 删掉某张卡的信任记录（删卡时 archive.js 调；不重建：卡已经不在了） */
+export function forgetTrust(cardId) {
+    const list = readTrust();
+    if (list.some(x => x.id === cardId)) writeTrust(withTrust(list, cardId, null));
+}
+/**
+ * 用户自己在「脚本」区保存了代码（tab-scripts.js saveDraft）：保存前信任有效的话，按保存后的脚本重记指纹——
+ * 是用户自己写的，不算「没看过的新代码」。trustedBefore 由调用方在改之前用 trustedNow() 取
+ */
+export function retrust(trustedBefore) {
+    enabledCache = { cardObj: null, scriptsRef: undefined, list: [], fp: null };
+    if (!trustedBefore || !persist.cardId) return;
+    writeTrust(withTrust(readTrust(), persist.cardId, { fp: enabledFp() }));
+}
+
+/** 现在该不该跑；该跑返回 {list, trusted}（要装的脚本、是不是直通模式），不该返回原因 */
 function wanted() {
     if (!state.card || !persist.cardId) return 'nocard';
     if (persist.readOnly) return 'readonly';
     if (persist.stopped) return 'stopped';
     if (persist.paused || restoreActive()) return 'restoring';
     const list = enabledNow();
-    return list.length ? { list } : 'none';
+    if (!list.length) return 'none';
+    const entry = trustEntry(persist.cardId);
+    let trusted = false;
+    if (entry) {
+        trusted = entryCovers(entry);
+        if (!trusted) {
+            // 卡被「更新」、代码被换掉、又启用了一个当时没在跑的脚本：都是没看过的新代码，信任作废（只说一次：记录删了，下次就不会再进来）
+            writeTrust(withTrust(readTrust(), persist.cardId, null));
+            const text = '这张卡的脚本变了，已关闭「允许直接操作页面」，脚本回到沙箱里运行（要用的话请检查过后重新打开）';
+            try { toast(text, 'error'); } catch { /* ignore */ }
+            try { frameHost.log({ scriptId: null, scriptName: '脚本沙箱', cardId: persist.cardId, level: 'warn', text }); } catch { /* ignore */ }
+        }
+    }
+    return { list, trusted };
 }
 
-const signature = list => JSON.stringify(list.map(s => [s.id, s.name, s.content]));
+const signature = (list, trusted) => JSON.stringify([trusted === true, list.map(s => [s.id, s.name, s.content])]);
 
 // ───────────────────────────── 建 / 拆 ─────────────────────────────
+
+/** 拆的次数和最近一次兜底清理的结果（测试 / 调试用，scriptSandboxInfo 里给出） */
+let lastRestore = null;
 
 function teardown() {
     if (!rec) return;
@@ -99,42 +197,74 @@ function teardown() {
     rec = null;
     r.ac.abort();
     r.ro?.disconnect();
+    if (r.bridge) { r.bridge.receive = () => {}; r.bridge.pull = () => {}; }   // 拆了以后脚本（已经没有了）再调也不进宿主
+    // 直通：移除 iframe 时浏览器同步发 pagehide（脚本在里面收拾自己，回调里还能改主页面）；之后再对照快照兜底清理。
+    // 不另外补发 pagehide（补发会让脚本的清理跑两遍）
     r.iframe.remove();
+    if (r.trusted) {
+        try { lastRestore = restorePage(r.snap); } catch (e) { console.error('直通模式的兜底清理出错', e); }
+        r.faLink?.remove();
+    }
     pendingOpen = null;
     paintButtons();
 }
 
 /** 主页面现在的深浅（沙箱文档的 color-scheme 必须和它一致，不然浏览器会给 iframe 画一块不透明的底色，见下面「悬浮区」） */
 const pageScheme = () => (getComputedStyle(document.documentElement).colorScheme.includes('dark') ? 'dark' : 'light');
+/** 本站 vendor 里某个库的绝对地址（直通模式：jQuery 给桩 fetch，Font Awesome 挂到主页面） */
+const libUrl = name => new URL(FRAME_LIBS.find(l => l.name === name).path, document.baseURI).href;
 
-/** 建一个新沙箱装 list 里的脚本（先拆旧的） */
-function build(list) {
+/** 建一个新沙箱装 list 里的脚本（先拆旧的）。trusted：直通模式（见文件头） */
+function build(list, trusted = false) {
     teardown();
-    const host = document.querySelector('#chat-pane') ?? document.body;
+    const host = trusted ? document.body : (document.querySelector('#chat-pane') ?? document.body);
     const frameId = randomToken();
+    // 直通：快照要在我们自己往页面上加东西（iframe、Font Awesome）之前拍——那两样拆的时候我们自己摘
+    const snap = trusted ? snapshotPage() : null;
     const iframe = document.createElement('iframe');
-    iframe.setAttribute('sandbox', SCRIPT_SANDBOX);
+    if (!trusted) iframe.setAttribute('sandbox', SCRIPT_SANDBOX);
     iframe.setAttribute('referrerpolicy', 'no-referrer');
     // 自动播放：跨源 iframe 要靠权限策略委托才能出声（脚本的音乐播放器 new Audio().play()）。这不是 sandbox 的标志，不放宽任何隔离
     iframe.setAttribute('allow', 'autoplay');
-    iframe.setAttribute('title', '酒馆助手脚本的悬浮界面');
+    iframe.setAttribute('title', trusted ? '酒馆助手脚本（允许直接操作页面）' : '酒馆助手脚本的悬浮界面');
     iframe.className = 'script-sandbox';
     iframe.dataset.fk = 'script-sandbox';
+    if (trusted) {
+        iframe.dataset.trusted = '1';
+        // 隐藏但不 display:none（那样里面的 requestAnimationFrame 会停，靠它的脚本就不动了）
+        iframe.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none;';
+    }
     const scheme = pageScheme();
     iframe.style.colorScheme = scheme;
     const ac = new AbortController();
     const scripts = new Map(list.map(s => [s.id, { id: s.id, name: s.name || '(未命名)' }]));
     rec = {
-        cardId: persist.cardId, cardObj: state.card, frameId, iframe, ac, list, sig: signature(list), scripts, ids: new Set(scripts.keys()),
+        cardId: persist.cardId, cardObj: state.card, frameId, iframe, ac, list, sig: signature(list, trusted), scripts, ids: new Set(scripts.keys()),
         status: new Map(list.map(s => [s.id, { status: 'loading', text: '' }])),
         booted: false, epoch: persist.epoch, shadow: null, pushed: new Map(), cardRef: null, avatarRef: null, ctxJson: null,
         logTimes: [], logMuted: false,
         pushedButtons: new Map(), themeJson: null,
         rects: [], dragOpen: false, regionsQueued: null, ro: null,
         rate: { sec: 0, n: 0, said: false }, toastTimes: [],
+        trusted, snap, bridge: null, faLink: null,
     };
     const me = rec;
-    window.addEventListener('message', e => onMessage(me, e), { signal: ac.signal });
+    if (trusted) {
+        // 桥（见文件头「直通模式」）。桩在自己的第一段脚本里经 frameElement 拿到它、并填上 toStub
+        me.bridge = {
+            receive(msg) {
+                const d = structuredClone(msg);   // 同步克隆：带函数 / DOM 节点的参数在这里抛 DataCloneError，桩那边的 rpc 接住
+                queueMicrotask(() => { if (me === rec) dispatch(me, d); });
+            },
+            pull() { if (me === rec) flushScripts(); },
+            toStub: null,
+        };
+        iframe.__smalltalkBridge = me.bridge;
+        me.faLink = h('link', { rel: 'stylesheet', href: libUrl('fontawesome'), 'data-smalltalk': 'script-fa' });
+        document.head.append(me.faLink);
+    } else {
+        window.addEventListener('message', e => onMessage(me, e), { signal: ac.signal });
+    }
     // 拖动中（沙箱报了整块区域）在 iframe 外面松开鼠标：沙箱收不到 pointerup（见「悬浮区」的原型结论），由宿主告诉它
     window.addEventListener('pointerup', () => { if (me === rec && me.dragOpen) post(me, { kind: 'release' }); }, { signal: ac.signal, capture: true });
     window.addEventListener('blur', () => { if (me === rec && me.dragOpen) post(me, { kind: 'release' }); }, { signal: ac.signal });
@@ -143,10 +273,12 @@ function build(list) {
     const themeMo = new MutationObserver(() => { if (me === rec) flushScripts(); else themeMo.disconnect(); });
     themeMo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     ac.signal.addEventListener('abort', () => themeMo.disconnect());
-    iframe.srcdoc = buildScriptSrcdoc({ frameId, colorScheme: scheme });
+    iframe.srcdoc = trusted ? buildScriptSrcdoc({ frameId, colorScheme: scheme, trusted: true, jqueryUrl: libUrl('jquery') }) : buildScriptSrcdoc({ frameId, colorScheme: scheme });
     host.append(iframe);
-    applyClip(me);
-    watchLayout(me);
+    if (!trusted) {   // 直通模式没有悬浮区：不裁剪、不量布局
+        applyClip(me);
+        watchLayout(me);
+    }
     runState = 'running';
     paintTab();
     paintButtons();
@@ -184,7 +316,7 @@ export function setFloatHidden(on, cardId = persist.cardId) {
     const list = hiddenCards().filter(x => x !== cardId);
     if (on) list.push(cardId);
     try { if (list.length) localStorage.setItem(FLOAT_HIDE_KEY, JSON.stringify(list.slice(-200))); else localStorage.removeItem(FLOAT_HIDE_KEY); } catch { /* 存不了就只在这次有效 */ }
-    if (rec) applyClip(rec);
+    if (rec && !rec.trusted) applyClip(rec);
 }
 
 /** 按现在的区域设 iframe 的裁剪和能不能点 */
@@ -221,7 +353,7 @@ function watchLayout(r) {
     window.addEventListener('resize', () => { if (r === rec) layoutOverlay(r); }, { signal: r.ac.signal });
 }
 /** 输入区那几块显示 / 隐藏之后（ResizeObserver 对 hidden 切换不一定报）：shell.js renderAll 经 reconcileScripts 调到这里 */
-function relayout() { if (rec) layoutOverlay(rec); }
+function relayout() { if (rec && !rec.trusted) layoutOverlay(rec); }
 
 /** 推给沙箱的主题（只读的展示信息：深浅、几个颜色和字体。没有任何接口 / key / 地址） */
 function themeNow() {
@@ -259,7 +391,7 @@ export function reconcileScripts({ force = false } = {}) {
     }
     const w = wanted();
     if (typeof w === 'string') { teardown(); runState = w; paintTab(); return; }
-    build(w.list);
+    build(w.list, w.trusted);
 }
 
 /**
@@ -278,9 +410,9 @@ export function restartScripts() {
     enabledCache = { cardObj: null, scriptsRef: undefined, list: [] };
     const w = wanted();
     if (typeof w === 'string') { teardown(); runState = w; paintTab(); return; }
-    if (rec && rec.cardId === persist.cardId && rec.cardObj === state.card && rec.sig === signature(w.list)) { flushScripts(); paintButtons(); return; }   // 只改了按钮之类：推过去、重画按钮排，不重建
+    if (rec && rec.cardId === persist.cardId && rec.cardObj === state.card && rec.sig === signature(w.list, w.trusted)) { flushScripts(); paintButtons(); return; }   // 只改了按钮之类：推过去、重画按钮排，不重建
     if (ui.switching) { reconcileScripts({ force: true }); return; }
-    build(w.list);
+    build(w.list, w.trusted);
 }
 
 // ───────────────────────────── 副本 ─────────────────────────────
@@ -348,6 +480,19 @@ function collectOps(r) {
 function post(r, msg) {
     const win = r.iframe.contentWindow;
     if (!win) return false;
+    if (r.trusted) {
+        // 直通：用 iframe 自己的 structuredClone 克隆（脚本拿到的是它 realm 里的对象，改不到宿主的这份），桥同步送达（见文件头）
+        const to = r.bridge?.toStub;
+        if (typeof to !== 'function') return false;   // 桩还没起来（ready 之前不会走到这里）
+        const full = { smalltalk: true, frameId: r.frameId, ...msg };
+        let c;
+        try { c = win.structuredClone(full); } catch (e) {
+            if (msg.kind === 'result') { try { to(win.structuredClone({ smalltalk: true, frameId: r.frameId, kind: 'result', id: msg.id, ok: false, error: '宿主的返回值没法传给脚本（不能结构化克隆）' })); } catch { /* ignore */ } }
+            console.error('推给脚本失败', e?.message ?? e);
+            return false;
+        }
+        try { to(c); return true; } catch (e) { console.error('推给脚本失败', e?.message ?? e); return false; }
+    }
     // 目标 origin 只能写 '*'：沙箱的 origin 是 opaque 的（序列化成 "null"），没有可以填的值。可以接受：发出去的只有给这张卡的副本、
     // 它自己请求的结果和事件；就算它把自己导航到了别处，对方拿到的也只是本来就给这张卡的东西
     try { win.postMessage({ smalltalk: true, frameId: r.frameId, ...msg }, '*'); return true; } catch (e) {
@@ -484,8 +629,13 @@ function rateOk(r, kind) {
 
 function onMessage(r, event) {
     // 两道校验：来源必须是这个沙箱的窗口（不是它打开的弹窗、不是它里面嵌的 iframe、不是别的卡的），且带着只有它的 srcdoc 里才有的随机 frameId
-    if (r !== rec || event.source !== r.iframe.contentWindow) return;
-    const raw = event.data;
+    if (r !== rec || r.trusted || event.source !== r.iframe.contentWindow) return;
+    dispatch(r, event.data);
+}
+
+/** 来源已经核对过的一条消息（沙箱：onMessage；直通：桥的 receive）。frameId、格式、白名单、限频照样过 */
+function dispatch(r, raw) {
+    if (r !== rec) return;
     if (!raw || typeof raw !== 'object' || raw.smalltalk !== true || raw.frameId !== r.frameId) return;
     const d = parseSandboxMessage(raw, r.ids);
     if (!d || !rateOk(r, d.kind)) return;
@@ -493,7 +643,7 @@ function onMessage(r, event) {
     else if (d.kind === 'log') scriptLog(r, d.scriptId, d.level, d.text);
     else if (d.kind === 'status') { r.status.set(d.scriptId, { status: d.status, text: d.text }); paintTab(); }
     else if (d.kind === 'call') void handleCall(r, d);
-    else if (d.kind === 'regions') {
+    else if (d.kind === 'regions' && !r.trusted) {
         // 只在下一帧处理最新的一条（动画时桩每帧都可能报一次）
         const first = r.regionsQueued === null;
         r.regionsQueued = d;
@@ -579,7 +729,8 @@ async function sendBoot(r) {
     const scripts = r.list.map(s => ({ id: s.id, name: s.name, info: s.info, button: s.button, code: stripCodeFence(s.content) }));
     r.booted = true;
     // localStorage 的整份初值只在 boot 时传这一次（壁纸之类可能几 MB），之后沙箱只把改了的键发回来（storageWrite）
-    if (post(r, { kind: 'boot', ops, scripts, storage: persist.cardVars?.storage ?? {} })) commit();
+    // 直通模式不带：脚本用的是浏览器真的 localStorage（和主页面同源，和酒馆里一样），桩也没装替身
+    if (post(r, r.trusted ? { kind: 'boot', ops, scripts } : { kind: 'boot', ops, scripts, storage: persist.cardVars?.storage ?? {} })) commit();
 }
 
 /** 会改聊天 / 触发生成的调用：日志里记一行（用户能看到是谁在改、是谁在花额度）。变量写太频繁，不记 */
@@ -675,6 +826,7 @@ export function scriptStatus(id) {
 /** 测试 / 调试用：现在有没有沙箱、属于哪张卡、装了哪些脚本 */
 export function scriptSandboxInfo() {
     return { live: !!rec, cardId: rec?.cardId ?? null, ids: rec ? [...rec.ids] : [], booted: !!rec?.booted, runState,
+        trusted: !!rec?.trusted, lastRestore: lastRestore ? { ...lastRestore } : null,
         frames: document.querySelectorAll('iframe.script-sandbox').length, rects: rec ? rec.rects.map(x => [...x]) : [], dragOpen: !!rec?.dragOpen };
 }
 
@@ -696,7 +848,7 @@ export function clickScriptButton(scriptId, eventName) {
     if (!rec || !rec.ids.has(scriptId)) return;
     emitTavernEvent(eventName);
 }
-function paintButtons() { try { renderScriptButtons(); } catch (e) { console.error(e); } if (rec) layoutOverlay(rec); }
+function paintButtons() { try { renderScriptButtons(); } catch (e) { console.error(e); } if (rec && !rec.trusted) layoutOverlay(rec); }
 
 let paintQueued = false;
 function paintTab() {

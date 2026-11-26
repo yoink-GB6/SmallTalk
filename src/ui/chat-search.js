@@ -157,5 +157,5 @@ export function bindChatSearch() {
         if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1); }
     });
     // Esc 在搜索栏任何控件上都关闭。Ctrl+F 故意不拦截，留给浏览器自己的页内查找
-    $('#chat-search').addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); closeSearch(); $('#input').focus(); } });
+    $('#chat-search').addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); closeSearch(); $('#send_textarea').focus(); } });
 }

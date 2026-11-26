@@ -23,7 +23,7 @@ import {
 } from './state.js';
 import { unbindCardFromBooks } from '../books.js';
 import { startChat, scrollChatToEnd } from './chat.js';
-import { noteChatOpened, emitTavernEvent } from './script-host.js';   // 循环依赖：只在函数体里调用（酒馆事件：CHAT_CHANGED / CHAT_CREATED / CHAT_DELETED，见 script-host.js syncEpoch）
+import { noteChatOpened, emitTavernEvent, forgetTrust } from './script-host.js';   // 循环依赖：只在函数体里调用（酒馆事件：CHAT_CHANGED / CHAT_CREATED / CHAT_DELETED，见 script-host.js syncEpoch）
 import { renderAll, renderTopbar } from './shell.js';
 import { invalidateArchiveTab } from './tab-archive.js';
 import { askRegexFate, moveAndFlush, undoMove, refreshRegexViews, moveSummary } from './regex-delete.js';
@@ -662,6 +662,8 @@ export const deleteCard = (cardId, { confirmed = false } = {}) => op(async () =>
     try {
         await store.batch([...keys.map(k => ({ del: k })), ...(gw ? [gw.op] : [])]);
         gw?.done();
+        // 「允许直接操作页面」的信任记录（localStorage，不在这个事务里）：卡删掉了就一起删，免得同一个卡 id 从备份里回来时又是开的
+        forgetTrust(cardId);
     } catch (e) {
         if (unbound.changed) state.books = booksBefore;
         if (moved) await undoMove(moved);   // 卡还在，说好保留的正则别多出一份

@@ -24,9 +24,10 @@
 import { $, h, toast, uid, download } from './dom.js';
 import { state, ui, save, persist, STOPPED_TEXT } from './state.js';
 import { restoreActive } from './backup.js';   // 循环依赖：只在函数体里调用
-import { cardScripts, newScript, parseScriptFile, scriptFileObject, flattenScripts } from '../scripts.js';
+import { cardScripts, newScript, parseScriptFile, scriptFileObject, flattenScripts, enabledScriptsOf } from '../scripts.js';
 import { safeFileName } from '../card-export.js';
-import { restartScripts, reconcileScripts, scriptStatus, scriptsRunState, floatHidden, setFloatHidden } from './script-host.js';   // 循环依赖：只在函数体里调用
+import { restartScripts, reconcileScripts, scriptStatus, scriptsRunState, floatHidden, setFloatHidden, trustedNow, setTrusted, retrust } from './script-host.js';   // 循环依赖：只在函数体里调用
+import { askTrust } from './trust-confirm.js';
 import { logLineText, renderMiscLog } from './tab-misc.js';   // 同上
 
 /** 每张卡（state.card 对象）一份的界面状态：展开的 id、草稿。换卡 / 重新读档换了对象，自然清掉 */
@@ -112,9 +113,13 @@ function saveDraft(id) {
     const d = v.drafts.get(id);
     const hit = locate(ownTree(), id);
     if (!d || !hit) return null;
+    // 「允许直接操作页面」开着时：用户自己改的代码不算「没看过的新代码」，保存后按新代码重记指纹（否则一保存就被自动关掉）。
+    // 改之前先问清楚现在是不是有效的——改完再问就已经对不上了
+    const wasTrusted = trustedNow();
     hit.item.name = d.name; hit.item.info = d.info; hit.item.content = d.content;
     v.drafts.delete(id);
     save();
+    retrust(wasTrusted);
     restartScripts();   // 这个脚本在运行就重建沙箱；没开的不动（script-host 比较启用的脚本和代码）
     return hit.item;   // 写进卡里的那个对象（第一次改动时树刚被拷进 state.card.scripts，和画面上的不是同一个）
 }
@@ -429,7 +434,39 @@ function viewSig() {
     if (!state.card) return 'none';
     if (!cardIds.has(state.card)) cardIds.set(state.card, ++cardSeq);
     const v = cardView();
-    return JSON.stringify([cardIds.get(state.card), scriptsBlocked() ?? '', batch.on, [...batch.picked], [...v.open], cardScripts(state.card), floatHidden()]);
+    return JSON.stringify([cardIds.get(state.card), scriptsBlocked() ?? '', batch.on, [...batch.picked], [...v.open], cardScripts(state.card), floatHidden(), trustedNow()]);
+}
+
+/**
+ * 「允许直接操作页面」（直通模式，契约 types.js ScriptTrust，运行时 script-host.js）：按卡、默认关、只记在这台设备上。
+ * 打开前弹页内确认框（trust-confirm.js），取消 = 不开；关掉不用确认。下面一行红色小字常驻（用户定的文案）。
+ * 只读标签页 / 生成中等不能改脚本的时候一起禁用（scriptsBlocked）：只读标签页本来就不运行脚本。
+ */
+let trustAsking = false;
+function trustRow(locked) {
+    const on = trustedNow();
+    const box = h('input', { type: 'checkbox', 'data-fk': 'scr-trust', checked: on, disabled: locked,
+        onchange: async e => {
+            const want = e.target.checked;
+            e.target.checked = on;   // 先恢复成原样：确认之后由重画画出真正的状态
+            const why = scriptsBlocked();
+            if (why) { toast(why, 'error'); return; }
+            if (!want) { setTrusted(false); toast('已关闭「允许直接操作页面」，脚本回到沙箱里运行', 'ok'); renderScriptsTab(true); return; }
+            if (trustAsking) return;
+            const cardAtStart = state.card;
+            const names = enabledScriptsOf(cardScripts(state.card)).map(s => displayName(s));
+            trustAsking = true;
+            let yes;
+            try { yes = await askTrust({ cardName: state.card.name || '(未命名)', scriptNames: names }); } finally { trustAsking = false; }
+            if (!yes) return;
+            if (state.card !== cardAtStart || scriptsBlocked()) { toast('确认期间换了卡或开始了别的操作，没有打开', 'error'); renderScriptsTab(true); return; }
+            if (!setTrusted(true)) toast('这台设备存不了设置（浏览器禁用了本地存储？），没有打开', 'error');
+            else toast(names.length ? '已允许这张卡的脚本直接操作页面' : '已打开；这张卡现在没有启用的脚本', 'ok');
+            renderScriptsTab(true);
+        } });
+    return h('div', { class: 'scr-trust', 'data-fk': 'scr-trust-row' },
+        h('label', { class: 'inline', title: '打开后这张卡的脚本不在沙箱里运行，能直接改页面（和酒馆里一样）。只记在这台设备上' }, box, '允许直接操作页面'),
+        h('div', { class: 'scr-trust-warn', 'data-fk': 'scr-trust-warn' }, '打开后这张卡的脚本能读到页面上的一切，包括 API key。只对信得过的卡打开。'));
 }
 
 /** @param {boolean} [force]  true = 不管签名，一定重建（本页自己的操作之后） */
@@ -457,9 +494,10 @@ export function renderScriptsTab(force = false) {
         h('div', { class: 'dim scr-note', 'data-fk': 'scr-note' }, '脚本是卡作者写的代码，能读到这张卡的聊天并联网。'),
         persist.readOnly ? h('div', { class: 'dim scr-note', 'data-fk': 'scr-readonly' }, '只读标签页不运行脚本') : null,
         // 「隐藏悬浮界面」（第 5 期）：脚本照常运行，只是它画在聊天区上的东西不显示（防止挡住聊天又关不掉）。这台设备上按卡记，不进存储
-        tree.length ? h('label', { class: 'inline scr-float', title: '脚本照常运行，只是它画在聊天区上的界面不显示、不挡点击（只记在这台设备上）' },
-            h('input', { type: 'checkbox', 'data-fk': 'scr-float-hide', checked: floatHidden(),
+        tree.length ? h('label', { class: 'inline scr-float', title: trustedNow() ? '「允许直接操作页面」开着时脚本直接画在页面上，没有悬浮界面，这个开关不起作用' : '脚本照常运行，只是它画在聊天区上的界面不显示、不挡点击（只记在这台设备上）' },
+            h('input', { type: 'checkbox', 'data-fk': 'scr-float-hide', checked: floatHidden(), disabled: trustedNow(),
                 onchange: e => { setFloatHidden(e.target.checked); lastSig = viewSig(); } }), '隐藏悬浮界面') : null,
+        tree.length ? trustRow(locked) : null,
         tree.length
             ? h('div', { class: 'plist scr-list', 'data-fk': 'scr-list' }, tree.map(t => (t.type === 'folder' ? folderBox(t, locked) : scriptBox(t, locked))))
             : h('div', { class: 'empty', 'data-fk': 'scr-empty' }, '这张卡没有脚本。'),

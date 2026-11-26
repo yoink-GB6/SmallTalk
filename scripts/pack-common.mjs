@@ -14,8 +14,10 @@ export const DIST = path.join(ROOT, 'dist');
 // 页面本身：两种产物都要
 // manifest.webmanifest + icons/：PWA（添加到主屏幕）要的清单和图标
 // themes/：各主题自带的素材（图片等），按主题分子目录，如 themes/princesse/camellia-line.svg
+// img/：酒馆页面自带的几张图（酒馆的样式里写死了 img/xxx 这样的相对地址，比如下拉框的 img/down-arrow.svg）。「允许直接操作页面」的美化脚本
+//   按酒馆的 DOM 写 CSS 时会引用到；图是我们自己画的，不是从酒馆拷的
 export const PAGE_FILES = ['index.html', 'style.css', 'favicon.svg', 'manifest.webmanifest'];
-export const PAGE_DIRS = ['src', 'vendor', 'icons', 'themes'];
+export const PAGE_DIRS = ['src', 'vendor', 'icons', 'themes', 'img'];
 // 本地服务：只有压缩包版要（网页版没有服务端，绝不能带上 server.mjs / server/）
 export const SERVER_FILES = ['package.json', 'server.mjs'];
 export const SERVER_DIRS = ['server'];

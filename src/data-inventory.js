@@ -272,4 +272,9 @@ export const LOCAL_STORAGE_PREFS = {
         what: '「脚本」页「隐藏悬浮界面」打了勾的卡 id 列表（JSON 数组，最多 200 个；都没勾时不存这个键）。只是这台设备上的显示偏好：脚本照常运行',
         where: 'src/ui/script-host.js FLOAT_HIDE_KEY', default: '都显示',
     },
+    'smalltalk.scriptTrusted': {
+        what: '「脚本」区「允许直接操作页面」打开了的卡：JSON 数组 [{id: 卡 id, fp: [启用脚本代码的 SHA-256…]}]，最多 200 张（都没开时不存这个键）。'
+            + '是这台设备上的安全决定：不进整体备份、不随卡导出；删卡时一起删；脚本代码变了（指纹对不上）自动作废',
+        where: 'src/script-trust.js TRUST_KEY；读写在 src/ui/script-host.js（trustedNow / setTrusted / forgetTrust）', default: '都不开（脚本在沙箱里跑）',
+    },
 };

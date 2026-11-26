@@ -102,7 +102,7 @@ export async function runSlash(command, ctx = ANON) {
             if (named.await === 'true') await p;
             pipe = '';
         } else if (name === 'setinput') {
-            $('#input').value = text; fitInput(); refreshPreview();
+            $('#send_textarea').value = text; fitInput(); refreshPreview();
             pipe = text;
         } else if (name === 'echo') {
             hostImpl.toastr(ctx, named.severity, text);

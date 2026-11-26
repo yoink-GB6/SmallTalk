@@ -1,7 +1,7 @@
 // 小工具：查元素、建节点、toast、防抖、下载、uid、safeJson。不依赖任何别的模块（依赖图的叶子）。
 
 /**
- * 查元素。消息正文是导入的卡片 / 模型输出的 HTML，里面可以带任意 id（比如 id="input"），
+ * 查元素。消息正文是导入的卡片 / 模型输出的 HTML，里面可以带任意 id（比如 id="send_textarea"），
  * 而聊天区在文档里排在输入框前面——所以全局查找时要跳过消息正文里的元素，免得被「撞 ID」顶替。
  */
 export const $ = (sel, root = document) => {
@@ -10,9 +10,18 @@ export const $ = (sel, root = document) => {
     return null;
 };
 
+/**
+ * h() 建出来的元素（页面自己的界面）。酒馆助手脚本开了「允许直接操作页面」时会往 <body> / <head> 里加东西，
+ * 关掉后要把它加的清掉（ui/page-guard.js），但不能把同一段时间里我们自己挂上去的弹框、提示条、模型下拉一起清掉——靠这个认。
+ * WeakSet：元素没了自然释放，不占内存
+ */
+const OWN = new WeakSet();
+export const isOwnNode = n => OWN.has(n);
+
 /** 建 DOM 节点。文本一律走 textContent，导入的卡名、条目名都是不可信内容，不拼 innerHTML。 */
 export function h(tag, props, ...kids) {
     const el = document.createElement(tag);
+    OWN.add(el);
     for (const [k, v] of Object.entries(props ?? {})) {
         if (v == null || v === false) continue;
         if (k === 'class') el.className = v;
