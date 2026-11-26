@@ -5,7 +5,7 @@
 //   一张卡一个：<iframe sandbox="allow-scripts">（render.js SCRIPT_SANDBOX；【绝不】给 allow-same-origin：opaque origin，读不到我们的
 //   IndexedDB / localStorage、碰不到主页面的 DOM 和 JS 对象；也不给 modals / popups / forms：原生 prompt 能骗人输 key，见 render.js），
 //   srcdoc 里只有桩和库，脚本代码走 postMessage 进去、用 Blob URL 加载。
-//   iframe 是盖在聊天区（#chat-pane）上的透明覆盖层，按脚本画出的区域裁剪（第 5 期，见下面「悬浮区」）。只盖聊天区（用户定的：
+//   iframe 是盖在聊天区（#sheld）上的透明覆盖层，按脚本画出的区域裁剪（第 5 期，见下面「悬浮区」）。只盖聊天区（用户定的：
 //   脚本不能在右侧面板 / 顶栏上画东西，免得画一个假的「接口」页骗人填 key）。
 //
 // ── 通信（都带 smalltalk: true 和这个沙箱的随机 frameId；宿主收到的每条都先核对 event.source === 沙箱的 window 且 frameId 对得上）──
@@ -48,7 +48,8 @@
 //         桩里补丁 / 结果当场生效，事件推迟到微任务分发（脚本回调不能插在宿主自己的代码中间跑）；
 //       pull()：桩同步读之前调，宿主当场 flushScripts——同步读读到的就是「现在」。
 //   - 建之前拍主页面快照（page-guard.js），在 <head> 挂 Font Awesome（脚本画在主页面上的图标要用）。
-//   - 拆：移除 iframe（浏览器同步发 pagehide，脚本在里面收拾自己）→ restorePage 兜底清掉剩下的 → 摘掉 Font Awesome。
+//   - 颜色联动（ui/theme-link.js，2026-11-27）：脚本改了 --SmartTheme* 等酒馆变量，聊天这一侧（#top-bar、#sheld）的我们的变量跟着变，右侧面板不跟。
+//   - 拆：移除 iframe（浏览器同步发 pagehide，脚本在里面收拾自己）→ 停掉颜色联动、撤销写过的变量 → restorePage 兜底清掉剩下的 → 摘掉 Font Awesome。
 //   - 没有悬浮区（脚本直接画在主页面上），不裁剪、不量布局；「隐藏悬浮界面」对它没有作用。
 //   - 只读标签页 / 已停止保存 / 恢复中照旧不建（wanted() 先判这些）。
 //
@@ -57,6 +58,7 @@
 import { SCRIPT_SANDBOX, FRAME_LIBS, emitFrameEvent } from '../render.js';
 import { TRUST_KEY, parseTrustList, serializeTrustList, withTrust, scriptFingerprint } from '../script-trust.js';
 import { snapshotPage, restorePage } from './page-guard.js';
+import { startThemeLink, stopThemeLink, themeLinkInfo } from './theme-link.js';   // 不依赖兄弟 ui 模块，但照规矩只在函数体里调用
 import { h, toast } from './dom.js';
 import { buildScriptSrcdoc } from '../script-stub.js';
 import { diffChat } from '../script-sync.js';
@@ -202,6 +204,8 @@ function teardown() {
     // 不另外补发 pagehide（补发会让脚本的清理跑两遍）
     r.iframe.remove();
     if (r.trusted) {
+        // 颜色联动先停（撤掉写在 #top-bar / #sheld 上的我们的变量），再兜底清理：清理时 <html> 上的变化不用再触发一轮重算
+        try { stopThemeLink(); } catch (e) { console.error('颜色联动撤销出错', e); }
         try { lastRestore = restorePage(r.snap); } catch (e) { console.error('直通模式的兜底清理出错', e); }
         r.faLink?.remove();
     }
@@ -217,7 +221,7 @@ const libUrl = name => new URL(FRAME_LIBS.find(l => l.name === name).path, docum
 /** 建一个新沙箱装 list 里的脚本（先拆旧的）。trusted：直通模式（见文件头） */
 function build(list, trusted = false) {
     teardown();
-    const host = trusted ? document.body : (document.querySelector('#chat-pane') ?? document.body);
+    const host = trusted ? document.body : (document.querySelector('#sheld') ?? document.body);
     const frameId = randomToken();
     // 直通：快照要在我们自己往页面上加东西（iframe、Font Awesome）之前拍——那两样拆的时候我们自己摘
     const snap = trusted ? snapshotPage() : null;
@@ -262,6 +266,8 @@ function build(list, trusted = false) {
         iframe.__smalltalkBridge = me.bridge;
         me.faLink = h('link', { rel: 'stylesheet', href: libUrl('fontawesome'), 'data-smalltalk': 'script-fa' });
         document.head.append(me.faLink);
+        // 颜色联动（ui/theme-link.js）：脚本改了酒馆的主题变量，聊天这一侧跟着变。要在脚本代码跑起来之前开始（拍下 --mainFontSize 的原值）
+        startThemeLink();
     } else {
         window.addEventListener('message', e => onMessage(me, e), { signal: ac.signal });
     }
@@ -288,8 +294,8 @@ function build(list, trusted = false) {
 // 酒馆里脚本的 $ 是酒馆主页面的，`$('body').append(浮窗)` 画到酒馆页面上；我们这里 $ 是沙箱自己的文档，所以让沙箱 iframe 本身成为一块
 // 盖在聊天区上的透明覆盖层，脚本画的东西就显示出来了。
 //
-// 边界（用户定的，安全上不能松）：只盖聊天区。iframe 挂在 #chat-pane 里、position:absolute，尺寸由这里算（从聊天区顶到输入区 / 按钮排的上沿），
-//   #chat-pane 是 position:relative + isolation:isolate（style.css 末尾）：iframe 的 z-index 被关在聊天区自己的层叠上下文里，
+// 边界（用户定的，安全上不能松）：只盖聊天区。iframe 挂在 #sheld 里、position:absolute，尺寸由这里算（从聊天区顶到输入区 / 按钮排的上沿），
+//   #sheld 是 position:relative + isolation:isolate（style.css 末尾）：iframe 的 z-index 被关在聊天区自己的层叠上下文里，
 //   永远在顶栏、右侧面板、窄屏抽屉（z 16）和遮罩（15）、弹框（25）、模型下拉（28）、提示条（30）之下；iframe 的内容浏览器保证画不出它自己的框。
 //   脚本改不了 iframe 元素本身的样式（跨源）。所以它画的任何东西都落不到面板、顶栏、弹框上——在那上面画假的「接口」页骗 key 做不到。
 // 底部留给输入区：覆盖层不盖输入框、发送按钮和脚本按钮排（浮球贴「页面右下角」时会落在输入框上方，不会挡住发送）。
@@ -338,7 +344,7 @@ function layoutOverlay(r) {
     if (!pane) return;
     const top = pane.getBoundingClientRect().top;
     let stop = pane.getBoundingClientRect().bottom;
-    for (const sel of ['#manual-panel', '#script-buttons', '#composer']) {
+    for (const sel of ['#manual-panel', '#script-buttons', '#send_form']) {
         const el = document.querySelector(sel);
         if (el && !el.hidden && el.offsetParent !== null) stop = Math.min(stop, el.getBoundingClientRect().top);
     }
@@ -349,7 +355,7 @@ function watchLayout(r) {
     layoutOverlay(r);
     if (typeof ResizeObserver !== 'function') return;
     r.ro = new ResizeObserver(() => { if (r === rec) layoutOverlay(r); });
-    for (const sel of ['#chat-pane', '#manual-panel', '#script-buttons', '#composer']) { const el = document.querySelector(sel); if (el) r.ro.observe(el); }
+    for (const sel of ['#sheld', '#manual-panel', '#script-buttons', '#send_form']) { const el = document.querySelector(sel); if (el) r.ro.observe(el); }
     window.addEventListener('resize', () => { if (r === rec) layoutOverlay(r); }, { signal: r.ac.signal });
 }
 /** 输入区那几块显示 / 隐藏之后（ResizeObserver 对 hidden 切换不一定报）：shell.js renderAll 经 reconcileScripts 调到这里 */
@@ -826,7 +832,7 @@ export function scriptStatus(id) {
 /** 测试 / 调试用：现在有没有沙箱、属于哪张卡、装了哪些脚本 */
 export function scriptSandboxInfo() {
     return { live: !!rec, cardId: rec?.cardId ?? null, ids: rec ? [...rec.ids] : [], booted: !!rec?.booted, runState,
-        trusted: !!rec?.trusted, lastRestore: lastRestore ? { ...lastRestore } : null,
+        trusted: !!rec?.trusted, lastRestore: lastRestore ? { ...lastRestore } : null, themeLink: themeLinkInfo(),
         frames: document.querySelectorAll('iframe.script-sandbox').length, rects: rec ? rec.rects.map(x => [...x]) : [], dragOpen: !!rec?.dragOpen };
 }
 

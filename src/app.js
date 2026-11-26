@@ -39,7 +39,7 @@ function bind() {
         if (e.dataTransfer?.files.length) importFiles([...e.dataTransfer.files]);
     });
 
-    $('#composer').addEventListener('submit', e => { e.preventDefault(); send(); });
+    $('#send_form').addEventListener('submit', e => { e.preventDefault(); send(); });
     $('#send_textarea').addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     });
