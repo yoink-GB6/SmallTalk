@@ -79,7 +79,7 @@ function readBody(req, max = MAX_BODY) {
 }
 
 // ───────── /api/generate ─────────
-const NO_ENDPOINT = '找不到这个接口（可能已被删除）：请到右侧「接口」页检查，再在顶栏（聊天）或「记忆」页重新选择模型。';
+const NO_ENDPOINT = '找不到这个接口（可能已被删除）：聊天用的请到「接口」页重新选，压缩用的在「记忆」页重新选。';
 
 async function handleGenerate(req, res) {
   let body;
@@ -157,7 +157,7 @@ async function handleOpenAI(res, ep, body, raw) {
   if (missing.length) return sendJson(res, 400, { error: `接口「${scrub(ep.name, apiKey)}」还没配置好：缺${missing.join('、')}。请到「接口」页补全。` });
   // 模型名不再有服务端默认值：由使用方（顶栏 / 记忆页）在每次请求里指明
   const model = body.model;
-  if (!model) return sendJson(res, 400, { error: '没有选择模型：请在顶栏（聊天）或「记忆」页给这个接口选一个模型名。' });
+  if (!model) return sendJson(res, 400, { error: '没有选择模型：聊天用的请到「接口」页选，压缩用的在「记忆」页选。' });
 
   // 聊天请求经 OpenRouter 调 anthropic/ 模型时，发送前最后一步加 1 小时缓存标记（规则见 src/openai-shared.js applyPromptCache）。
   // 页面在「拼装」页关掉开关时带 promptCache: false；没带 = 开。直通请求（记忆压缩，raw）不加。不满足条件时 messages 原样不变

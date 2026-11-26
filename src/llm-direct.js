@@ -35,7 +35,7 @@ export const STORE_KEY = 'endpoints';
 export const CLAUDE_DIRECT_DETAIL = '网页版需要先添加一个 OpenAI 兼容接口';
 // 文字里带「还没选聊天用的接口」：聊天区的报错提示（chat.js showGenError）据此给出建议
 const CLAUDE_DIRECT_SEND = '还没选聊天用的接口：到「接口」页添加一个 OpenAI 兼容接口，再在页面顶部选它。';
-const NO_ENDPOINT = '找不到这个接口（可能已被删除）：请到右侧「接口」页检查，再在顶栏（聊天）或「记忆」页重新选择模型。';
+const NO_ENDPOINT = '找不到这个接口（可能已被删除）：聊天用的请到「接口」页重新选，压缩用的在「记忆」页重新选。';
 const BUILTIN = '这是本地版才有的内置接口，网页版里不能修改、删除或获取模型列表';
 const GONE = '没有这个接口（可能已被删除）';
 
@@ -251,7 +251,7 @@ export function createDirectBackend({
     if (!apiKey) missing.push('API Key');
     if (missing.length) throw new Error(`接口「${scrub(ep.name, apiKey)}」还没配置好：缺${missing.join('、')}。请到「接口」页补全。`);
     const model = body.model;
-    if (!model) throw new Error('没有选择模型：请在顶栏（聊天）或「记忆」页给这个接口选一个模型名。');
+    if (!model) throw new Error('没有选择模型：聊天用的请到「接口」页选，压缩用的在「记忆」页选。');
 
     // 和服务端 handleOpenAI 同一条规则：聊天请求经 OpenRouter 调 anthropic/ 模型时加缓存标记（openai-shared.js applyPromptCache），
     // promptCache: false = 「拼装」页关掉了；直通（记忆压缩）不加。不满足条件时 messages 原样不变

@@ -471,6 +471,14 @@ export function renderMemoryTab() {
         box,
         m.enabled ? null : h('div', { class: 'dim', style: 'margin-bottom:8px' }, '已关闭：所有楼层照发原文，回复后也不再压缩。已有的摘要会留着。'),
     ].filter(Boolean);
+    // 失败的轮：表格行里只留「失败」标记，原因在这里统一说一次（同样的原因每行重复一大句太吵）。
+    // 判定和行里的「失败」标记一致：有 memoryError、不是旧的「接口没配好」（staleErr 当待压缩）、不在压缩中
+    const failed = turns.filter(({ msg }) => msg.memoryError && !staleErr(msg) && ui.memoryPending !== msg);
+    if (failed.length) {
+        const reasons = [...new Set(failed.map(({ msg }) => String(msg.memoryError)))];
+        const shown = reasons.slice(0, 3).join('；') + (reasons.length > 3 ? ' 等' : '');
+        kids.push(h('div', { class: 'log-line warn', 'data-fk': 'mem-fail-summary', style: 'margin-bottom:8px' }, `有 ${failed.length} 轮压缩失败：${shown}`));
+    }
     if (!turns.length) {
         kids.push(h('div', { class: 'empty' }, '还没有回复。每次回复结束后，会在后台把这一轮压成一句话。'));
         return void tab.replaceChildren(...kids);
@@ -517,7 +525,7 @@ export function renderMemoryTab() {
         return h('tr', { class: [i < cut ? 'hit' : '', hid ? 'mem-hidden-row' : ''].filter(Boolean).join(' ') },
             h('td', { class: 'dim mono' }, `#${i}`),
             h('td', null, status, hid ? h('span', { class: 'badge', 'data-fk': 'mem-hidden' }, '已隐藏') : null),
-            h('td', { style: 'width:100%' }, input, msg.memoryError && !staleErr(msg) ? h('div', { class: 'log-line error' }, msg.memoryError) : null),
+            h('td', { style: 'width:100%' }, input),   // 失败原因不在行里重复，见页顶 mem-fail-summary
             h('td', { class: 'dim' }, `${msg.content.length}→${(msg.memory ?? '').length}`),
             h('td', null, h('button', { class: 'ghost', title: locked ? lockedTitle : wholeHidden ? '整轮都隐藏着：不压缩，取消隐藏后才能重压' : '重新压缩这一轮', disabled: pending || wholeHidden || locked,
                 onclick: () => { delete msg.memory; delete msg.memoryError; changed(); redoFirst(msg); } }, '↻')),
