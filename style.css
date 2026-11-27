@@ -1258,3 +1258,15 @@ details[open] > .scr-head::before { content: '▾'; }
 .exc-pick { flex: none; margin: 0; }
 .exc-floor { flex: none; font-size: var(--font-size-xs); }
 .exc-item > button.ghost { flex: none; }
+/* ───── 首次打开的小指引（src/ui/first-run-guide.js）：居中的卡片 + 半透明底；z-index 24，低于页内弹框的遮罩（25）和更新提示条（31）。点底不关 ───── */
+.fr-guide { position: fixed; inset: 0; z-index: 24; background: var(--scrim); display: grid; place-items: center; padding: 16px; }
+.fr-guide[hidden] { display: none; }
+.fr-guide .fr-card { background: var(--panel); color: var(--text); border: var(--border-width) solid var(--line); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-dialog); padding: 16px 18px; width: min(380px, 100%); max-height: 100%; overflow-y: auto; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
+.fr-guide .fr-title { font-weight: 600; font-size: 16px; }
+.fr-guide .fr-step { display: flex; flex-direction: column; gap: 4px; }
+.fr-guide .fr-step .row { flex-wrap: wrap; align-items: center; gap: 8px; }
+.fr-guide .fr-done { color: var(--ok, var(--text)); }
+.fr-guide .fr-note { font-size: 12px; line-height: 1.5; }
+.fr-guide .fr-foot { display: flex; gap: 8px; justify-content: flex-end; }

@@ -283,6 +283,10 @@ export const LOCAL_STORAGE_PREFS = {
         what: '「脚本」页「隐藏悬浮界面」打了勾的卡 id 列表（JSON 数组，最多 200 个；都没勾时不存这个键）。只是这台设备上的显示偏好：脚本照常运行',
         where: 'src/ui/script-host.js FLOAT_HIDE_KEY', default: '都显示',
     },
+    'smalltalk.firstRunGuideOff': {
+        what: '网页版首次打开的小指引弹窗：点过「不再提示」就是 "1"（默认不存，之后每次打开都会弹，直到装到主屏幕 / 浏览器答应保留数据）',
+        where: 'src/ui/first-run-guide.js GUIDE_OFF_KEY', default: '会弹（仅网页版、没装到主屏幕、浏览器还没给持久存储时）',
+    },
     'smalltalk.scriptTrusted': {
         what: '「脚本」区「允许直接操作页面」打开了的卡：JSON 数组 [{id: 卡 id, fp: [启用脚本代码的 SHA-256…]}]，最多 200 张（都没开时不存这个键）。'
             + '是这台设备上的安全决定：不进整体备份、不随卡导出；删卡时一起删；脚本代码变了（指纹对不上）自动作废',
