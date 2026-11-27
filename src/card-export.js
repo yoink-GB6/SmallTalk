@@ -200,6 +200,15 @@ const TEXT_FIELDS = [
             o.data.extensions.depth_prompt = dp;
         },
     },
+    // 备选开场白（写卡页的开场白列表）：只在 data.alternate_greetings（charaFormatData 的 _.set(char, 'data.alternate_greetings', …)），
+    // V1 没有这个字段，所以是 dataOnly：V1 卡加了备选开场白，导出时照酒馆导入 V1 的做法（convertToV2 → charaFormatData）升级成 V2。
+    // 是数组，按 JSON 比（eq）；写卡页不把它写进 raw（理由见 card-writer.js「多个开场白」），所以这里是它唯一的写出口
+    {
+        dataOnly: true,
+        get: (c) => (Array.isArray(c?.alternateGreetings) ? c.alternateGreetings : []),
+        eq: jsonEqual,
+        write: (o, v) => { o.data.alternate_greetings = clone(v); },
+    },
 ];
 
 // ───────────────────────────── 卡 → 酒馆卡 JSON ─────────────────────────────
@@ -262,7 +271,7 @@ function upgradeV1(raw, card) {
  * 把我们的 Card 还原成酒馆的卡 JSON。以 card.raw（导入时原样保留的原始 JSON）为底，
  * 只覆盖我们这边会被用户改的几块：卡内嵌世界书（card.worldEntries）、卡自带正则（card.regexScripts）、
  * 酒馆助手脚本（card.scripts → data.extensions.tavern_helper，合并规则在 scripts.js writeScriptsInto），
- * 以及「拼装」页 / 「写卡」页改过的文字字段（TEXT_FIELDS：名字、描述、性格、场景、开场白、示例对话、system_prompt、post_history_instructions、深度提示）。
+ * 以及「拼装」页 / 「写卡」页改过的文字字段（TEXT_FIELDS：名字、描述、性格、场景、开场白、备选开场白、示例对话、system_prompt、post_history_instructions、深度提示）。
  * 其余字段一个不动；没改过的卡导出结果与 card.raw JSON 语义相同。不修改 card.raw。
  *
  * 注意：酒馆导出时会跑 unsetPrivateFields（fav 设成 false、删 chat）。为了让「没改过 = 原样」可验证，
@@ -290,7 +299,7 @@ export function exportCardJson(card, options = {}) {
     // 酒馆助手脚本（card.scripts，规则见 scripts.js 文件头「导出」）：没在「脚本」页改过 = 不碰 raw
     const scriptsDirty = scriptsChanged(card);
     // 文字字段（「拼装」页可以就地改）：和「导入时的样子」逐个比，只有变了的才写。改了又改回原样 = 没改
-    const fieldsChanged = baseline ? TEXT_FIELDS.filter((f) => f.get(card) !== f.get(baseline)) : [];
+    const fieldsChanged = baseline ? TEXT_FIELDS.filter((f) => !(f.eq ?? Object.is)(f.get(card), f.get(baseline))) : [];
     const needsData = fieldsChanged.some((f) => f.dataOnly);
 
     // V1：只有真要写世界书 / 正则 / 脚本 / V1 没有位置的字段（system_prompt 等）时才升级。什么都没改就原样还回去，

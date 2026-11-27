@@ -643,24 +643,29 @@ export async function createBlankCard() {
     return addCard(blankCard(name), '');
 }
 
+/** 当前存档「没动过」吗（untouched 给写卡页用：决定开场白下面那行提示怎么说） */
+export const chatUntouched = () => !!persist.chatMeta && untouched();
+
 /**
- * 「写卡」页改了开场白 / 名字之后：当前存档还「没动过」（untouched，只有用第一个开场白建的那一楼）就原地按新的卡重建那一楼，
- * 聊天区就是实时预览；否则不碰历史。做法同 newChat 里「原地换开场白」那一支（startChat + markGreeting），只是：
+ * 「写卡」页改了开场白 / 名字之后：当前存档还「没动过」（untouched，只有用开场白建的那一楼）就原地用第 index 个开场白
+ * （过滤掉空开场白之后的下标，和 startChat / 开场白下拉框同一种数法）重建那一楼，聊天区就是实时预览；否则不碰历史。
+ * 存档是用哪个开场白开的、改动之后它变成第几个，由写卡页跟踪（card-writer.js trackedSlot），这里只管照做。
+ * 做法同 newChat 里「原地换开场白」那一支（startChat + markGreeting），只是：
  *   - 不发酒馆事件（打字时每停一下就重建一次，发 CHAT_CREATED 会把脚本闹翻；楼层内容的变化由 renderAll 里的 reconcileScripts 推副本）；
- *   - 不经过 op（op 每次都先整个落盘，打字时太重）：拦截条件照 canSwitch / chatWriteBlocked 一样判断，楼层的落盘走 startChat 里的防抖 save()；
- *   - 只认第一个开场白（greeting.index 为 0）：用备选开场白建的存档，改 first_mes 不影响它。
+ *   - 不经过 op（op 每次都先整个落盘，打字时太重）：拦截条件照 canSwitch / chatWriteBlocked 一样判断，楼层的落盘走 startChat 里的防抖 save()。
  * 「没动过」的判断本身已经保证没有外置记忆摘要、局部变量和建的时候一样（见 untouched），所以重建不会丢东西。
- * @returns {'updated'|'kept'|'blocked'} kept = 这个存档已经聊过（或不是用第一个开场白建的），新对话才会用到新的开场白
+ * @param {number} index
+ * @returns {'updated'|'kept'|'blocked'} kept = 这个存档已经聊过，新对话才会用到新的开场白
  */
-export function refreshGreetingInPlace() {
+export function refreshGreetingInPlace(index) {
     if (working || ui.switching || ui.busy || persist.readOnly || persist.stopped || restoreActive() || !persist.cardId) return 'blocked';
-    if (!persist.chatMeta || !untouched() || (persist.chatMeta.greeting?.index ?? 0) !== 0) return 'kept';
+    if (!persist.chatMeta || !untouched()) return 'kept';
     // 旧的第 0 楼可能带着前端卡 iframe：先 unmountMessage 释放它的监听，再整体清掉（同 teardownChatUi）
     const box = $('#chat');
     for (const el of box.querySelectorAll('.mes_text')) unmountMessage(el);
     box.replaceChildren();
-    startChat(0);
-    markGreeting(0);
+    startChat(index);
+    markGreeting(index);
     return 'updated';
 }
 

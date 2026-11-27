@@ -22,7 +22,7 @@ import {
 import { importFiles, importBlockedReason } from './importer.js';   // 循环依赖（importer 导入 archive）：只在函数体里调用
 import { openSearch } from './chat-search.js';   // 「搜索聊天记录」按钮用（只在函数体里调用）
 import { closeDrawer } from './drawer.js';
-import { writerOwnsTab, writerPicking, drawWriter, openWriter, openCompare, backToWriter } from './card-writer.js';   // 循环依赖：只在函数体里调用
+import { writerOwnsTab, drawWriter, openWriter } from './card-writer.js';   // 循环依赖：只在函数体里调用
 
 // ───────────────────────────── 运行期界面状态（不持久化，刷新页面就没了） ─────────────────────────────
 
@@ -120,7 +120,7 @@ async function load() {
 /** @param {boolean} [force] 从别的页切进来时为 true：重新读一遍 */
 export function renderArchiveTab(force = false) {
     if (force) dirty = true;
-    // 写卡页 / 对比视图（card-writer.js）不用卡列表：不读存储，直接画（每次落盘都会来一次，写卡时不该每次都把所有卡读一遍）。
+    // 写卡页 / 挑对比的角色 / 对比视图（card-writer.js）不用这里的卡列表：不读存储，直接画（每次落盘都会来一次，写卡时不该每次都把所有卡读一遍）。
     // dirty 留着，回到列表时再读
     if (writerOwnsTab()) {
         const tab = $('#tab-archive');
@@ -197,12 +197,6 @@ function draw() {
         title: ro ? RO_TIP : '写卡：从零新建一张角色卡，或者改当前卡的名字、头像、人设、开场白', onclick: openWriter }, '写卡');
     // 整体备份 / 恢复在「杂项」页（src/ui/backup.js 的 backupSection），这一页不再有备份那一行
     const kids = [];
-    if (writerPicking()) {
-        // 写卡时挑一张卡来对比：顶上一条说明 + 「回到写卡」，每张（非当前的）卡右边有「对比」（cardBlock）
-        kids.push(h('div', { class: 'summary cw-pick-bar' },
-            h('button', { class: 'primary', 'data-fk': 'cw-pick-back', type: 'button', onclick: backToWriter }, '← 回到写卡'),
-            h('span', { class: 'dim' }, cards.some(c => !c.active) ? '写卡中：点某张卡右边的「对比」，只读地看它的内容' : '写卡中：没有别的卡可以对比')));
-    }
     if (!cards.length) {
         kids.push(h('div', { class: 'empty' }, '还没有角色卡。导入一张 PNG / JSON 角色卡后，它和它的聊天存档会按卡列在这里；'
             + '也可以不导入，直接和 Assistant 聊（发出第一条消息后会自动建一张占位卡），或者点「写卡」从零写一张。'),
@@ -338,9 +332,6 @@ function cardBlock(c, ro) {
         // 当前卡这一行的开场白下拉框落脚处（draw 里把 #greeting-select 挪进来；只有一个开场白时它自己是 hidden 的）
         c.active ? h('span', { class: 'arch-greeting-slot' }) : null,
         actionBtn('导入', `导入酒馆的聊天记录（.jsonl），作为「${c.name}」的新存档并切过去`, `import:${c.id}`, ro, () => { picker.dataset.card = c.id; picker.click(); }),
-        // 只在写卡时挑对比的卡时出现（card-writer.js）：只读地看这张卡，不切换、不写，只读标签页也能用
-        writerPicking() && !c.active ? h('button', { class: 'primary cw-compare-btn', 'data-fk': `compare:${c.id}`, type: 'button',
-            title: `只读地看「${c.name}」的内容（各字段、世界书、正则），不切换当前卡`, onclick: () => openCompare(c.id) }, '对比') : null,
         // 每卡的导出 / 删除按钮收进了顶上的「批量」。这个位置显示这张卡最后聊天的日期（没有存档记录就不显示）
         c.lastDay ? h('span', { class: 'dim arch-last', title: '最后聊天的日期' }, c.lastDay) : null);
 

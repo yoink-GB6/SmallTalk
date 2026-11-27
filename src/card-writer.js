@@ -145,18 +145,96 @@ function renameOwnBook(card, oldName, newName) {
     }
 }
 
-// ───────────────────────────── 头像 ─────────────────────────────
+// ───────────────────────────── 多个开场白 ─────────────────────────────
+//
+// 酒馆卡的开场白：first_mes 是第一个，data.alternate_greetings（字符串数组，只在 V2 / V3 的 data 下，V1 没有这个字段）是备选的。
+// 写卡页把它们当成一个列表编辑：[first_mes, ...alternate_greetings]。把某个备选挪到第一位 = 它成了 first_mes（数据上真的这样写）。
+//
+// 页面别处用的是「去掉空的」之后的列表：chat.js startChat / shell.js 的开场白下拉框都是 [firstMes, ...alternateGreetings].filter(Boolean)，
+// 存档记的 greeting.index 也是这个过滤后列表里的下标。所以这里另给两个换算：槽位（未过滤列表里的位置）↔ 过滤后的下标。
+//
+// 写回 raw：first_mes 照名字 / 描述那一套写进 raw（writeRaw）；alternate_greetings【不写进 raw】，只改 Card，
+// 导出时由 card-export.js TEXT_FIELDS 和「导入时的样子」比，变了才写 data.alternate_greetings。
+// 为什么不写 raw：原卡里可能根本没有这个键，写进去之后「加一个再删掉」会在导出里多出一个 alternate_greetings: []，
+// 就做不到「改了又改回 = 原文件逐字不变」了。代价：前端卡 / 脚本读 raw（getCharData）看到的还是原来的备选开场白。
 
-/** 酒馆的标准头像尺寸（src/constants.js AVATAR_WIDTH / AVATAR_HEIGHT），上传头像时缩放裁剪到这个大小 */
-export const AVATAR_W = 512, AVATAR_H = 768;
+/** 写卡页的开场白列表：[first_mes, ...alternate_greetings]，非字符串的项当空串 */
+export function greetingList(card) {
+    const alts = Array.isArray(card?.alternateGreetings) ? card.alternateGreetings : [];
+    return [str(card?.firstMes), ...alts.map(str)];
+}
 
 /**
- * 「铺满再居中裁掉多余」（酒馆上传头像时 Jimp 的 image.cover({w, h})）：原图按比例缩放到刚好盖住目标框，
- * 返回要从原图上取的那块矩形 {sx, sy, sw, sh}（画到目标框的 0,0,dw,dh 上）。
- * @returns {{sx: number, sy: number, sw: number, sh: number}}
+ * 把列表写回卡：list[0] → firstMes（同时写 raw 的 first_mes），其余 → alternateGreetings（换成新数组，不原地改：
+ * 刚导入的卡 card.alternateGreetings 和 raw.data.alternate_greetings 可能是同一个数组）。列表至少当一个空开场白处理。
+ * @returns {boolean} 有没有变
  */
-export function coverRect(srcW, srcH, dstW = AVATAR_W, dstH = AVATAR_H) {
-    const scale = Math.max(dstW / srcW, dstH / srcH);
-    const sw = dstW / scale, sh = dstH / scale;
-    return { sx: (srcW - sw) / 2, sy: (srcH - sh) / 2, sw, sh };
+export function setGreetings(card, list) {
+    const l = (Array.isArray(list) && list.length ? list : ['']).map(str);
+    const before = JSON.stringify(greetingList(card));
+    applyCardFields(card, { firstMes: l[0] });
+    card.alternateGreetings = l.slice(1);
+    return JSON.stringify(greetingList(card)) !== before;
+}
+
+/** 槽位 → 过滤掉空开场白之后的下标；这个槽位本身是空的返回 -1 */
+export function filteredIndex(list, slot) {
+    if (!str(list[slot])) return -1;
+    let n = 0;
+    for (let i = 0; i < slot; i++) if (str(list[i])) n++;
+    return n;
+}
+
+/** 过滤后的下标 → 槽位；超出范围返回 null */
+export function slotOfFiltered(list, index) {
+    let n = 0;
+    for (let i = 0; i < list.length; i++) {
+        if (!str(list[i])) continue;
+        if (n === index) return i;
+        n++;
+    }
+    return null;
+}
+
+/**
+ * 列表的一次结构操作之后，某个槽位去了哪（实时预览要跟着「存档是用哪个开场白开的」走）。
+ * op：{type:'move', from, to} / {type:'delete', at} / {type:'add'}（加在最后）。被删掉的返回 null。
+ */
+export function followSlot(slot, op) {
+    if (slot === null || slot === undefined) return null;
+    if (op.type === 'delete') return slot === op.at ? null : slot > op.at ? slot - 1 : slot;
+    if (op.type === 'move') {
+        if (slot === op.from) return op.to;
+        if (op.from < slot && op.to >= slot) return slot - 1;
+        if (op.from > slot && op.to <= slot) return slot + 1;
+        return slot;
+    }
+    return slot;
+}
+
+/** 列表上做一次结构操作，返回新数组（不改原数组） */
+export function applyListOp(list, op) {
+    const l = [...list];
+    if (op.type === 'add') l.push('');
+    else if (op.type === 'delete') { l.splice(op.at, 1); if (!l.length) l.push(''); }
+    else if (op.type === 'move') { const [x] = l.splice(op.from, 1); l.splice(op.to, 0, x); }
+    return l;
+}
+
+// ───────────────────────────── 头像 ─────────────────────────────
+
+/**
+ * 头像的长边上限（像素）。不裁剪、保持比例；只有长边超过它才等比缩小——手机拍的照片动辄 4000×3000、好几 MB，
+ * 原样塞进卡记录会把存储和整体备份撑得很大。1536 在聊天界面和导出的 PNG 卡里都绰绰有余（酒馆的标准头像是 512×768）。
+ */
+export const AVATAR_MAX_SIDE = 1536;
+
+/**
+ * 原图尺寸 → 存下来的尺寸：长边不超过 max 就原样（返回 null = 不用缩），超过就等比缩到长边 = max（四舍五入，至少 1）。
+ * @returns {{w: number, h: number} | null}
+ */
+export function fitWithin(w, h, max = AVATAR_MAX_SIDE) {
+    if (!(w > 0 && h > 0) || Math.max(w, h) <= max) return null;
+    const k = max / Math.max(w, h);
+    return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)) };
 }
