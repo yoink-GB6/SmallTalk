@@ -24,6 +24,7 @@ import { normalizeNotes, mergeNotes } from './notes.js';
 import { alignPersonas, mergePersonas, switchPersona } from './personas.js';
 import { bookContent, bookScopeOf, remapBookCards, setBookScope, setBookName, isBookActiveFor } from './books.js';
 import { storedAuthorNote } from './author-note.js';
+import { highlightSigPart, storedHighlights, chatDoc } from './highlight.js';
 import { cardScripts } from './scripts.js';
 import { CARDVARS_PREFIX, normalizeCardVars, unionCardVars } from './cardvars.js';
 
@@ -46,7 +47,7 @@ export function canonical(v) {
 //     不比 id、createdAt、usedAt、activeChatId——这些是「这张卡在这个浏览器里的元数据」，
 //     导出再导入、或者在两边各自用过之后都会不一样，但卡还是那张卡。
 //     卡被改过（比如在正则页切了一个开关）就是不同的卡：宁可多出一张，也不把存档并到内容不一样的卡下面。
-// 存档：只比「名字 + 消息（含每条消息上的记忆摘要、swipes、st 等全部字段）+ 局部变量 + 作者注释（有的话）」。
+// 存档：只比「名字 + 消息（含每条消息上的记忆摘要、swipes、st 等全部字段）+ 局部变量 + 作者注释（有的话）+ 划线（有的话，见 chatSig）」。
 //     不比 id、cardId、createdAt、updatedAt、greeting、stHeader。
 //     同一个存档在一边接着聊了几句，消息就不同了，会作为另一个存档导入（旧的不动），不会覆盖。
 // 预设：只比预设本体，并且是「一字不差」（JSON.stringify 原样比较，和 migrate.js planPresetMigration 一致）。
@@ -65,10 +66,16 @@ const cardContent = card => {
 export const cardSig = rec => canonical([cardContent(rec?.card), typeof rec?.avatar === 'string' ? rec.avatar : '']);
 // 作者注释（ChatRecord.authorNote）算存档的内容：规范化后不是默认值时追加在最后。没有 / 坏到全是默认值的存档（包括作者注释出现之前的所有备份）
 // 签名和以前【逐字相同】，判重结果不变。只差作者注释的两个存档是两个存档（宁可多一个，也不丢掉一份注释）
+// 划线（ChatRecord.highlights）同理：清洗后有划线才追加（highlight.js highlightSigPart：只比位置、整楼标记和备注，不比 id / 建立时间，
+// 顺序无关），所以没有划线的存档签名和以前逐字相同；同一份备份导两遍、第二遍照样全是跳过。
+// 只差划线的两个存档是两个存档（和隐藏标记那条已知副作用同类：划过线的存档再恢复划线之前的备份，会多出一个存档）。
+// 追加时带一个标签，免得和作者注释的位置混淆（两者都可能单独出现）
 export const chatSig = rec => {
     const base = [rec?.name ?? '', rec?.messages ?? [], isObj(rec?.variables) ? rec.variables : {}];
     const note = storedAuthorNote(rec?.authorNote);
-    return canonical(note ? [...base, note] : base);
+    const hl = highlightSigPart(rec?.highlights, Array.isArray(rec?.messages) ? rec.messages : []);
+    const parts = note ? [...base, note] : base;
+    return canonical(hl ? [...parts, { highlights: hl }] : parts);
 };
 export const presetSig = rec => JSON.stringify(rec?.preset);
 
@@ -999,6 +1006,8 @@ export function planBackupImport(backup, existing, { newId, now, fresh = false, 
                 createdAt: ch.createdAt ?? iso, updatedAt: ch.updatedAt ?? iso, variables: isObj(ch.variables) ? structuredClone(ch.variables) : {} };
             // 作者注释：规范化后再存（坏的字段回默认值，全是默认就不写这个键），和读档时的容错一致
             if ('authorNote' in rec) { const n = storedAuthorNote(rec.authorNote); if (n) rec.authorNote = n; else delete rec.authorNote; }
+            // 划线：按这个存档的消息清洗后再存（越界 / 坏的丢掉，一条不剩就不写这个键），和读档时的容错一致。id 和建立时间原样保留
+            if ('highlights' in rec) { const hl = storedHighlights(rec.highlights, chatDoc(rec.messages)); if (hl) rec.highlights = hl; else delete rec.highlights; }
             out.chats.push(rec);
             sigs.set(s, rec.id);
             if (ch.id !== undefined) chatMap.set(ch.id, rec.id);

@@ -73,8 +73,9 @@ export async function cardChats(cardId) {
 export function liveChats() {
     const items = indexList(persist.index).filter(c => c.id !== persist.chatId);
     if (persist.chatId) {
+        const hl = persist.chatMeta?.highlights?.length ?? 0;   // 划线条数（同 migrate.js indexEntry：有才写）
         items.push({ id: persist.chatId, name: persist.chatMeta?.name ?? '新对话', count: state.chat.length,
-            updatedAt: persist.chatMeta?.updatedAt ?? '', createdAt: persist.chatMeta?.createdAt ?? '' });
+            updatedAt: persist.chatMeta?.updatedAt ?? '', createdAt: persist.chatMeta?.createdAt ?? '', ...(hl ? { hl } : {}) });
     }
     return items.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
 }
@@ -473,6 +474,8 @@ function untouched() {
     const m = state.chat[0];
     if ((m?.content ?? '') !== g.text || (!m && g.text !== '')) return false;
     if (m && (m.memory !== undefined || m.memoryError !== undefined || m.memoryMerged !== undefined || m.memoryIn !== undefined || m.role !== 'assistant')) return false;
+    // 在开场白上划过线：算动过（划线是用户攒的内容，原地换开场白会把它们一起清掉），新开一个存档、旧的留着
+    if (persist.chatMeta.highlights?.length) return false;
     return JSON.stringify(state.variables.local ?? {}) === g.vars;
 }
 

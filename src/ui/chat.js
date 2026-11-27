@@ -4,7 +4,7 @@ import { substitute } from '../macros.js';
 import { formatMessage, mountMessage, unmountMessage } from '../render.js';
 import { generate, samplerParamsFromPreset } from '../llm.js';
 import { $, h, toast } from './dom.js';
-import { state, ui, card, save, preset, persist, STOPPED_TEXT } from './state.js';
+import { state, ui, card, save, preset, persist, STOPPED_TEXT, highlightsAfterEdit, highlightsAfterDelete, highlightsAfterTruncate, clearChatHighlights } from './state.js';
 import { macroContext, permanentRegex, displayText, computePrompt, displayDepth, hiddenSummary } from './pipeline.js';
 import { ensureMemories, renderMemoryIfActive } from './memory.js';
 import { invalidateTurnAt, turnReplyIndex, isHidden, setHidden, invalidateBeforeTruncate } from '../memory-fold.js';
@@ -22,6 +22,7 @@ export function startChat(greetingIndex = 0) {
     const greetings = [c.firstMes, ...c.alternateGreetings].filter(Boolean);
     state.chat = [];
     state.variables.local = {};
+    clearChatHighlights();   // 聊天整个重来（原地换开场白）：挂在旧楼上的划线一起清掉（新建的存档本来就没有）
     ui.rendered.clear();
     const first = greetings[greetingIndex] ?? greetings[0];
     if (first) {
@@ -264,6 +265,8 @@ function applyMessageEdit(i, text) {
     // 没改内容就点了保存：什么都不作废——这一楼要是在合并段里，作废会把整段拆掉、白白重压几十轮（复核实测 x=20 就是 20 轮）
     if (state.chat[i].content !== before) {
         invalidateTurnAt(state.chat, i);
+        // 划线跟着改：改动段之前的不动、之后的平移、交叠的删掉（highlight.js shiftAfterEdit）。新旧原文只在这一刻都在
+        highlightsAfterEdit(i, before, state.chat[i].content);
         setTimeout(ensureMemories, 0);
     }
 }
@@ -325,6 +328,7 @@ export function deleteFrom(i, epoch) {
     if (n > 1 && !confirm(`删除第 ${i} 楼及之后共 ${n} 楼？${reply ? '\n这一轮的回复（连同它的候选和记忆摘要）也会一起删掉。' : ''}`)) return;
     // 外置记忆的合并段被切进了覆盖范围（锚在被删的楼里）：这一段作废，留下的那几轮回到待压缩（memory-fold.js 文件头「合并段」）
     if (invalidateBeforeTruncate(state.chat, i)) setTimeout(ensureMemories, 0);
+    highlightsAfterTruncate(i);   // 任一端落在被删的楼里的划线整条删掉（跨楼只删掉一半的也删）
     state.chat.length = i;
     ui.rendered.clear();
     $('#chat').replaceChildren();
@@ -505,7 +509,8 @@ export async function generateReply({ swipe = false, type = null, started = fals
             // 按对象删占位：生成中聊天可能被别的入口改过（前端卡的 createChatMessages 等），最后一楼不一定还是它。
             // 已经不在聊天里（被删掉了）就什么都不做
             removedAt = state.chat.indexOf(msg);
-            if (removedAt >= 0) state.chat.splice(removedAt, 1);
+            // 占位那一楼没有划线；万一它后面还有楼（生成中被别的入口加过），那些楼上的划线楼号跟着往前挪
+            if (removedAt >= 0) { highlightsAfterDelete([removedAt]); state.chat.splice(removedAt, 1); }
         }
         else { msg.swipes = [msg.content]; msg.swipeId = 0; received = true; }
     } finally {
@@ -569,6 +574,7 @@ export function regenerate(i, epoch) {
  * 换了候选（selectSwipe / appendSwipe 之后调）：chatfile.js 那两个函数只删这一楼自己的摘要，不知道合并段；
  * 这里按「这一轮原文变了」走一遍 invalidateTurnAt，它在合并段里的话那一段作废（memory-fold.js 文件头「合并段」）。
  * 也给 app.js 的手动模式用
+ * 划线【不动】：每条划线记着自己是哪个候选上的，换候选 / 加候选只改变显示哪些（highlight.js visibleHighlights），不改原文
  */
 export function swipedTurn(msg) {
     const i = state.chat.indexOf(msg);

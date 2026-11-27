@@ -7,6 +7,7 @@ import { isBookActiveFor } from '../books.js';
 import { assemble, resolveContextLimit, messageTokens } from '../assemble.js';
 import { normalizeAuthorNote } from '../author-note.js';
 import { runRegexScripts } from '../regex.js';
+import { displayMap } from '../highlight.js';
 import { $, debounce } from './dom.js';
 import { state, ui, card, preset, persist } from './state.js';
 import { foldChat, memoryBlock } from './memory.js';
@@ -242,9 +243,22 @@ export function displayDepth(chat, index) {
 }
 
 export function displayText(msg, index) {
+    return runRegexScripts(msg.content, allScripts(), displayOptions(msg, index));
+}
+
+/** 显示正则的参数（displayText 和 displayMapOf 共用，两边一定一致） */
+function displayOptions(msg, index) {
     const depth = displayDepth(state.chat, index);
     const ctx = macroContext(state.chat, structuredClone(state.variables));
-    return runRegexScripts(msg.content, allScripts(), {
-        placement: placementOf(msg), isMarkdown: true, depth, substitute: t => substitute(t, ctx),
-    });
+    return { placement: placementOf(msg), isMarkdown: true, depth, substitute: t => substitute(t, ctx) };
+}
+
+/**
+ * 划线用（第二段）：和 displayText 同样跑一遍显示正则，同时给出结果里每个字来自原文的哪个位置（highlight.js displayMap）。
+ * 返回值的 text 就是这一次的显示文字；替换结果里有 {{random}} 这类每次都变的宏时，它可能和上一次渲染用的 displayText 不同，
+ * 界面要拿 ui.rendered 里记的文字比一下（不同就重渲染这一楼，或者这一楼先不让划）。
+ * @returns {{text: string, src: Int32Array}}
+ */
+export function displayMapOf(msg, index) {
+    return displayMap(msg.content, allScripts(), displayOptions(msg, index));
 }

@@ -22,6 +22,9 @@ import { sanitizePreset } from '../preset-sanitize.js';
 import { storedAuthorNote } from '../author-note.js';
 import { normalizeMerged } from '../memory-fold.js';
 import { cardVarsKey, normalizeCardVars } from '../cardvars.js';
+import {
+    chatDoc, storedHighlights, newHighlight, addHighlight, removeHighlight, setHighlightNote, shiftAfterEdit, afterDeleteFloors, afterTruncate,
+} from '../highlight.js';
 
 // ───────────────────────────── 状态 ─────────────────────────────
 
@@ -103,7 +106,7 @@ export const persist = {
     cardId: null,       // null = 没卡状态（还没有任何卡记录对应当前聊天）
     chatId: null,
     cardMeta: null,     // CardRecord 去掉 card / avatar：{id, createdAt, activeChatId, usedAt}
-    chatMeta: null,     // ChatRecord 去掉 messages / variables：{id, cardId, name, createdAt, updatedAt, stHeader?, greeting?, authorNote?}
+    chatMeta: null,     // ChatRecord 去掉 messages / variables：{id, cardId, name, createdAt, updatedAt, stHeader?, greeting?, authorNote?, highlights?}
     index: null,        // 当前卡的存档目录 'index:<cardId>'：{cardId, chats: {chatId: {name, count, updatedAt, createdAt}}}
     meta: { version: SCHEMA_VERSION, activeCardId: null },
     epoch: 0,           // 每换一次「state 指向的存档」就 +1。异步回来的操作拿它判断「还是不是当初那个存档」
@@ -375,6 +378,12 @@ export function applyCardChat(cardRec, chatRec, { freshCard = false, freshChat =
         // 外置记忆的合并段（memory-fold.js 文件头「合并段」）：读入容错。坏的段、孤儿标记去掉（被去掉标记的轮回到待压缩）。
         // 和作者注释一样，快照按规范化之后的记，只是读一下不会引起一次重写
         normalizeMerged(state.chat);
+        // 划线（types.js ChatRecord.highlights）：读入容错，按这个存档的消息核对（楼号越界、候选不存在、超出原文长度的丢掉）。
+        // 一条都不剩就去掉这个键。同作者注释：快照按清洗之后的记，只是读一下不会引起一次重写
+        if ('highlights' in meta) {
+            const hl = storedHighlights(meta.highlights, chatDoc(state.chat));
+            if (hl) meta.highlights = hl; else delete meta.highlights;
+        }
         state.variables = { local: isObj(variables) ? variables : {}, global: state.variables.global };
         persist.chatId = chatRec.id;
         persist.chatMeta = meta;
@@ -411,6 +420,91 @@ export function setAuthorNote(patch) {
     if (JSON.stringify(persist.chatMeta.authorNote ?? null) === before) return false;
     save();
     return true;
+}
+
+// ───────────────────────────── 划线（types.js ChatRecord.highlights，纯逻辑 src/highlight.js） ─────────────────────────────
+// 运行时挂在 persist.chatMeta.highlights（state 的形状不变；和作者注释同一条路：chatMeta 变了 buildWrites 就重写这条存档记录，不更新 updatedAt）。
+// 读入时（applyCardChat）已按消息清洗过，所以这里拿到的都是合法的。
+// 两类入口：
+//   - 用户操作（第二段的界面调）：addChatHighlight / removeChatHighlight / setChatHighlightNote —— 自己 save()。
+//     拦截（只读、生成中、恢复中、停止保存、正在切换）由调用方先判断（chat.js chatWriteBlocked），同 setAuthorNote。
+//   - 原文变了 / 删了楼的钩子：highlightsAfterEdit / highlightsAfterDelete / highlightsAfterTruncate / clearChatHighlights ——
+//     【不】save()，调用方改完聊天自己会存（它们和 invalidateTurnAt 挂在同一批入口上：chat.js、frame-host.js）。
+
+/** 当前存档的划线（没有 = []）。不要原地改返回的数组 */
+export const currentHighlights = () => persist.chatMeta?.highlights ?? [];
+
+/** 换成新列表（空 = 删掉这个键）。返回有没有变 */
+function putHighlights(list) {
+    if (!persist.chatMeta) return false;
+    const before = persist.chatMeta.highlights;
+    if (Array.isArray(list) && list.length) persist.chatMeta.highlights = list;
+    else delete persist.chatMeta.highlights;
+    return before !== persist.chatMeta.highlights;
+}
+
+/**
+ * 给当前存档加一条划线。spec = {from, to, whole?, note?}（端点见 types.js HighlightPoint；一般来自 highlight.js rangeFromSelection）。
+ * 不合法（越界、长度为 0、同一楼两端候选不同……）或和已有的一条位置完全相同 → 不加，返回 null；加了返回新的那条。
+ */
+export function addChatHighlight(spec) {
+    if (!persist.chatMeta) return null;
+    const h = newHighlight(spec, chatDoc(state.chat), { newId: uid });
+    if (!h) return null;
+    const cur = currentHighlights();
+    const next = addHighlight(cur, h);
+    if (next === cur) return null;
+    putHighlights(next);
+    save();
+    return h;
+}
+
+/** 删一条。返回有没有删 */
+export function removeChatHighlight(id) {
+    if (!putHighlights(removeHighlight(currentHighlights(), id))) return false;
+    save();
+    return true;
+}
+
+/** 改备注（空 = 去掉备注）。返回有没有改 */
+export function setChatHighlightNote(id, note) {
+    const cur = currentHighlights();
+    const next = setHighlightNote(cur, id, note);
+    if (JSON.stringify(next) === JSON.stringify(cur)) return false;
+    putHighlights(next);
+    save();
+    return true;
+}
+
+/**
+ * 钩子：第 i 楼（当前显示的候选）的原文从 before 改成了 after（编辑、拼装页就地改、前端卡 / 脚本 setChatMessages、换开场白）。
+ * 改动段之前的划线不动、之后的平移、交叠的删掉（highlight.js shiftAfterEdit）。不 save()。返回删掉的 id
+ */
+export function highlightsAfterEdit(i, before, after) {
+    const cur = currentHighlights();
+    if (!cur.length || before === after) return [];
+    const r = shiftAfterEdit(cur, { floor: i, swipe: chatDoc(state.chat).current(i), before, after });
+    if (r.changed) putHighlights(r.list);
+    return r.removed;
+}
+
+/** 钩子：删掉了这些楼（删之前的楼号；前端卡的 deleteChatMessages 是任意单删）。要在 state.chat 真的删之前或之后调都行。不 save() */
+export function highlightsAfterDelete(floors) {
+    const r = afterDeleteFloors(currentHighlights(), floors);
+    if (r.changed) putHighlights(r.list);
+    return r.removed;
+}
+
+/** 钩子：「删这一楼及之后」，截到 n 楼。不 save() */
+export function highlightsAfterTruncate(n) {
+    const r = afterTruncate(currentHighlights(), n);
+    if (r.changed) putHighlights(r.list);
+    return r.removed;
+}
+
+/** 钩子：当前存档的聊天整个重来了（startChat 原地换开场白）。不 save() */
+export function clearChatHighlights() {
+    putHighlights([]);
 }
 
 /** 当前卡的存档目录装进来（fresh = 还没写进存储） */

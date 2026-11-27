@@ -74,8 +74,10 @@ function filterString(raw, trimStrings, substitute) {
 
 /**
  * 对应 engine.js runRegexScript。返回新文本（脚本不适用 / 正则无效则原样返回）。
+ * spans：可选的数组，给了就把每一处替换记进去 {at, len, out}（at / len 是在 raw 里的位置和长度，out 是替换成的文字）。
+ *   只给划线的「选区对回原文」用（highlight.js displayMap），不改变替换结果。
  */
-function runOne(script, raw, substitute) {
+function runOne(script, raw, substitute, spans = null) {
   if (!script || script.disabled || !script.findRegex || !raw) return raw;
 
   // 对应 getRegexString：先对查找串做宏替换
@@ -119,7 +121,13 @@ function runOne(script, raw, substitute) {
       return filterString(m, script.trimStrings, substitute);
     });
     // 最后再对整个替换结果做一次宏替换
-    return substitute(withGroups);
+    const out = substitute(withGroups);
+    if (spans) {
+      // 回调的参数：match, p1..pn, offset, string[, groups]。有命名组时最后多一个 groups 对象
+      const at = typeof args[args.length - 1] === 'string' ? args[args.length - 2] : args[args.length - 3];
+      spans.push({ at, len: match.length, out });
+    }
+    return out;
   });
 }
 
@@ -215,8 +223,12 @@ export function runRegexScripts(text, scripts, options) {
     }
 
     if (!script.placement?.includes(placement)) continue;
-    const after = runOne(script, final, substitute);
-    if (after !== final) onApply?.({ script, before: final, after });
+    const spans = options?.onSpans ? [] : null;
+    const after = runOne(script, final, substitute, spans);
+    if (after !== final) {
+      onApply?.({ script, before: final, after });
+      if (spans) options.onSpans({ script, before: final, after, spans });
+    }
     final = after;
   }
   return final;

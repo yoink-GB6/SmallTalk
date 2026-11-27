@@ -21,9 +21,16 @@ export const indexKey = cardId => `index:${cardId}`;
 // 迁移时理解不了、没能放进新结构的原始数据，原样备份在这里，程序永远不会自动删它
 export const V1_BACKUP_KEY = 'state.v1.bak';
 
-/** 目录里一个存档的条目 */
+/**
+ * 目录里一个存档的条目。hl = 这个存档有几条划线（ChatRecord.highlights）：有才写（没有划线的存档条目和以前一模一样）。
+ * 摘抄页（第二段）靠它先挑出有划线的存档，只把那几个存档整条读出来。目录丢了 / 对不上时从存档重建，走的也是这里，所以计数跟着重建。
+ * 划线功能出现之前写的目录没有 hl：那时还没有划线，缺 = 0 是对的。
+ */
 export function indexEntry(chat) {
-    return { name: chat.name, count: Array.isArray(chat.messages) ? chat.messages.length : 0, updatedAt: chat.updatedAt, createdAt: chat.createdAt };
+    const e = { name: chat.name, count: Array.isArray(chat.messages) ? chat.messages.length : 0, updatedAt: chat.updatedAt, createdAt: chat.createdAt };
+    const hl = Array.isArray(chat.highlights) ? chat.highlights.filter(h => isObj(h)).length : 0;
+    if (hl) e.hl = hl;
+    return e;
 }
 
 /** 从整条存档记录建目录 */
