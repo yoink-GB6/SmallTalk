@@ -1378,6 +1378,7 @@ export {};
 
 /**
  * 手机壳只有外观和导航，**不存任何数据**（不写 IndexedDB / localStorage，不进备份）：状态全在内存里，刷新后回到「收起、锁屏」。
+ * （这里说的是壳本身。手机第一步起，Chat 应用、聊天预设、壁纸、表情包有了自己的数据，契约见文件末尾「手机第一步」一节；壳的导航状态仍只在内存里。）
  * 唯一碰到存储的地方是 Settings 里的主题下拉框，它复用 src/ui/theme.js 的 bindThemeSelect(select)（和「杂项」页那个同一套逻辑，互相同步）。
  *
  * phone.js：initPhone()（app.js 启动时调一次；建好 #phone 挂在 body 末尾，接上顶栏 #phone-toggle）、
@@ -1387,3 +1388,359 @@ export {};
  * statusbar.js：createStatusBar({lockTime, lockDate})（时间 / 信号 / 电量，都只读浏览器当下的状态）。
  * icons.js：icon(name) → <span class="ph-ico">（内联 SVG 线条图标）。
  */
+
+// ───────────────────────────── 手机第一步：单聊、聊天预设、壁纸、表情包（契约，2026-11-28 草案；标「暂定」的待用户确认） ─────────────────────────────
+//
+// 范围：docs/new-features-plan.md 第 3 节（手机里的 Chat 应用 = 单聊；聊天预设；壁纸）+ 第 4 节的表情包。发图片、主动消息、拉群、朋友圈、音乐、读书不在这一步，
+// 但下面的形状给它们留了位置（见本节末尾「给后面留的路」）。
+//
+// 总原则：
+//   - 手机是全局的、独立的模式：会话数据自己存，和剧情存档（ChatRecord）不互通；不进 state（state 的形状不变，「当前卡的当前存档」那一套不碰），
+//     不进 'global'（global 每次 RP 保存都可能重写；isPristineGlobal 靠它判断「出厂默认」）。
+//   - 卡、人设、额外世界书【引用】（存 id / 书名），不拷贝；被引用的东西改了，会话跟着变；被删了，会话照样能打开（见「被引用的东西变了」）。
+//   - 没用过手机的人：下面这几种键一个都没有（第一次真写东西才建）；记录上的可选字段默认值时不写。
+//   - 所有记录上不认识的字段原样保留（以后的版本加的），只挡 __proto__ / constructor / prototype——旧版本页面读写一次不会把它们丢掉。
+//   - 都不含 API key；会发给模型的只有：会话消息、聊天预设的文字、卡 / 人设 / 选中的世界书、表情的名字（和描述）。图片永远不发。
+//
+// 存储键（IndexedDB smalltalk / kv，和别的键并列；纯逻辑 src/phone-data.js，读写在 src/ui/phone/phone-store.js）：
+//   'phone'                   → PhoneRecord   手机这一层的小记录：聊天预设、表情库目录、壁纸指向、手机里的「当前选择」
+//   'phonechat:<sessionId>'   → PhoneSession  一个会话：引用了谁 + 全部消息 + 收藏
+//   'phoneindex'              → PhoneIndex    会话目录（列表页只读它，不把每个会话整条读出来）。能重建（同 'index:<cardId>'）
+//   'phoneimg:<imageId>'      → PhoneImage    一张图（壁纸或一个表情）的字节。和目录分开存：目录要常驻内存、每次拼提示都要读表情名字，图片不用
+// 图片存 data URL 字符串，不存 Blob（和卡头像 CardRecord.avatar 一个做法）：整体备份现在是一个 JSON 文件，data URL 直接放得进去、
+//   跟着整个文件加密，backup-crypto.js / exportSelfCheck 都不用改；代价是比 Blob 大三分之一、读进内存也是字符串。
+//   以后的音乐（几 MB 一首）不走这条：它存 Blob、备份时放 zip 里不加密的文件夹（第 8 节），和这里的图片互不影响。
+
+/**
+ * 'phone'：手机这一层的小记录。第一次写（建第一个聊天预设 / 传第一个表情 / 换壁纸 / 选手机用的模型 / 新建第一个会话）时才建。
+ * @typedef {Object} PhoneRecord
+ * @property {1} v                              形状版本（以后要整体换形状时用；现在只认 1，读到别的数字照「不认识的字段」处理、整条按 1 读，不报错）
+ * @property {ChatPreset[]} [presets]           用户的聊天预设（【内容】）。没有 = 只有内置默认那一份。顺序 = 「预设」页下半节的显示顺序
+ * @property {PhoneStickerMeta[]} [stickers]    表情库目录（【内容】）：名字、描述、对应哪张图。图片字节在 'phoneimg:<id>'。顺序 = 表情面板的顺序
+ * @property {{image: string}} [wallpaper]      壁纸（锁屏和桌面共用一张）：image = 'phoneimg:<id>' 的 id。没有 = 现在 CSS 画的默认壁纸。
+ *                                              【暂定算「设置」】（见「备份和恢复」），待用户确认
+ * @property {ModelRef} [modelRef]              手机聊天用的「接口 + 模型」。【当前选择】：不进备份。没有 = 跟着 RP 的 state.chatModel 走（暂定，待用户确认要不要单独选）
+ * @property {string} [lastPresetId]            上次新建会话时选的聊天预设 id（新建会话框的预选）。【当前选择】：不进备份；指向的预设不在了 = 'default'
+ *
+ * 读入容错（phone-data.js normalizePhoneRecord）：不是对象 = 没有；presets / stickers 不是数组 = 没有，坏项丢掉（规则见各自的 typedef）；
+ *   wallpaper.image 不是非空字符串 = 没有；modelRef 形状不对 = 没有（跟着 RP 走）。坏数据不能让手机打不开，也不能清掉别的东西。
+ */
+
+/**
+ * 聊天预设：我们自己的小格式（不是酒馆预设，不在酒馆预设上加东西——酒馆预设要原样导出回酒馆）。纯逻辑 src/phone-data.js，编辑界面在「预设」页下半节。
+ * 一个会话用哪个预设：PhoneSession.presetId。
+ * @typedef {Object} ChatPreset
+ * @property {string} id            我们生成的 id；'default' 是保留 id = 「默认聊天预设」（见下）
+ * @property {string} name          给人看的名字（可重复；导入 / 恢复时撞名加「 (2)」，同 RP 预设）
+ * @property {string} createdAt     ISO
+ * @property {string} updatedAt     ISO（内容或名字改动时）
+ * @property {string} system        系统提示的模板。宏照常替换（macros.js：{{char}} {{user}} {{description}} {{personality}} {{scenario}} {{persona}} 等），
+ *                                  替换后连续三个以上的换行压成两个、去首尾空白（卡里空着的字段不会留下一串空行）
+ * @property {string} format        「怎么回」的说明：告诉模型发短消息、一行一条。只认一个我们自己的占位符 {{maxBubbles}}（换成下面那个数）
+ * @property {number} maxBubbles    一次最多几条（写进 format；切分时只当参考，见 SplitReply）。整数 1–12，默认 5
+ * @property {boolean} stickers     让不让模型发表情（默认 true）。true 且表情库不空时，拼提示时加上 stickerHint
+ * @property {string} stickerHint   怎么告诉模型有哪些表情。只认 {{stickers}} 一个占位符（换成「名字」或「名字（描述）」用顿号连起来的列表，见 PhonePromptArgs.stickers）
+ * @property {number} history       最多带最近几条气泡（PhoneMessage 条数，不是轮数）。整数 0–500，默认 40
+ * @property {number} contextTokens 这次请求的上下文上限（估算 token，tokens.js），给回复留 params.max_tokens（没有就留 400）。整数 1000–2000000，默认 16000。
+ *                                  超了从最老的气泡开始丢（只影响这一次发送）；系统提示本身就超了 → 只发系统提示和最新的一条用户消息，并在界面上提示
+ * @property {boolean} timeHint     在最后加一句「现在是几月几日 星期几 几点几分」（默认 true）。放在【最后】而不是系统提示里：放前面会让接口的前缀缓存每分钟断一次
+ * @property {{temperature?: number, top_p?: number, frequency_penalty?: number, presence_penalty?: number, max_tokens?: number}} params
+ *                                  采样参数，原样当 generate 的 params（openai-shared.js pickParams 白名单，命令行类接口忽略）。默认 {temperature: 0.9, max_tokens: 400}
+ *   以后加的（这一步不做，读到就原样保留）：proactive（主动消息的开关 / 每日上限 / 间隔）、moments（朋友圈每日上限）、group（拉群时的格式说明）、memory（手机聊天的外置记忆开关）
+ *
+ * 「默认聊天预设」（id 'default'）：
+ *   - 内置一份（phone-data.js DEFAULT_CHAT_PRESET，冻结的常量，不存）。用户没改过时 PhoneRecord.presets 里没有 'default' 这一项，用的就是内置的。
+ *   - 用户在「预设」页改它 = 把改过的整份以 id 'default'、名字「默认聊天预设」存进 presets（这一项就是「改过的默认」）；会话的 presetId 不用动。
+ *     「恢复默认」= 从 presets 里删掉 'default' 这一项。不能删掉「默认」本身（没有存下来的 'default' 时就是内置的）。
+ *     和 RP 预设的不同（RP 是「在内置默认上第一次改动时存成『默认预设（已修改）』并切过去」）：这里一个预设被好几个会话共用，改默认就该改到所有用默认的会话。
+ * 规范化（normalizeChatPreset，读档、恢复、导入都走）：不是对象 / 没有字符串 id 的丢掉；id 重复的后一个换新 id；字符串字段不是字符串 → 用默认值；
+ *   数字字段不是整数 / 超范围 → 夹到范围内（不是数字 = 默认值）；params 过 pickParams；name 空 = 「未命名聊天预设」。存的是完整的一份（每个字段都写），不是「和默认的差」。
+ * 用户能改：全部字段（名字、三段文字、四个数、两个开关、温度和最大回复长度；top_p 等在「更多」里）。界面上每段文字旁边一句固定的提示，说它干什么、哪些占位符能用。
+ *
+ * 内置默认预设的内容（草稿，中文，暂定）：
+ *   system:
+ *     你是{{char}}，正在用手机和{{user}}发消息聊天。
+ *
+ *     关于{{char}}：
+ *     {{description}}
+ *     {{personality}}
+ *
+ *     {{scenario}}
+ *
+ *     关于{{user}}：
+ *     {{persona}}
+ *   format:
+ *     像真人用手机发消息那样回：口语、简短、自然。一次发 1 到 {{maxBubbles}} 条，每条单独占一行。
+ *     不写动作、神态、心理描写和旁白，不加引号，不在前面写名字。
+ *   stickerHint:
+ *     可以发表情包：单独一行写 [表情:名字]，名字只能从这些里选：{{stickers}}。偶尔发就好，别每次都发。
+ *   maxBubbles 5、stickers true、history 40、contextTokens 16000、timeHint true、params {temperature: 0.9, max_tokens: 400}
+ */
+
+/**
+ * 表情库里的一个表情（PhoneRecord.stickers 的元素）。图片在 'phoneimg:<id>'（同一个 id）。
+ * @typedef {Object} PhoneStickerMeta
+ * @property {string} id        我们生成的 id（也是图片记录的 id）
+ * @property {string} name      名字：模型输出 [表情:名字] 就按它找。规范化（phone-data.js cleanStickerName）：去首尾空白、压成一行、去掉 [ ] : ：、最长 40 字；
+ *                              空了不收。库里不重名（上传 / 改名 / 导入时撞名：上传和改名拒绝并说明，导入和恢复加「 (2)」）
+ * @property {string} [desc]    描述（可选，给模型看的「这个表情是什么意思」，最长 200 字；空 = 不写）。暂定：要不要把描述发给模型见 PhonePromptArgs.stickers
+ * @property {number} at        加进来的时间（毫秒）
+ *
+ * 读入容错：不是对象、没有 id、名字规范化后空了 → 丢掉；名字重复的后一个加「 (2)」；对应的 'phoneimg:<id>' 不在 → 照样留在目录里，显示成「图片丢了」，
+ *   用户可以删（不自动删：可能只是这次读失败）。反过来没有目录项指着的 'phoneimg:*'（孤儿图）：有写权限的标签页打开手机时删掉（壁纸指着的那张不算孤儿）。
+ * 上传（界面）：静态图（PNG / JPEG / WebP）长边超过 512 像素的等比缩到 512 存 PNG（留透明），不超过的原样；GIF 一律原样（可能是动图，缩了就不动了），
+ *   原样存的超过 1 MB 拒收并说明。一个库最多 500 个（以后真不够再放宽）。名字默认取文件名去扩展名。
+ * 删除：目录项和图片在同一个事务里删。已经发过它的消息照旧在，显示成文字「[表情:名字]」（见 PhoneMessage.sticker）。
+ * 单独导出 / 导入（表情面板或 Settings 里）：一个 JSON 文件 {format: 'smalltalk-stickers', version: 1, stickers: [{name, desc?, dataUrl}]}（明文，不含 key）；
+ *   导入 = 并集，规则同下面「备份和恢复」的表情。
+ */
+
+/**
+ * 一张图（'phoneimg:<id>'）。只有字节和尺寸，是谁的图由引用它的那一方（表情目录 / 壁纸）决定。
+ * @typedef {Object} PhoneImage
+ * @property {string} id
+ * @property {string} dataUrl   'data:image/...;base64,...'（只认 image/png、image/jpeg、image/webp、image/gif 四种，别的读入时当坏图）
+ * @property {number} [w]       像素宽（知道就写，界面排版用）
+ * @property {number} [h]
+ * 壁纸上传：长边超过 2048 的等比缩到 2048，一律存 JPEG（质量 0.85；壁纸不需要透明），一张大约几百 KB。换壁纸 = 新图写进去、PhoneRecord.wallpaper 指过去、旧图删掉，一个事务。
+ */
+
+/**
+ * 一个会话（'phonechat:<sessionId>'）。
+ * @typedef {Object} PhoneSession
+ * @property {string} id
+ * @property {string[]} cards        参与的角色卡（CardRecord.id）。单聊 = 恰好一个；【现在就是数组】，给拉群留的（见「给后面留的路」）——单聊的代码一律读 cards[0]。
+ *                                   为什么不先存一个 cardId、拉群时再迁移：迁移要动所有已有会话和备份格式；数组从第一天起就能装一个，代价只是多一对括号
+ * @property {string|null} personaId 用哪个人设：personas 里某一项的 id；null = 跟随当前人设（GlobalRecord.persona，「人设」页切到谁就是谁）。
+ *                                   只有一个人设（还没有 personas 列表）时只能是 null。新建会话时预选：有列表 = 当前人设的 id，没有 = null
+ * @property {string} [presetId]     用哪个聊天预设（ChatPreset.id）。【没有 = 'default'】（默认不写）
+ * @property {{card: boolean, books: string[]}} worlds
+ *                                   用哪些世界书，建会话时勾选（之后在会话设置里能改）：card = 卡自带的那本（Card.worldEntries）用不用；books = 额外世界书的书名（ExtraBook.name）。
+ *                                   新建时预勾（暂定，待用户确认）：card = 卡自带的没被整本关掉（Card.worldDisabled !== true），books = 现在对这张卡生效的额外世界书（books.js isBookActiveFor）。
+ *                                   之后【不再跟着 RP 那边的开关和绑定变】：勾了什么就是什么。为什么按书名存：额外世界书没有 id，别处也都按名字找它
+ * @property {string} [title]        会话名（可选；没有 = 显示卡名）
+ * @property {string} createdAt      ISO
+ * @property {string} updatedAt      ISO：消息变了（发、收、编辑、删）才更新；改设置、标已读、改收藏不算
+ * @property {number} readAt         已读到什么时候（毫秒）：role 'assistant' 且 at > readAt 的消息算未读。打开会话 / 新消息出现在打开着的会话里时设成最新一条的 at
+ * @property {PhoneMessage[]} messages   旧 → 新（按 at 递增；at 相同按数组顺序）
+ * @property {Highlight[]} [favorites]   收藏（见下面「收藏」）。一条都没有时不写
+ * @property {true} [pinned]         置顶（会话列表排在最前）。只在置顶时写
+ *
+ * 规范化（normalizeSession，读档、恢复都走）：不是对象 / 没有 id → 整条当坏记录（界面列表里不出现，记录不删，同 RP 的坏存档）；
+ *   cards 不是数组 → []（= 卡不在了的会话，见下）；里面不是非空字符串的丢掉、重复的只留一个；personaId 不是字符串 → null；presetId 不是非空字符串 → 删掉（= 'default'）；
+ *   worlds 形状不对 → {card: true, books: []}；messages 不是数组 → []，坏消息丢掉（见 PhoneMessage）；favorites 按消息清洗（highlight.js storedHighlights + 下面的 phoneDoc）；
+ *   readAt 不是数字 → 最后一条消息的 at（全算已读，宁可少一个红点也不要一屏假未读）。
+ */
+
+/**
+ * 会话里的一条消息 = 屏幕上的【一个气泡】。模型一次回好几条 = 好几条 PhoneMessage，共用同一个 gen。
+ * 为什么一条一个气泡、不是「一条回复里分几段」：收藏是按气泡收的（HighlightDoc 的一段 = 一个气泡）；每个气泡有自己的时间（主动消息要往回填时间）；
+ *   拉群时同一次回复里的气泡说话人不同；删 / 编辑也按气泡来。
+ * @typedef {Object} PhoneMessage
+ * @property {string} id          我们生成的 id（会话内唯一）。以后引用回复、通知跳转、主动消息去重用；楼号（下标）仍是收藏的位置
+ * @property {'user'|'assistant'|'system'} role   'system' 留给以后的灰色提示行（「对方撤回了一条消息」之类）：这一步不产生；读到的照常显示、【不发给模型】
+ * @property {string} content     原文。表情气泡的原文就是「[表情:名字]」一整条（发给模型的也是这个样子）
+ * @property {number} at          时间（毫秒）
+ * @property {string} [gen]       同一次生成出来的气泡共用的 id（只在 assistant 的气泡上）。「重新生成」「这一批」都按它认
+ * @property {string} [sticker]   表情气泡：表情的 id（PhoneStickerMeta.id）。接收时（SplitReply 认出了库里的名字）/ 用户从面板发表情时写上。
+ *                                显示：id 找得到 → 画那张图；找不到（删了、恢复时没带表情）→ 按 content 里的名字再找一次；还找不到 → 显示成灰色的文字「[表情:名字]」。
+ *                                发给模型时：id 找得到就用它【现在】的名字拼「[表情:名字]」（改过名也对得上），找不到就用 content 原样
+ * @property {string} [from]      说话人（CardRecord.id）。单聊不写（= cards[0]）；拉群时写
+ * 规范化：不是对象 / content 不是字符串 → 丢掉；role 认不出 → 丢掉；id 缺 / 重复 → 补确定的 'm-<下标>'；at 不是数字 → 前一条的 at（第一条 → 0）；
+ *   gen / sticker / from 不是非空字符串 → 删掉。不认识的字段原样保留。
+ *
+ * 粒度（phone-data.js 的纯函数，界面调它们、再交给 phone-store.js 写）：
+ *   发送：输入框里的每一行变成一个用户气泡（空行丢掉）——和模型「一行一条」对称；一次「发送」= 加这几个气泡 + 请求一次回复（暂定，待用户确认）。
+ *     输入框空着点发送 = 不加气泡、直接请求一次（「让 TA 接着说」）。
+ *   编辑：单个气泡改 content（表情气泡改成文字就删掉 sticker）。收藏不动（整条收藏编辑后不删不移）。
+ *   删除：单删任意一个气泡（afterDeleteFloors 挪收藏）；另有「从这条往后全删」（afterTruncate）。都要确认一次。删掉的气泡上的收藏静默跟着没。
+ *   重新生成（只对最后一批 assistant 气泡）：【暂定：替换】——删掉最后那一批（同一个 gen 的那几条，收藏跟着没）、再生成一批；
+ *     最后一条是用户气泡时 = 直接生成。待用户确认（另一个选项是像 RP 一样留着旧的当候选，见报告）。
+ *   不做 swipe（候选），所以 HighlightDoc 里每段只有一个版本 0。
+ */
+
+/**
+ * 'phoneindex'：会话目录。和会话记录在同一个事务里维护；丢了 / 对不上（某个 'phonechat:*' 没有条目、条目指向不存在的会话）→ 读全部会话重建（phone-data.js buildPhoneIndex）。
+ * @typedef {Object} PhoneIndex
+ * @property {Record<string, PhoneIndexEntry>} sessions
+ *
+ * @typedef {Object} PhoneIndexEntry
+ * @property {string[]} cards     同 PhoneSession.cards（列表上显示头像和名字用）
+ * @property {string} [title]
+ * @property {string} updatedAt
+ * @property {number} count       几条消息
+ * @property {string} last        最后一条的预览（最多 40 字；表情气泡 = 「[表情]」）
+ * @property {number} lastAt      最后一条的 at（没有消息 = 0）
+ * @property {number} unread      未读条数（按 readAt 算）
+ * @property {number} [fav]       收藏条数（有才写；摘抄页靠它只读有收藏的会话，同 'index:<cardId>' 的 hl）
+ * @property {true} [pinned]
+ */
+
+/**
+ * 一次手机聊天怎么拼提示：src/phone-prompt.js buildPhonePrompt（纯函数，Node 里可测）。
+ * 【不复用 assemble.js / ui/pipeline.js computePrompt】，另写一个小的。理由：
+ *   - assemble 是按酒馆预设的 prompt_order / 占位条目拼的，聊天预设没有这些；硬套要造一份假的酒馆预设，以后两边谁改都可能把对方弄坏；
+ *   - computePrompt / macroContext / allEntries / allScripts 都绑着 state（当前 RP 卡、当前存档、当前预设），而手机会话的卡不一定是当前卡；
+ *   - RP 那一套里的显示 / 发送正则、作者注释、示例对话、开场白、assistant_prefill、外置记忆，在短消息里要么用不上、要么会帮倒忙（美化正则是照 RP 的输出格式写的）。
+ *   复用的是不绑 state 的纯函数：macros.js substitute、worldinfo.js scanWorldInfo / effectiveWiSettings、tokens.js estimateTokens。
+ *
+ * @callback BuildPhonePrompt
+ * @param {PhonePromptArgs} args
+ * @returns {{messages: {role: Role, content: string}[], log: AssembleLogEntry[], dropped: number, overflow: boolean, worldInfo: WorldInfoResult}}
+ *          dropped：因上限没发的气泡条数；overflow：系统提示本身就超了上限
+ *
+ * @typedef {Object} PhonePromptArgs
+ * @property {ChatPreset} preset           已规范化
+ * @property {Card[]} cards                已按 PhoneSession.cards 读出来的卡（单聊一张；卡不在了的会话不会走到这里——不能发送）
+ * @property {{name: string, description: string}} persona   按 personaId 解析好的人设（指向的人设没了 → 当前人设，界面另有提示）
+ * @property {PhoneMessage[]} messages     这个会话的全部消息（含刚加的用户气泡）
+ * @property {WorldEntry[]} worldEntries   按 worlds 选好的条目：card 为 true 时卡自带的那本 + books 里还存在的那几本（不存在的书名忽略），【不看】书的 enabled / scope
+ * @property {{id: string, name: string, desc?: string}[]} stickers   表情库（preset.stickers 为 false 时调用方传 []）。暂定只把名字发给模型；desc 要不要一起发待用户确认
+ * @property {WorldInfoSettings} [wi]      世界书扫描设置（调用方给 effectiveWiSettings(state.wi)，和 RP 共用扫描深度）
+ * @property {Record<string, any>} [globalVariables]   宏能读的全局变量（调用方给 state.variables.global 的【副本】）
+ * @property {string} seed                 宏的种子：'phone:<sessionId>'（{{pick}} 按会话固定）
+ * @property {Date} now
+ * @property {(text: string) => number} [estimateTokens]
+ * @property {{label: string, text: string}[]} [extras]   给以后留的口子（音乐「正在听」、读书「正在读的这段」……）：放进最后那条 system（时间那句的后面）。这一步没人传
+ *
+ * 拼法（按顺序；逐条写进 log）：
+ *   1. 宏上下文：user / persona 来自 persona；char / description / personality / scenario 来自 cards[0]；chat = 历史（下面第 2 步的形状）；
+ *      variables = {local: {}, global: globalVariables 的副本}——手机聊天【没有自己的变量】，{{setvar}} 之类写进去的只活这一次，不存。
+ *   2. 历史：messages 去掉 role 'system' 的，取最后 preset.history 条。表情气泡按 PhoneMessage.sticker 换成现在的名字。
+ *      相邻的同角色气泡【合并成一条消息】、用 '\n' 连起来——这样模型看到的自己以前的回复就是「一行一条」，和我们要它输出的格式一样（示范比说明管用）。
+ *      user 的 name = 人设名，assistant 的 name = 卡名（只放进 scanWorldInfo 的 includeNames 用；发出去的消息不带 name 字段）。
+ *   3. 世界书：scanWorldInfo({entries: worldEntries, chat: 第 2 步的历史, settings: wi, substitute})。
+ *      before / after / anTop / anBottom 的内容依次拼成一段，放进系统提示（见第 4 步）；position 4（@深度）按 depth / role 插进历史（同 RP：同 depth 同 role 合成一条，
+ *      深度按第 2 步合并之后的消息数）；示例对话（5 / 6）丢掉；outlet（7）只给宏 {{outlet::名字}} 用。
+ *   4. 第一条 system = substitute(preset.system)（压空行） + 世界书那一段（有才加，前面空一行） + format（{{maxBubbles}} 换好） + stickerHint（preset.stickers 为真且 stickers 不空才加，{{stickers}} 换好）。
+ *   5. 历史（含第 3 步插进去的 @深度 条目）。
+ *   6. 最后一条 system（timeHint 为真或有 extras 时才有）：「现在是 2026年11月28日 星期六 21:03。」+ extras 每项一行「label：text」。
+ *      时间按 now 的本地时间写，自己拼字符串，不靠宏。
+ *   7. 上限：contextTokens − （params.max_tokens ?? 400）。第 1、6 条必须发；历史从最老的开始丢，丢到放得下（@深度条目跟着它挂靠的位置走，同 RP）。
+ *      放不下必需内容 → overflow = true，只发第 1 条 + 最新的一条历史 + 第 6 条。
+ *   不做：正则（全局 / 预设 / 卡，显示的发送的都不跑）、作者注释、示例对话、开场白、卡的 system_prompt / post_history_instructions / depth_prompt、assistant_prefill、外置记忆（暂定，见报告）。
+ *   缓存：前面不变的部分（第 1 条 + 较早的历史）每次一样，变的（新气泡、时间）都在后面；@深度的世界书条目会随聊天变长挪位置，和 RP 一样会打断缓存。
+ *
+ * 用哪个接口和模型：PhoneRecord.modelRef 有就用它，没有用 state.chatModel（暂定）。params = preset.params。promptCache 跟 state.promptCache。
+ * llm.js 要加一个选项（小改动）：generate(messages, {..., usageLog: false}) 时不调 setUsageListener 登记的监听——不然手机的请求会顶掉「拼装」页「上次请求」那一行（那是 RP 的）。
+ */
+
+/**
+ * 回复怎么切成气泡：src/phone-reply.js splitReply（纯函数）。流式过程中每来一段就对「到目前为止的全文」调一次，界面只把切好的画出来。
+ * @callback SplitReply
+ * @param {string} text   模型到目前为止的全文
+ * @param {{maxBubbles: number, stickers: {id: string, name: string}[], charName: string, partial?: boolean}} opts
+ *        partial：还在流式中（最后一行可能没写完）
+ * @returns {{bubbles: {content: string, sticker?: string}[], pending: string}}
+ *          pending：partial 时最后那行没写完的部分（界面画成「正在输入」的气泡）；不是 partial 时为 ''
+ *
+ * 规则（按顺序）：
+ *   1. 去掉思维链：<think>…</think> 整段去掉；只有开头没有结尾（还在想 / 被截断）→ 从 <think> 到末尾都不算。整段被 ``` 围起来的剥掉外层。
+ *   2. 按换行切（\r\n、\n、U+2028 都算），每行去首尾空白，空行丢掉。
+ *   3. 每行：开头是「卡名：」「卡名:」（和 charName 完全相同）的去掉这个前缀；整行被一对引号（"…" “…” 「…」『…』）包着的去掉引号。
+ *   4. 表情：一行里出现 [表情:名字] / [表情：名字]（全角冒号也认）→ 在那里切开，表情单独成一个气泡，前后的文字各自成气泡（空的丢掉）。
+ *      名字在 stickers 里（先完全相同，再去空白、不分大小写）→ 气泡 content 写规范的「[表情:库里的名字]」、带 sticker = id；不在 → content 原样、不带 sticker（显示成灰色文字）。
+ *   5. 条数：不硬卡 maxBubbles（模型常多一两条，丢了反而怪）；超过 max(maxBubbles × 2, 12) 时，多出来的行用 '\n' 并进最后一个气泡。
+ *   6. 结果一条都没有（全是空白 / 思维链）→ bubbles 为 []：界面当「回复是空的」处理（不写任何东西，提示一句，能重新生成）。
+ * 为什么用「一行一条」（备选和取舍见报告）：每个模型都写得出、流式时能一行一行地冒出来；坏了最多是切多切少，不会整段解析失败。
+ *   拉群时用同一套再加「名字：」前缀认说话人（第 3 步那条规则到时改成按名字分派）。
+ */
+
+/**
+ * 并发和写入（src/ui/phone/phone-store.js；写入口在 ui/state.js 加一个 patchPhone）。
+ *   - 手机自己一个忙碌标记 phoneBusy（同一时间整个手机只有一次生成，不分会话）。【不用 ui.busy】：ui.busy 是 RP 的，记忆、隐藏、前端卡、恢复备份都看它。
+ *     RP 正在生成时手机能发，手机正在生成时 RP 也能发（暂定，待用户确认）：两边写的是不同的键，互不相干；代价是可能同时有两个请求在花额度。
+ *   - 每次改动立刻写（不防抖：手机里的改动都是一次点击一次，不是逐字）。全部经 state.js 新加的 patchPhone(keys, fn)：
+ *     和 patchStoredChat 一样【排在写入链 writing 后面】、一个 IndexedDB readwrite 事务里先读这些键再写（会话记录 + 'phoneindex'，需要时加 'phone' / 'phoneimg:*'），
+ *     写完再更新内存里的缓存（打开着的会话、目录、PhoneRecord）。读到的会话已经不在了（被删 / 另一处删了）→ 什么都不写，不复活。
+ *   - 生成：开始时记下 sessionId；回复写回时按 id 走 patchPhone（读出最新的记录、把这一批气泡接在末尾、更新 updatedAt 和目录），不管现在打开的是哪个会话。
+ *     中途停止：已经收到的完整的行 + 没写完的那行都留下（同 RP「停止时留下收到的部分」）；一个字没收到 / 出错：不写任何东西，用户气泡留着，可以空发送或重新生成。
+ *   - 拒绝（phone-store.js phoneWriteBlocked，所有写入口统一先问它）：只读标签页（persist.readOnly）、停止保存之后（persist.stopped）、正在恢复备份（restoreActive()）。
+ *     只读标签页里手机能看、能翻，发送 / 编辑 / 删除 / 收藏 / 上传 / 换壁纸都是灰的并写明原因。
+ *   - 恢复备份：ui/backup.js importBlocked 加一条「手机里正在回复」（phoneBusy 时拒绝）；恢复写完后 phone-store.js reloadPhoneFromStore() 让内存跟上。
+ *   - 切换 RP 的卡 / 存档（ui.switching）、RP 的生成、外置记忆的队列都不影响手机，反过来也一样。
+ *   - 两个标签页：照旧只有拿到写锁的那个能写；旧版本的标签页（离线缓存还没换版本）不认识这些键，不读不写不删——它导出的整体备份里也就没有手机的数据（见报告的风险一节）。
+ */
+
+/**
+ * 被引用的东西变了 / 没了，会话怎么办（都不写会话记录，除了改书名那一条；也就不需要和删卡放在同一个事务里）：
+ *   - 卡改了（写卡页、拼装页就地编辑、同名卡「更新」——卡 id 不变）：会话跟着用新的。
+ *   - 卡删了：【暂定：会话保留】，列表里显示「角色卡已删除」，能打开看、能删、能看收藏，不能发送 / 重新生成。删卡的确认框里多一句「有 N 个手机会话用到它，会话会留着但不能再聊」。
+ *     待用户确认（另一个选项是和 RP 存档一样跟着卡一起删）。
+ *   - 人设删了（personaId 指向的不在了）：发送时用当前人设，会话设置里写「原来选的人设已删除，现在用当前人设」。不改记录（用户再选一个才写）。
+ *   - 额外世界书删了：书名留在 worlds.books 里、拼的时候忽略，会话设置里那一项显示「（已删除）」。
+ *     改名（ui/tab-world.js renameBook）：成功后调 phone-store.js renameBookRefs(旧名, 新名)，把所有会话 worlds.books 里的旧名换成新名（一个事务；失败只提示，不影响改名本身——
+ *     最坏是那几个会话里这本书变成「已删除」，重新勾一下就好）。
+ *   - 聊天预设删了：用到它的会话改用默认（不改记录；会话设置里提示一句）。删的确认框里说「有 N 个会话在用它，会改用默认聊天预设」。
+ *   - 表情删了：见 PhoneMessage.sticker。
+ */
+
+/**
+ * 收藏（复用划线那一套，types.js「划线」）：收藏 = 一条 whole: true 的 Highlight，挂在 PhoneSession.favorites 上（不挂在消息上：消息形状不变，发给模型的内容天然不带它）。
+ *   - HighlightDoc：phoneDoc(messages) = highlight.js textsDoc(messages.map(m => typeof m.content === 'string' ? m.content : ''))（一个气泡一段，只有版本 0）。
+ *     收藏第 i 个气泡 = newHighlight({from: {floor: i, swipe: 0, offset: 0}, whole: true}, phoneDoc(messages), deps)。同一个气泡再点一次 = 取消（removeHighlight）。
+ *   - 只记位置不存文字：删气泡 → afterDeleteFloors / afterTruncate（收藏静默跟着没）；编辑 → 不动（整条收藏编辑后不删不移）；重新生成替换掉的那批 → afterDeleteFloors。
+ *     这些和改消息在同一次 patchPhone 里写。
+ *   - 备注：和划线一样能加（摘抄页双击改、手机里长按收藏的气泡也能改）。
+ *   - 摘抄页（ui/tab-excerpts.js）：在角色卡那几组之后多一组「手机」→ 每个有收藏的会话（读 'phoneindex' 里 fav > 0 的，再把那几个会话整条读出来）→ 每条收藏一行。
+ *     ExcerptGroup 加 kind: 'phone'（cardId 用 'phone'，卡 id 是 uuid，撞不上）；条目的键 'phone/<sessionId>/<收藏 id>'。
+ *     单击 = 打开手机、进那个会话、把那个气泡滚到中间、闪一下；双击 = 改备注；删除 / 改备注走 phone-store.js editPhoneFavorites(edits)（形状同 archive.js editHighlightsAcross 的 edits，
+ *     只是 {sessionId, remove?, notes?}），一个事务；生成中也能改（patchPhone 是读-改-写，和生成写回的那次互相不会盖掉对方）。
+ *   - 不发给模型；前端卡和脚本读不到（手机的数据根本没有接口给它们）。
+ */
+
+/**
+ * 备份和恢复（纯逻辑 src/phone-backup.js；接进 backup.js buildBackup / planBackupImport 和 ui/backup.js 的导出、doImport）。
+ *
+ * BackupFile 加一个可选的顶层字段（version 仍是 1）：
+ * @typedef {Object} PhoneBackup
+ * @property {ChatPreset[]} [presets]              PhoneRecord.presets 原样（含改过的 'default'）
+ * @property {PhoneSession[]} [sessions]           全部会话原样（含 favorites）
+ * @property {{dataUrl: string, w?: number, h?: number}} [wallpaper]   壁纸那张图（内联）
+ * @property {(PhoneStickerMeta & {dataUrl: string})[]} [stickers]      表情（目录 + 图内联）。导出框里「带上表情包（N 个，约 X MB）」取消勾选时没有这个字段
+ * @property {true} [stickersOmitted]              导出时取消了勾选（恢复的结果里说一句「这份备份没带表情包」）
+ * 都没有时整个 phone 字段不写（没用过手机的人导出的备份和以前逐字相同）。PhoneRecord.modelRef / lastPresetId（当前选择）、'phoneindex'（能重建）不导出。
+ * 读存储：ui/backup.js 的 isBackupKey 加上 'phone'、'phonechat:*'、'phoneimg:*'；buildBackup 把它们拼成上面的形状（孤儿图不带）。
+ * 旧版本页面读到这种备份：parseBackup / planBackupImport 只认 cards / presets / global / endpoints，顶层多一个 phone 会被忽略——不出错，手机以外的东西照常恢复，手机的数据不恢复。
+ *
+ * 归类（data-inventory.js 的 STORE_KEYS 各登记一行）：
+ *   聊天预设     内容   并集：去掉 id / name / createdAt / updatedAt 之后 canonical 相同 = 重复（记下 备份 id → 本机 id）；新的换新 id，撞名加「 (2)」。
+ *                       备份里的 'default'：和本机现在生效的默认（存下来的 'default'，没有就是内置的）相同 → 映射到 'default'；不同 → 作为普通预设新加进来（新 id，名字「默认聊天预设（来自备份）」），
+ *                       不改本机的默认。空浏览器：原样，'default' 还是 'default'。
+ *   表情         内容   并集：图片（dataUrl）相同 = 重复（记下 备份 id → 本机 id，保留本机的名字和描述）；新的换新 id，名字撞了加「 (2)」。
+ *                       这份备份没带表情（stickersOmitted / 没有 stickers）：本机的不动；会话里指向它们的 sticker id 映射不到，就按 PhoneMessage.sticker 的规则退回按名字找 / 显示文字。
+ *   壁纸         【暂定：设置】  空浏览器：用备份的；已有数据：并进现有那句「是否应用备份中的……」的问话（变成四样）——备份里有壁纸、且和本机的不同才算一样可以应用的设置。
+ *                       待用户确认（备选：做成「壁纸库」算内容、取并集，当前用哪张算当前选择）。
+ *   会话         内容   并集。判重签名 = canonical([cards（换算后）, messages 每条只取 {role, content, at, from（换算后）}])；不看 id、标题、人设 / 预设 / 世界书的选择、readAt、置顶、收藏、消息 id、sticker。
+ *                       重复 → 不新增，备份里的收藏并进本机那个（highlight.js mergeHighlights，doc = phoneDoc(本机那个的消息)），别的一律不动；没有新收藏可并 = 不写。
+ *                       新的 → 换新会话 id，引用跟着换算：cards / from 用 planBackupImport 的卡 id 映射（映射不到的原样留着 = 「角色卡已删除」的会话）；
+ *                       personaId 用人设映射（见下；映射不到 → null，跟随当前人设）；presetId 用上面的预设映射（映射不到 → 删掉 = 默认）；
+ *                       worlds.books 用书名映射（映射不到的书名去掉）；消息的 sticker 用表情映射（映射不到的留着，显示时退回按名字找）；
+ *                       favorites 按它的消息清洗；readAt = 最后一条消息的 at（恢复进来的都算已读）。
+ *                       同一份备份导两遍：第二遍全是跳过、零写入。
+ *   会话目录     能重建  不导出；恢复时为新会话加条目、为并了收藏的会话重算 fav（和写入在同一个事务）。
+ *   手机用的模型、上次选的预设   当前选择   不导出、永不从备份拿、空浏览器 = 没有（跟着 RP / 默认）。
+ * 换算要的三张映射表由 planBackupImport 在它的结果里给出（现在 cardIdMap 只是它内部的变量，要加进返回值）：
+ *   maps.cards：备份卡 id → 本机卡 id（已有）；
+ *   maps.personas：备份里每个人设的 id → 合并后同一个人设（personas.js personaSig 相同）在本机的 id。人设的 id 在恢复时会换（mergePersonas 给新加的生成新 id），只能按内容对；
+ *     备份只有一个人设（没有列表）时它的会话里只可能是 null，用不到；
+ *   maps.books：备份书名 → 合并后的书名（重复的映射到本机那本的名字，撞名改名的映射到新名字；unionBooks 要把这个记下来）。
+ * 写入：手机这部分的写和恢复的其它记录在同一个事务里（ui/backup.js doImport），一起读回校验、失败一起撤销。
+ * 「空浏览器」判定（backup.js isEmptyForRestore）加一项：没有 'phonechat:*'、'phoneimg:*'，'phone' 不存在或里面没有内容——只有手机数据的浏览器不能被当成空的
+ *   （否则恢复时会不问就用备份里的设置）。
+ * 摘要（summaryText）加几行：会话新增 / 跳过、收藏并入、聊天预设、表情（以及「这份备份没带表情包」）。
+ * 体积：表情和壁纸跟着整个文件加密，加密 / 解密时内存里要放下整份 JSON 的三四倍（见 docs/NOTES.md 的已知问题）；表情 500 个 × 最大 1 MB 是理论上限，
+ *   导出框里显示表情大约多大，太大的人可以取消勾选。
+ */
+
+// 给后面留的路（这一步都不做，只说明哪个字段 / 结构是为它们留的、到时大概加什么）：
+//   主动消息（第 5 节）：PhoneMessage.at 本来就是每个气泡自己的时间，补发时往回填；readAt 现成就能算出「几条未读」给顶部通知用；SplitReply 照用。
+//     到时加：ChatPreset.proactive {enabled, dailyMax, minGapMinutes}；每日用量计数（放 PhoneRecord，按「哪天 + 用了几次」记，全局一个数，因为它是在替用户花额度）；
+//     PhoneMessage 可能加 auto: true 标出「你不在时发的」。
+//   拉群（第 6 节）：PhoneSession.cards 已经是数组；PhoneMessage.from 认说话人；SplitReply 第 3 步改成按「名字：」分派；BuildPhonePrompt 的 cards 已经是数组。
+//     到时加：ChatPreset.group（群聊的格式说明）、「@某人 / 私聊用那张卡单独请求」的路由；删卡时只把那张卡从 cards 里去掉。
+//   朋友圈（第 7 节）：另起存储键（大概 'phonepost:<id>' → {cardId, at, content, comments: PhoneMessage 形状的数组}），不塞进会话；每日上限放 ChatPreset.moments。
+//   音乐（第 8 节）：音频存 Blob（新键，大概 'phonemusic:<id>'），备份时走 zip 里不加密的文件夹，和这里的 data URL 图片分开；播放器挂在 phone.js 的 .ph-persist；
+//     「正在听」经 PhonePromptArgs.extras 进最后那条 system。
+//   读书（第 9 节）：书另起存储键；书里的划线直接用 textsDoc + Highlight；「选一段丢给角色」= 发一个用户气泡（以后可能加 PhoneMessage.quote 之类的字段）或走 extras。
+//   发图片（第 4 节后半）：PhoneMessage 加 image（'phoneimg:<id>'），拼提示时变成多段内容（文字 + 图），只对能看图的模型；这一步的 PhoneImage 就是为它留的形状。
