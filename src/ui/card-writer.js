@@ -23,6 +23,7 @@
 // 循环依赖：从兄弟 ui 模块导入的函数只在函数体里调用。
 
 import { $, h, toast } from './dom.js';
+import { substitute } from '../macros.js';
 import { state, ui, persist, save, STOPPED_TEXT } from './state.js';
 import { store } from '../store.js';
 import { cardKey } from '../migrate.js';
@@ -32,7 +33,8 @@ import {
 import { parseCardScripts, flattenScripts } from '../scripts.js';
 import { openBlankCard, switchCard, newChat, refreshGreetingInPlace, chatUntouched, listCards } from './archive.js';   // 循环依赖：只在函数体里调用
 import { renderArchiveTab } from './tab-archive.js';                     // 同上
-import { chatWriteBlocked } from './chat.js';                            // 同上
+import { chatWriteBlocked, editMessageText } from './chat.js';           // 同上
+import { macroContext, permanentRegex } from './pipeline.js';            // 同上
 import { renderAll } from './shell.js';                                  // 同上
 
 // ───────────────────────────── 状态 ─────────────────────────────
@@ -162,6 +164,8 @@ function buildPage(cardId) {
         oninput: e => onText('description', e.target) });
     const greetBox = h('div', { class: 'cw-greets', 'data-fk': 'cw-greets' });
     const addGreet = h('button', { 'data-fk': 'cw-greet-add', type: 'button', title: '在最后加一个备选开场白', onclick: () => listOp({ type: 'add' }) }, '+ 再加一个开场白');
+    const newChatBtn = h('button', { 'data-fk': 'cw-new-chat', type: 'button', title: '给这张卡新开一个存档，用勾着「当前」的那个开场白（没有勾着的就用第一个非空的），从头再聊',
+        onclick: startNewChat }, '新对话');
     const greetNote = h('div', { class: 'dim cw-note', 'data-fk': 'cw-greet-note' });
     const worldBtn = h('button', { 'data-fk': 'cw-world', type: 'button', onclick: () => $('#tabs button[data-tab="world"]')?.click() }, '编辑世界书');
     const regexBtn = h('button', { 'data-fk': 'cw-regex', type: 'button', onclick: () => $('#tabs button[data-tab="regex"]')?.click() }, '编辑美化（正则）');
@@ -172,9 +176,9 @@ function buildPage(cardId) {
         field('名字', HINTS.name, name, nameWarn),
         field('头像', HINTS.avatar, h('div', { class: 'row cw-avatar-row' }, img, noImg, pickBtn, dropBtn)),
         field('人设（描述）', HINTS.description, desc),
-        field('开场白', null, greetBox, h('div', { class: 'row' }, addGreet), greetNote),
+        field('开场白', null, greetBox, h('div', { class: 'row' }, addGreet, newChatBtn), greetNote),
         field('世界书和美化', HINTS.extras, h('div', { class: 'row' }, worldBtn, regexBtn)));
-    return { root, cardId, greetRows: [], els: { compare, why, name, nameWarn, img, noImg, pickBtn, dropBtn, desc, greetBox, addGreet, greetNote, worldBtn, regexBtn } };
+    return { root, cardId, greetRows: [], els: { compare, why, name, nameWarn, img, noImg, pickBtn, dropBtn, desc, greetBox, addGreet, newChatBtn, greetNote, worldBtn, regexBtn } };
 }
 
 /**
@@ -184,7 +188,7 @@ function buildPage(cardId) {
 function buildGreetRows(n) {
     page.greetRows = Array.from({ length: n }, (_, i) => {
         const ta = h('textarea', { class: 'cw-greet', 'data-fk': `cw-greet:${i}`, rows: i ? 4 : 6, spellcheck: false, 'aria-label': i ? `备选开场白 ${i}` : '开场白',
-            oninput: e => onGreeting(i, e.target) });
+            oninput: e => onGreeting(i, e.target), onblur: () => commitFloor0() });
         const up = h('button', { class: 'ghost', 'data-fk': `cw-greet-up:${i}`, type: 'button', title: i === 1 ? '挪到第一个（成为默认开场白 first_mes）' : '往前挪',
             onclick: () => listOp({ type: 'move', from: i, to: i - 1 }) }, '↑');
         const down = h('button', { class: 'ghost', 'data-fk': `cw-greet-down:${i}`, type: 'button', title: '往后挪', onclick: () => listOp({ type: 'move', from: i, to: i + 1 }) }, '↓');
@@ -224,6 +228,7 @@ function updatePage() {
         r.del.disabled = ro || list.length < 2;   // 至少留一个（不想要开场白就把它清空）
     });
     e.addGreet.disabled = ro;
+    e.newChatBtn.disabled = ro;
     for (const el of [e.name, e.desc]) el.readOnly = ro;
     e.pickBtn.disabled = ro;
     e.dropBtn.disabled = ro || !state.avatar;
@@ -267,10 +272,85 @@ function onGreeting(i, el) {
     if (!guard()) { el.value = list[i] ?? ''; return; }
     if (i >= list.length) return;
     trackedSlot();   // 改之前先记下「存档是用哪个开场白开的」（改的正是那个时，改完再按文字去认就认不出了）
+    const before = list[i];
     list[i] = el.value;
     if (!setGreetings(state.card, list)) return;
     save();
-    schedulePreview(true);
+    if (chatUntouched()) { schedulePreview(true); return; }
+    // 聊过的存档：不每个字改一次第 0 楼（每次改原文都会让这一轮的外置记忆作废、开着记忆时会发一次压缩请求，花额度），
+    // 记下「这次编辑前」的开场白，失焦（onblur）或停手 1.5 秒时 commitFloor0 写一次
+    if (pendingFloor0 && pendingFloor0.slot !== i) commitFloor0();
+    if (!pendingFloor0) pendingFloor0 = { slot: i, base: before, cardId: persist.cardId, epoch: persist.epoch };
+    clearTimeout(floor0Timer);
+    floor0Timer = setTimeout(commitFloor0, 1500);
+    schedulePreview(false);   // 顶栏、开场白下拉框、拼装预览
+}
+
+/**
+ * 聊过的存档里改开场白：攒着的一次编辑（{slot, base: 这次编辑前的开场白原文, cardId, epoch}）。
+ * 失焦或停手 1.5 秒时 commitFloor0 处理，处理完清空。
+ */
+let pendingFloor0 = null;
+let floor0Timer = null;
+
+/**
+ * 开场白原文 → 进第 0 楼时存下的样子：照 chat.js startChat 建第 0 楼的做法——先宏替换（macroContext([], 变量)），再跑永久生效的正则
+ * （permanentRegex，「编辑」时跑的正则和新建时可能不同，所以两种都算）。变量用副本：这里只是为了比较 / 生成文字，
+ * 不能让开场白里的 {{setvar}} 之类在比较时真的改了这个存档的变量。宏里有随机的（{{random}} 没开固定结果时）两次算出来会不同，
+ * 那时就认不出、不改——宁可不动。
+ */
+function renderGreeting(text) {
+    const sub = substitute(text, macroContext([], structuredClone(state.variables)));
+    return { sub, stored: new Set([permanentRegex(sub, 'assistant'), permanentRegex(sub, 'assistant', true)]) };
+}
+
+/**
+ * 把攒着的那次开场白编辑写进这个（聊过的）存档的第 0 楼——只在这两条都成立时：
+ *   1. 这个存档开头用的就是正在改的这一项（trackedSlot，和实时预览同一套跟踪；用别的开场白开的不动）；
+ *   2. 第 0 楼现在存的原文 = 这次编辑【前】的开场白进第 0 楼时会存的样子（renderGreeting）——用户手动改过第 0 楼、
+ *      或者第 0 楼根本不是开场白（开的时候没有开场白，第 0 楼是用户的话），就对不上，不动。
+ * 写的时候走界面上「编辑一楼并保存」的同一个函数 chat.js editMessageText（它负责永久正则、候选同步、这一轮的外置记忆作废重压、
+ * 存盘、重画、发 MESSAGE_EDITED / UPDATED）；拦截条件照它的调用方的规矩先判断（chatWriteBlocked，见 guard）。
+ * 写进去的是新开场白宏替换之后的文字（和 startChat 一样，第 0 楼里不留 {{user}} 这种宏）。
+ */
+function commitFloor0() {
+    clearTimeout(floor0Timer);
+    const p = pendingFloor0;
+    pendingFloor0 = null;
+    if (!p || p.cardId !== persist.cardId || p.epoch !== persist.epoch || !state.card) return;
+    if (chatUntouched()) return;   // 这期间存档变成了没聊过的（不会发生，防御）：实时预览那条路已经管了
+    if (blocked(true) !== null) { greetingNote = '现在不能改聊天记录，这个存档的第 0 楼没有跟着改。'; if (page) updatePage(); return; }
+    const list = greetingList(state.card);
+    const now = list[p.slot] ?? '';
+    if (now === p.base) return;
+    const m = state.chat[0];
+    const slot = trackedSlot();
+    if (slot !== p.slot) greetingNote = '这个存档开头用的不是这个开场白，没有改它；新对话才会用到新的开场白。';
+    else if (!m || m.role !== 'assistant' || !renderGreeting(p.base).stored.has(m.content)) greetingNote = '这个存档的第 0 楼和开场白对不上（手动改过，或者开头不是开场白），没有改它；新对话才会用到新的开场白。';
+    else if (!now) greetingNote = '开场白清空了：这个存档的第 0 楼没有跟着删，新对话才会用到。';
+    else {
+        editMessageText(0, renderGreeting(now).sub);
+        greetingNote = '已经改到这个存档的第 0 楼（后面的楼没动）。';
+    }
+    if (page) updatePage();
+}
+
+/**
+ * 写卡页的「新对话」：给这张卡新开一个存档，用勾着「当前」的那个开场白（没有勾着的就用第一个非空的）。
+ * 走「存档」页「新对话」的同一条路（archive.js newChat：先落盘；生成中 / 只读 / 正在恢复时拒绝并提示；存档还没动过就原地换开场白）。
+ */
+async function startNewChat() {
+    if (!stillMine() || !guard()) return;
+    commitFloor0();
+    const list = greetingList(state.card);
+    const slot = trackedSlot();
+    const fi = typeof slot === 'number' && filteredIndex(list, slot) >= 0 ? filteredIndex(list, slot) : 0;
+    clearTimeout(previewTimer);
+    previewChat = false;
+    const sel = $('#greeting-select');
+    if (sel && fi < sel.options.length) sel.value = String(fi);   // 「存档」页的下拉框也指到这一项
+    await newChat(fi);
+    if (page) updatePage();
 }
 
 /**
@@ -284,7 +364,7 @@ async function useGreeting(i) {
     const fi = filteredIndex(list, i);
     if (fi < 0) { updatePage(); return; }
     if (!chatUntouched()) {
-        toast('这个存档已经聊过了，开新对话时在「存档」页选', 'error');
+        toast('这个存档已经聊过了，不能换开头的开场白：点旁边的「新对话」用它从头开一个', 'error');
         updatePage();
         return;
     }
@@ -348,7 +428,7 @@ function schedulePreview(chat) {
             const slot = trackedSlot();
             const list = greetingList(state.card);
             const fi = slot === 'auto' ? (list.some(Boolean) ? 0 : -1) : slot === null ? -1 : filteredIndex(list, slot);
-            if (!chatUntouched()) greetingNote = '这个存档已经聊过了，不改它的历史：新对话才会用到新的开场白。';
+            if (!chatUntouched()) { /* 聊过的存档：改开场白走 commitFloor0；改名不回头改已发出的楼层 */ }
             else if (slot === null) greetingNote = '这个存档开头用的那个开场白已经删掉了：聊天区先不动，点「存档」页的「新对话」会按新的列表开。';
             else if (fi < 0) greetingNote = slot === 'auto' ? '' : '这个存档开头用的那个开场白现在是空的：聊天区先不动，写上内容后会接着跟着变。';
             else {
@@ -359,7 +439,7 @@ function schedulePreview(chat) {
                     const now = slot === 'auto' ? slotOfFiltered(list, 0) : slot;
                     track = { epoch: persist.epoch, cardId: persist.cardId, gi: g.index, gt: g.text, slot: now };
                     greetingNote = now === 0 ? '这个存档还没聊过：聊天区第 0 楼跟着实时变。' : `这个存档还没聊过，开头用的是「备选 ${now}」：改它时聊天区第 0 楼跟着变。`;
-                } else if (r === 'kept') greetingNote = '这个存档已经聊过了，不改它的历史：新对话才会用到新的开场白。';
+                }
             }
         }
         if (!updated) { ui.previewIsSent = false; renderAll(); }   // 顶栏、开场白下拉框（renderTopbar）、拼装预览

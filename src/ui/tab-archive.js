@@ -327,7 +327,8 @@ function cardBlock(c, ro) {
             onclick: () => act(() => switchCard(c.id)) },   // 点的就是当前卡时 switchCard 什么都不做
         avatarOf(c),
         h('span', { class: 'arch-text' }, h('b', { class: 'arch-name' }, c.name), h('span', { class: 'dim arch-sub' }, sub))),
-        c.active ? h('span', { class: 'badge on' }, '当前') : null,
+        // 以前这里有个「当前」小标记：当前卡已经有 .current 的高亮边框（Princesse 主题是左侧一条线），用户定的去掉；
+        // 读屏的信息留在 aria-current 和卡名按钮的 title（「当前角色卡：…」）上
         actionBtn('新对话', `给「${c.name}」新开一个存档并切过去`, `new:${c.id}`, ro, () => act(() => newChat(c.active ? (Number($('#greeting-select').value) || 0) : 0, c.id))),
         // 当前卡这一行的开场白下拉框落脚处（draw 里把 #greeting-select 挪进来；只有一个开场白时它自己是 hidden 的）
         c.active ? h('span', { class: 'arch-greeting-slot' }) : null,
@@ -356,19 +357,19 @@ function cardBlock(c, ro) {
                 : !c.chats.length ? h('div', { class: 'dim' }, '这张卡还没有存档（切到它时会新开一个）')
                     : h('div', { class: 'plist' }, c.chats.map(x => chatRow(c, x, ro))));
     }
-    return h('div', { class: `card arch-card${c.active ? ' current' : ''}`, 'data-card': c.id }, head, body);
+    return h('div', { class: `card arch-card${c.active ? ' current' : ''}`, 'data-card': c.id, 'aria-current': c.active ? 'true' : null }, head, body);
 }
 
 function chatRow(c, x, ro) {
     const active = c.active && x.id === persist.chatId;
-    return h('div', { class: `pitem arch-chat${active ? ' current' : ''}`, 'data-chat': x.id },
+    return h('div', { class: `pitem arch-chat${active ? ' current' : ''}`, 'data-chat': x.id, 'aria-current': active ? 'true' : null },
         h('header', null,
             h('button', { class: 'arch-main', 'data-fk': `chat:${x.id}`, disabled: ro && !active,
                 title: active ? `当前存档：${x.name}` : (ro ? RO_TIP : `切换到存档「${x.name}」${c.active ? '' : `（角色卡「${c.name}」）`}`),
                 onclick: () => act(() => openChat(c.id, x.id)) },   // 点的就是当前存档时 switchChat 什么都不做
             // 时间放进悬停提示；楼数拿出来显示在改名按钮左边（当前存档的数字取 state.chat.length，见 archive.js liveChats）
             h('span', { class: 'arch-text' }, h('span', { class: 'arch-name', title: timeText(x.updatedAt) }, x.name))),
-            active ? h('span', { class: 'badge on' }, '当前') : null,
+            // 「当前」小标记去掉了（同卡那一行）：靠 .current 的边框、aria-current 和 title（「当前存档：…」）认
             h('span', { class: 'dim arch-count', 'data-fk': `count:${x.id}`, title: '楼层数' }, `${x.count ?? 0} 楼`),
             actionBtn('改名', '给这个存档改名', `ren:${x.id}`, ro, () => act(() => renameChat(c.id, x.id))),
             actionBtn('导出', '导出为酒馆的聊天记录（.jsonl）', `exp:${x.id}`, ro, () => exportChat(c.id, x.id)),
