@@ -1373,3 +1373,17 @@ export {};
  * 没报就不调用。llm.js 另有 setUsageListener(fn)：聊天生成（generate，不含 complete）拿到用量时也会调它，sent-log.js 靠它记「上次请求」。
  * 本地服务版的传递方式：请求体里的 usageId（一次性字符串）→ 服务端流结束时存内存 → 页面 GET /api/usage?id= 取一次（取走即删，取不到 = 没有）。
  */
+
+// ───────────────────────────── 手机壳（src/ui/phone/，第一版：空壳）─────────────────────────────
+
+/**
+ * 手机壳只有外观和导航，**不存任何数据**（不写 IndexedDB / localStorage，不进备份）：状态全在内存里，刷新后回到「收起、锁屏」。
+ * 唯一碰到存储的地方是 Settings 里的主题下拉框，它复用 src/ui/theme.js 的 bindThemeSelect(select)（和「杂项」页那个同一套逻辑，互相同步）。
+ *
+ * phone.js：initPhone()（app.js 启动时调一次；建好 #phone 挂在 body 末尾，接上顶栏 #phone-toggle）、
+ *           openPhone() / closePhone() / togglePhone()、isPhoneOpen()、phoneView()（'lock' | 'home' | 应用 id）。
+ *           #phone 一直在 DOM 里，收起只是 data-open="0"；里面的 .ph-persist 是给以后的音乐播放器留的常驻层。
+ * apps.js：APPS = [{id, name, icon, kind: 'view' | 'exit'}]（桌面上的应用清单）、buildAppView(app, goHome)（一个应用的画面）。
+ * statusbar.js：createStatusBar({lockTime, lockDate})（时间 / 信号 / 电量，都只读浏览器当下的状态）。
+ * icons.js：icon(name) → <span class="ph-ico">（内联 SVG 线条图标）。
+ */

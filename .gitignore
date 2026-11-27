@@ -14,6 +14,7 @@
 # 页面本身（网页版打包出来的就是这些，外加打包时生成的 sw.js 和 _headers）
 !/index.html
 !/style.css
+!/phone.css
 !/favicon.svg
 !/manifest.webmanifest
 !/src/
