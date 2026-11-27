@@ -11,7 +11,8 @@
 // 弹出之后的显示状态全部从 getPwaState() 来（和「杂项」页那一节同源），pwaEvents 一变就重画。
 //
 // 让路：有新版本的提示条、恢复备份的过程中、标签页变成只读时，卡片先藏起来（状态还在），条件消失再显示。
-// 卡片在右下角（窄屏贴底部），z-index 比页内弹框的遮罩低，弹框出现时盖住它。
+// 页面正中间的卡片，后面一层半透明底；点底不关，只能点「以后再说」/「不再提示」，Esc 等于「以后再说」。
+// z-index 24，比页内弹框的遮罩（25，恢复备份的面板、确认框）低，它们出现时盖住这张卡。
 //
 // UI 模块之间有循环依赖：本文件不 import pwa-ui.js（反过来由 pwa-ui.js 导入这里）；顶层语句不调用兄弟 ui 模块的函数。
 
@@ -42,8 +43,6 @@ export function installHelpNodes() {
     ];
 }
 
-const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform || '');
-
 /** 让路：新版本提示条在顶上、恢复备份时页面在换数据、只读标签页不该打扰。只改显隐，不重画（免得点击中途按钮被换掉） */
 function applyYield() {
     if (el) el.hidden = snoozed || getPwaState().updateReady || persist.paused || persist.readOnly;
@@ -59,44 +58,47 @@ function paint() {
 
     applyYield();
 
-    // 第一步：安装
+    // 第一行：安装。有安装事件 = 真按钮；没有（iPhone / iPad 的 Safari、Firefox 等）= 同一个位置换成就地的操作提示。
+    // 电脑上也照写"手机 / 平板："（电脑的 Chrome / Edge 同样能安装，不另做分支）
     const installRow = h('div', { class: 'fr-step', 'data-fk': 'guide-install' },
-        installed ? h('div', { class: 'fr-done' }, '✓ 已经装到主屏幕 / 桌面了')
+        installed ? h('div', { class: 'fr-done' }, '✓ 已添加到主屏幕')
         : s.installable ? h('div', { class: 'row' },
-            h('span', null, '像普通应用一样从桌面打开'),
-            h('button', { type: 'button', class: 'primary', 'data-fk': 'guide-install-btn', onclick: onInstall }, '安装到主屏幕'))
-        : h('div', { class: 'dim', 'data-fk': 'guide-install-help' }, ...installHelpNodes()),
+            h('span', null, '手机 / 平板：'),
+            h('button', { type: 'button', class: 'primary', 'data-fk': 'guide-install-btn', onclick: onInstall }, '添加到主屏幕'))
+        : h('div', null, h('div', null, '手机 / 平板：'), h('div', { class: 'dim', 'data-fk': 'guide-install-help' }, ...installHelpNodes())),
         installMsg && !installed ? h('div', { class: 'dim', 'data-fk': 'guide-install-msg' }, installMsg) : null);
 
-    // 第二步：持久存储
-    const askText = {
-        granted: '',   // 成功时上面的 ✓ 已经说明了
-        denied: '浏览器没答应。有的浏览器要先装到主屏幕、或多用几次这个网站才会答应；记得定期做整体备份。',
-        unsupported: '',
-        error: '请求出错了，记得定期做整体备份。',
-    }[s.persistAsked] ?? '';
+    // 第二行：持久存储，结果就地显示
+    const askText = { denied: '浏览器没答应，可以先添加到主屏幕再试', error: '请求出错了，可以先添加到主屏幕再试' }[s.persistAsked] ?? '';
     const persistRow = h('div', { class: 'fr-step', 'data-fk': 'guide-persist' },
-        persistDone ? h('div', { class: 'fr-done' }, '✓ 浏览器答应长期保留本站的数据了')
-        : persistNA ? h('div', { class: 'dim' }, '这个浏览器不支持"请求保留数据"，记得定期做整体备份。')
-        : h('div', { class: 'row' },
-            h('span', null, '让浏览器别自动清理这里的数据'),
-            h('button', { type: 'button', class: 'primary', 'data-fk': 'guide-persist-btn', onclick: () => requestPersist() }, '让浏览器保留数据')),
+        persistDone ? h('div', { class: 'fr-done' }, '✓ 已保留')
+        : persistNA ? h('div', { class: 'dim' }, '这个浏览器不支持"保留数据"这项请求')   // 没法做，别让用户干等
+        : h('button', { type: 'button', class: 'primary', 'data-fk': 'guide-persist-btn', onclick: () => requestPersist() }, '让浏览器保留数据'),
         askText && !persistDone ? h('div', { class: 'dim', 'data-fk': 'guide-persist-msg' }, askText) : null);
 
-    el.replaceChildren(
-        h('div', { class: 'fr-title' }, done ? '好了，数据更稳了' : '数据只存在这台设备的浏览器里，做这两步更不容易丢'),
+    el.replaceChildren(h('div', { class: 'fr-card' },
+        h('div', { class: 'fr-title' }, done ? '好了，数据更稳了' : '以防聊天丢失'),
         done ? null : installRow,
         done ? null : persistRow,
-        // 浏览器不允许网页自己往收藏夹里加东西，做不成按钮，只留一句提示
-        done ? null : h('div', { class: 'dim fr-fav' }, `也可以顺手收藏本站：电脑上按 ${isMac() ? '⌘D' : 'Ctrl+D'}。`),
+        done ? null : h('div', { class: 'dim fr-note' }, '注：数据只存在这台设备的浏览器里。浏览器可能在空间不够或很久没打开时自动清掉（iPhone 的 Safari 是 7 天没打开就清），清掉就找不回来。也请定期做整体备份。'),
         done ? null : h('div', { class: 'fr-foot' },
-            h('button', { type: 'button', 'data-fk': 'guide-later', onclick: () => { snoozed = true; close(); } }, '以后再说'),
-            h('button', { type: 'button', 'data-fk': 'guide-never', onclick: onNever }, '不再提示')));
+            h('button', { type: 'button', 'data-fk': 'guide-later', onclick: later }, '以后再说'),
+            h('button', { type: 'button', 'data-fk': 'guide-never', onclick: onNever }, '不再提示'))));
 
     if (done && !closing) { closing = true; setTimeout(close, 2500); }   // 先让用户看到一句"好了"
 }
 
+function later() { snoozed = true; close(); }
+
+/** Esc = 「以后再说」。别的弹框（确认框、导出面板）开着时 Esc 归它们，这里不抢 */
+function onKey(e) {
+    if (e.key !== 'Escape' || !el || el.hidden || e.defaultPrevented) return;
+    if (document.querySelector('.bk-overlay')) return;
+    later();
+}
+
 function close() {
+    document.removeEventListener('keydown', onKey);
     clearInterval(timer);
     el?.remove();
     el = null;
@@ -129,10 +131,11 @@ function maybeLaunch() {
     launched = true;
     if (s.standalone || s.justInstalled || s.persisted === true) return;   // 已经装了 / 已经持久了
     if (guideOff() || snoozed || persist.readOnly) return;
-    el = h('div', { class: 'fr-guide', role: 'dialog', 'aria-label': '首次打开的小指引', 'data-fk': 'first-run-guide' });
+    el = h('div', { class: 'fr-guide', role: 'dialog', 'aria-modal': 'true', 'aria-label': '以防聊天丢失', 'data-fk': 'first-run-guide' });
     document.body.append(el);
     paint();
     timer = setInterval(applyYield, 1000);
+    document.addEventListener('keydown', onKey);
 }
 
 /** pwa-ui.js 的 initPwaUi 里调用一次（不 await、不挡启动） */
