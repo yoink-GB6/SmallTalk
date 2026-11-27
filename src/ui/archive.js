@@ -30,6 +30,7 @@ import { askRegexFate, moveAndFlush, undoMove, refreshRegexViews, moveSummary } 
 import { enabledScripts } from '../regex-move.js';
 import { restoreActive } from './backup.js';   // 循环依赖（backup.js 导入本文件）：只在函数体里调用
 import { cardVarsKey } from '../cardvars.js';
+import { blankCard, uniqueCardName, isPristineBlank, BLANK_CARD_NAME } from '../card-writer.js';
 
 // ───────────────────────────── 读列表 ─────────────────────────────
 
@@ -705,6 +706,58 @@ export const addCard = (parsed, avatar) => op(async () => {
     await flushNow();
     redraw();
 });
+
+/**
+ * 「存档」页顶上的「写卡」：先找一张「还完全没动过的空白卡」（card-writer.js isPristineBlank）直接打开（不是当前卡就切过去），
+ * 没有才新建——不然每点一次就多一张空卡。
+ * 新建：造一张空白的酒馆 V2 卡（card-writer.js blankCard），交给上面的 addCard——和导入一张卡走同一条路
+ * （新卡记录 + 第一个存档 + 切过去），存储、目录、切卡、导出都不另写一套。
+ * 名字避开已有的卡（「新角色」「新角色 2」…），所以 addCard 不会弹「已经有同名卡、要不要更新」。
+ * 开场白是空的：startChat 什么都不推，第一个存档是 0 楼（markGreeting 记下空开场白，untouched 照样认它「没动过」）。
+ * 判断要读每张卡的记录和存档目录（当前卡用内存里的）；只读不写。
+ * @returns {Promise<'reused'|'created'|false>} false = 没成（只读 / 生成中 / 停止保存 / 上一个操作没做完时 op 会拒绝并提示）
+ */
+export async function openBlankCard() {
+    if (!canSwitch()) return false;
+    const cards = await listCards();
+    for (const c of cards) {
+        const cur = c.id === persist.cardId;
+        const rec = cur ? currentCardRec() : await store.get(cardKey(c.id));
+        if (!rec) continue;
+        const counts = (cur ? liveChats() : await cardChats(c.id)).map(x => x.count ?? 0);
+        if (!isPristineBlank(rec.card, rec.avatar ?? '', counts)) continue;
+        if (!cur && !await switchCard(c.id)) return false;
+        return persist.cardId === c.id ? 'reused' : false;
+    }
+    const name = uniqueCardName(BLANK_CARD_NAME, cards.map(c => c.name));
+    return (await addCard(blankCard(name), '')) ? 'created' : false;
+}
+
+/** 当前存档「没动过」吗（untouched 给写卡页用：决定开场白下面那行提示怎么说） */
+export const chatUntouched = () => !!persist.chatMeta && untouched();
+
+/**
+ * 「写卡」页改了开场白 / 名字之后：当前存档还「没动过」（untouched，只有用开场白建的那一楼）就原地用第 index 个开场白
+ * （过滤掉空开场白之后的下标，和 startChat / 开场白下拉框同一种数法）重建那一楼，聊天区就是实时预览；否则不碰历史。
+ * 存档是用哪个开场白开的、改动之后它变成第几个，由写卡页跟踪（card-writer.js trackedSlot），这里只管照做。
+ * 做法同 newChat 里「原地换开场白」那一支（startChat + markGreeting），只是：
+ *   - 不发酒馆事件（打字时每停一下就重建一次，发 CHAT_CREATED 会把脚本闹翻；楼层内容的变化由 renderAll 里的 reconcileScripts 推副本）；
+ *   - 不经过 op（op 每次都先整个落盘，打字时太重）：拦截条件照 canSwitch / chatWriteBlocked 一样判断，楼层的落盘走 startChat 里的防抖 save()。
+ * 「没动过」的判断本身已经保证没有外置记忆摘要、局部变量和建的时候一样（见 untouched），所以重建不会丢东西。
+ * @param {number} index
+ * @returns {'updated'|'kept'|'blocked'} kept = 这个存档已经聊过，新对话才会用到新的开场白
+ */
+export function refreshGreetingInPlace(index) {
+    if (working || ui.switching || ui.busy || persist.readOnly || persist.stopped || restoreActive() || !persist.cardId) return 'blocked';
+    if (!persist.chatMeta || !untouched()) return 'kept';
+    // 旧的第 0 楼可能带着前端卡 iframe：先 unmountMessage 释放它的监听，再整体清掉（同 teardownChatUi）
+    const box = $('#chat');
+    for (const el of box.querySelectorAll('.mes_text')) unmountMessage(el);
+    box.replaceChildren();
+    startChat(index);
+    markGreeting(index);
+    return 'updated';
+}
 
 /**
  * 删除角色卡（连同它的全部存档）。

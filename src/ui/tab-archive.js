@@ -22,6 +22,7 @@ import {
 import { importFiles, importBlockedReason } from './importer.js';   // 循环依赖（importer 导入 archive）：只在函数体里调用
 import { openSearch } from './chat-search.js';   // 「搜索聊天记录」按钮用（只在函数体里调用）
 import { closeDrawer } from './drawer.js';
+import { writerOwnsTab, drawWriter, openWriter, editCard } from './card-writer.js';   // 循环依赖：只在函数体里调用
 
 // ───────────────────────────── 运行期界面状态（不持久化，刷新页面就没了） ─────────────────────────────
 
@@ -119,6 +120,13 @@ async function load() {
 /** @param {boolean} [force] 从别的页切进来时为 true：重新读一遍 */
 export function renderArchiveTab(force = false) {
     if (force) dirty = true;
+    // 写卡页 / 挑对比的角色 / 对比视图（card-writer.js）不用这里的卡列表：不读存储，直接画（每次落盘都会来一次，写卡时不该每次都把所有卡读一遍）。
+    // dirty 留着，回到列表时再读
+    if (writerOwnsTab()) {
+        const tab = $('#tab-archive');
+        if (tab) { parkGreeting(); drawWriter(tab); }
+        return;
+    }
     if (dirty || !model) load().catch(e => { console.error(e); $('#tab-archive').replaceChildren(h('div', { class: 'empty' }, `读取存档列表失败：${e.message}`)); });
     else draw();
 }
@@ -140,9 +148,16 @@ function fetchMissing() {
     }
 }
 
+/** 开场白下拉框挪回 index.html 里的停放处（理由见 draw 末尾的注释） */
+function parkGreeting() {
+    const sel = $('#greeting-select'), home = $('#greeting-home');
+    if (sel && home && !home.contains(sel)) home.append(sel);
+}
+
 function draw() {
     const tab = $('#tab-archive');
     if (!tab || !model) return;
+    if (writerOwnsTab()) { parkGreeting(); drawWriter(tab); return; }   // 慢的 load() 回来时已经进了写卡页
     if (persist.cardId !== lastActive) {
         // 换了当前卡：新的当前卡默认展开；上一张是自动展开的就收回去（手动展开的留着）
         if (auto.delete(lastActive)) open.delete(lastActive);
@@ -176,12 +191,16 @@ function draw() {
     // 聊天内搜索的入口（原来在「杂项」页）：排在这一行最后。窄屏下检查器是盖住聊天区的抽屉，先收起才看得到搜索栏
     const searchBtn = h('button', { id: 'misc-search-btn', 'data-fk': 'misc-search', type: 'button', title: '在当前存档里搜索',
         onclick: () => { closeDrawer(); openSearch(); } }, '搜索聊天记录');
+    // 「写卡」（card-writer.js）：排在这一行最前面。新建一张空白卡（已经有一张没动过的空白卡就打开它）并进写卡页；改已有的卡用每行的「编辑」。
+    // 只读标签页里禁用（写卡页里全是写操作），和这一页别的操作按钮一样
+    const writeBtn = h('button', { 'data-fk': 'card-writer', type: 'button', disabled: ro,
+        title: ro ? RO_TIP : '写卡：新建一张空白角色卡并打开写卡页（已经有一张没动过的空白卡时直接打开它）', onclick: () => act(openWriter) }, '写卡');
     // 整体备份 / 恢复在「杂项」页（src/ui/backup.js 的 backupSection），这一页不再有备份那一行
     const kids = [];
     if (!cards.length) {
         kids.push(h('div', { class: 'empty' }, '还没有角色卡。导入一张 PNG / JSON 角色卡后，它和它的聊天存档会按卡列在这里；'
-            + '也可以不导入，直接和 Assistant 聊（发出第一条消息后会自动建一张占位卡）。'),
-        h('div', { class: 'row', style: 'justify-content:center' }, importCard, searchBtn));
+            + '也可以不导入，直接和 Assistant 聊（发出第一条消息后会自动建一张占位卡），或者点「写卡」从零写一张。'),
+        h('div', { class: 'row', style: 'justify-content:center' }, writeBtn, importCard, searchBtn));
     } else {
         // 顶上的「新对话」去掉了：每张卡那一行自己有「新对话」（当前卡的那个和以前顶上的一样，读同一个开场白下拉框）
         const bar = batch
@@ -196,7 +215,7 @@ function draw() {
                 title: ro ? RO_TIP : '删除勾选的角色卡和它们的全部存档', onclick: () => batchDelete(cards) }, '删除'),
             h('button', { 'data-fk': 'batch-cancel', disabled: batchBusy, onclick: () => { batch = false; picked.clear(); draw(); } }, '取消'),
             h('span', { class: 'dim' }, `已选 ${picked.size} 张`)]
-            : [importCard,
+            : [writeBtn, importCard,
                 h('button', { 'data-fk': 'batch', title: '多选角色卡，一次导出或删除', onclick: () => { batch = true; draw(); } }, '批量'),
                 searchBtn];
         kids.push(h('div', { class: 'summary' }, ...bar,
@@ -308,11 +327,14 @@ function cardBlock(c, ro) {
             onclick: () => act(() => switchCard(c.id)) },   // 点的就是当前卡时 switchCard 什么都不做
         avatarOf(c),
         h('span', { class: 'arch-text' }, h('b', { class: 'arch-name' }, c.name), h('span', { class: 'dim arch-sub' }, sub))),
-        c.active ? h('span', { class: 'badge on' }, '当前') : null,
+        // 以前这里有个「当前」小标记：当前卡已经有 .current 的高亮边框（Princesse 主题是左侧一条线），用户定的去掉；
+        // 读屏的信息留在 aria-current 和卡名按钮的 title（「当前角色卡：…」）上
         actionBtn('新对话', `给「${c.name}」新开一个存档并切过去`, `new:${c.id}`, ro, () => act(() => newChat(c.active ? (Number($('#greeting-select').value) || 0) : 0, c.id))),
         // 当前卡这一行的开场白下拉框落脚处（draw 里把 #greeting-select 挪进来；只有一个开场白时它自己是 hidden 的）
         c.active ? h('span', { class: 'arch-greeting-slot' }) : null,
         actionBtn('导入', `导入酒馆的聊天记录（.jsonl），作为「${c.name}」的新存档并切过去`, `import:${c.id}`, ro, () => { picker.dataset.card = c.id; picker.click(); }),
+        // 写卡页改这张卡（card-writer.js editCard：不是当前卡先切过去，聊天区当预览；切换被拒就留在这一页）
+        actionBtn('编辑', `在写卡页改「${c.name}」的名字、头像、人设、开场白${c.active ? '' : '（会先切到这张卡）'}`, `edit:${c.id}`, ro, () => act(() => editCard(c.id))),
         // 每卡的导出 / 删除按钮收进了顶上的「批量」。这个位置显示这张卡最后聊天的日期（没有存档记录就不显示）
         c.lastDay ? h('span', { class: 'dim arch-last', title: '最后聊天的日期' }, c.lastDay) : null);
 
@@ -335,19 +357,19 @@ function cardBlock(c, ro) {
                 : !c.chats.length ? h('div', { class: 'dim' }, '这张卡还没有存档（切到它时会新开一个）')
                     : h('div', { class: 'plist' }, c.chats.map(x => chatRow(c, x, ro))));
     }
-    return h('div', { class: `card arch-card${c.active ? ' current' : ''}`, 'data-card': c.id }, head, body);
+    return h('div', { class: `card arch-card${c.active ? ' current' : ''}`, 'data-card': c.id, 'aria-current': c.active ? 'true' : null }, head, body);
 }
 
 function chatRow(c, x, ro) {
     const active = c.active && x.id === persist.chatId;
-    return h('div', { class: `pitem arch-chat${active ? ' current' : ''}`, 'data-chat': x.id },
+    return h('div', { class: `pitem arch-chat${active ? ' current' : ''}`, 'data-chat': x.id, 'aria-current': active ? 'true' : null },
         h('header', null,
             h('button', { class: 'arch-main', 'data-fk': `chat:${x.id}`, disabled: ro && !active,
                 title: active ? `当前存档：${x.name}` : (ro ? RO_TIP : `切换到存档「${x.name}」${c.active ? '' : `（角色卡「${c.name}」）`}`),
                 onclick: () => act(() => openChat(c.id, x.id)) },   // 点的就是当前存档时 switchChat 什么都不做
             // 时间放进悬停提示；楼数拿出来显示在改名按钮左边（当前存档的数字取 state.chat.length，见 archive.js liveChats）
             h('span', { class: 'arch-text' }, h('span', { class: 'arch-name', title: timeText(x.updatedAt) }, x.name))),
-            active ? h('span', { class: 'badge on' }, '当前') : null,
+            // 「当前」小标记去掉了（同卡那一行）：靠 .current 的边框、aria-current 和 title（「当前存档：…」）认
             h('span', { class: 'dim arch-count', 'data-fk': `count:${x.id}`, title: '楼层数' }, `${x.count ?? 0} 楼`),
             actionBtn('改名', '给这个存档改名', `ren:${x.id}`, ro, () => act(() => renameChat(c.id, x.id))),
             actionBtn('导出', '导出为酒馆的聊天记录（.jsonl）', `exp:${x.id}`, ro, () => exportChat(c.id, x.id)),
