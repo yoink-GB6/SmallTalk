@@ -16,6 +16,7 @@
 
 import { $, h, toast } from './dom.js';
 import { ui, persist, flushNow } from './state.js';
+import { installHelpNodes, initFirstRunGuide } from './first-run-guide.js';
 import { pwaEvents, getPwaState, initPwa, setBeforeReload, applyUpdate, promptInstall, requestPersist } from '../pwa.js';
 
 const DRAFT_KEY = 'smalltalk-update-draft';   // sessionStorage 里暂存输入框内容的键
@@ -99,8 +100,7 @@ function paintSection(box, s) {
     ];
     if (!installed && !s.installable) {
         lines.push(h('div', { class: 'dim pwa-desc', 'data-fk': 'pwa-install-help' },
-            h('div', null, 'iPhone / iPad：用 Safari 打开这个网页，点"分享"→"添加到主屏幕"。'),
-            h('div', null, '安卓：用 Chrome 打开，点右上角菜单里的"添加到主屏幕"或"安装应用"。')));
+            ...installHelpNodes()));   // 说明文字和首次指引弹窗共用一份（first-run-guide.js）
     }
     lines.push(h('div', { class: 'dim pwa-desc' }, '为什么值得装：iPhone 的 Safari 会清掉 7 天没访问过的网站的数据，装到主屏幕的不受影响；装好后断网也能打开。'));
 
@@ -159,5 +159,6 @@ export function initPwaUi() {
     document.body.append(banner);
     pwaEvents?.addEventListener('change', repaint);
     setBeforeReload(prepareReload);
+    initFirstRunGuide();   // 首次打开的小指引（只在网页版、没装 / 没持久时弹；自己订阅 pwaEvents）
     return initPwa().catch(e => console.debug('离线缓存初始化失败', e));
 }

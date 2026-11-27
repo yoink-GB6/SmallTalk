@@ -1206,3 +1206,18 @@ details[open] > .scr-head::before { content: '▾'; }
 .pedit-where { font-size: var(--font-size-xs); }
 .pedit textarea { width: 100%; max-width: 100%; box-sizing: border-box; min-height: 5em; resize: vertical; font-family: var(--font-mono, monospace); }
 .pedit .row { display: flex; gap: 6px; }
+
+/* ───── 首次打开的小指引（src/ui/first-run-guide.js）：右下角的小卡片，不盖全屏；z-index 低于页内弹框的遮罩（25）和更新提示条（31） ───── */
+.fr-guide { position: fixed; right: 16px; bottom: 16px; z-index: 24; width: min(340px, calc(100vw - 32px)); box-sizing: border-box;
+  background: var(--panel); color: var(--text); border: var(--border-width) solid var(--line); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-pop); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.fr-guide[hidden] { display: none; }
+.fr-guide .fr-title { font-weight: 600; }
+.fr-guide .fr-step { display: flex; flex-direction: column; gap: 4px; }
+.fr-guide .fr-step .row { flex-wrap: wrap; justify-content: space-between; }
+.fr-guide .fr-done { color: var(--ok, var(--text)); }
+.fr-guide .fr-foot { display: flex; gap: 8px; justify-content: flex-end; }
+@media (max-width: 900px) {
+  /* 窄屏：贴底部、左右留 16px（宽度由上面的 min() 管，居中） */
+  .fr-guide { left: 16px; right: 16px; width: auto; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
+}
