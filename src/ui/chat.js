@@ -13,6 +13,7 @@ import { frameHostFor } from './frame-host.js';
 import { readSwipes, swipeTarget, selectSwipe, appendSwipe, ensureSwipes, syncSwipeSlot } from '../chatfile.js';
 import { renderAll } from './shell.js';
 import { chatChanged } from './chat-search.js';
+import { repaintHighlights } from './highlight-ui.js';   // 循环依赖：只在函数体里调用
 import { emitTavernEvent, emitStreamToken, flushStreamToken } from './script-host.js';   // 循环依赖：只在函数体里调用
 // 酒馆事件（第 3 期）：事件名、参数、顺序照酒馆 1.19.0 public/script.js（行号是那个版本的）；都经 emitTavernEvent 发给脚本沙箱和消息前端卡，
 // 先推副本再发，所以回调里同步读到的是新值。酒馆助手对 MESSAGE_* 等的第一个参数做 parseInt，我们发的本来就是整数。
@@ -116,6 +117,7 @@ export function renderChat() {
     renderChatInfo();
     renderChatEmpty();
     chatChanged();   // 聊天里的内容可能变了：搜索栏开着的话防抖重算（见 chat-search.js）
+    repaintHighlights();   // 划线的高亮是画在文字节点上的 Range，楼层重画后旧的就塌了：重建（见 highlight-ui.js 文件头）
 }
 
 /** 一张卡都没有、也还没聊过：聊天区显示「怎么开始」的引导（顶栏的导入按钮没了，得告诉用户入口在哪） */
