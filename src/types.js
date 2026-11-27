@@ -556,6 +556,8 @@ export {};
  * @param {{role: Role, content: string, name?: string}[]} messages
  * @param {{onDelta?: (textSoFar: string) => void, signal?: AbortSignal, model?: string, promptCache?: boolean}} [options]
  *   promptCache：false = 不加提示缓存标记（GlobalRecord.promptCache）；请求体里只在 false 时才带 promptCache: false
+ *   usageLog：false = 这次的用量不报给 setUsageListener 的监听（手机聊天用，不顶掉「拼装」页的「上次请求」）；调用方自己的 onUsage 照常调，
+ *     两样都没有时连用量都不取。不进请求体（2026-11-28 手机第一步加）
  * @returns {Promise<string>}  完整回复
  *
  * @callback CheckHealth
@@ -1394,6 +1396,9 @@ export {};
 // 范围：docs/new-features-plan.md 第 3 节（手机里的 Chat 应用 = 单聊；聊天预设；壁纸）+ 第 4 节的表情包。发图片、主动消息、拉群、朋友圈、音乐、读书不在这一步，
 // 但下面的形状给它们留了位置（见本节末尾「给后面留的路」）。
 //
+// 「暂定」的取舍（等用户回答的那几个问题）集中在 src/phone-data.js 的 PHONE_TENTATIVE 一张表里（重新生成、记忆、发送方式、壁纸、世界书预勾、表情描述），
+// 下面写「暂定」的地方，代码里都是读那张表或调用方传的参数，不写死在逻辑里。
+//
 // 总原则：
 //   - 手机是全局的、独立的模式：会话数据自己存，和剧情存档（ChatRecord）不互通；不进 state（state 的形状不变，「当前卡的当前存档」那一套不碰），
 //     不进 'global'（global 每次 RP 保存都可能重写；isPristineGlobal 靠它判断「出厂默认」）。
@@ -1527,8 +1532,8 @@ export {};
  * @property {true} [pinned]         置顶（会话列表排在最前）。只在置顶时写
  *
  * 规范化（normalizeSession，读档、恢复都走）：不是对象 / 没有 id → 整条当坏记录（界面列表里不出现，记录不删，同 RP 的坏存档）；
- *   cards 不是数组 → []（= 卡不在了的会话，见下）；里面不是非空字符串的丢掉、重复的只留一个；personaId 不是字符串 → null；presetId 不是非空字符串 → 删掉（= 'default'）；
- *   worlds 形状不对 → {card: true, books: []}；messages 不是数组 → []，坏消息丢掉（见 PhoneMessage）；favorites 按消息清洗（highlight.js storedHighlights + 下面的 phoneDoc）；
+ *   cards 不是数组 → []（= 卡不在了的会话，见下）；里面不是非空字符串的丢掉、重复的只留一个；personaId 不是字符串 → null；presetId 不是非空字符串、或就是 'default' → 删掉（= 'default'，默认不写）；
+ *   worlds 形状不对 → {card: true, books: []}；messages 不是数组 → []，坏消息丢掉（见 PhoneMessage）；favorites 按消息清洗（highlight.js storedHighlights + 下面的 phoneDoc），另外只留 whole 的（手机里没有「划一段」的入口，半段的当坏数据丢掉）；
  *   readAt 不是数字 → 最后一条消息的 at（全算已读，宁可少一个红点也不要一屏假未读）。
  */
 
@@ -1555,6 +1560,8 @@ export {};
  *   编辑：单个气泡改 content（表情气泡改成文字就删掉 sticker）。收藏不动（整条收藏编辑后不删不移）。
  *   删除：单删任意一个气泡（afterDeleteFloors 挪收藏）；另有「从这条往后全删」（afterTruncate）。都要确认一次。删掉的气泡上的收藏静默跟着没。
  *   重新生成（只对最后一批 assistant 气泡）：【暂定：替换】——删掉最后那一批（同一个 gen 的那几条，收藏跟着没）、再生成一批；
+ *     「最后一批」= 从末尾往前、和最后一条 gen 相同的连续 assistant 气泡；最后一条没有 gen（老数据 / 手改的）只算它自己（phone-data.js lastBatch）。
+ *     代码里两种都有：PHONE_TENTATIVE.regenerate = 'replace'（暂定）/ 'append'（旧的一批留着、新的接在后面）。
  *     最后一条是用户气泡时 = 直接生成。待用户确认（另一个选项是像 RP 一样留着旧的当候选，见报告）。
  *   不做 swipe（候选），所以 HighlightDoc 里每段只有一个版本 0。
  */
@@ -1601,6 +1608,7 @@ export {};
  * @property {string} seed                 宏的种子：'phone:<sessionId>'（{{pick}} 按会话固定）
  * @property {Date} now
  * @property {(text: string) => number} [estimateTokens]
+ * @property {boolean} [stickerDesc]       表情的描述要不要一起发（默认 PHONE_TENTATIVE.stickerDesc = false，只发名字）
  * @property {{label: string, text: string}[]} [extras]   给以后留的口子（音乐「正在听」、读书「正在读的这段」……）：放进最后那条 system（时间那句的后面）。这一步没人传
  *
  * 拼法（按顺序；逐条写进 log）：
@@ -1611,12 +1619,12 @@ export {};
  *      user 的 name = 人设名，assistant 的 name = 卡名（只放进 scanWorldInfo 的 includeNames 用；发出去的消息不带 name 字段）。
  *   3. 世界书：scanWorldInfo({entries: worldEntries, chat: 第 2 步的历史, settings: wi, substitute})。
  *      before / after / anTop / anBottom 的内容依次拼成一段，放进系统提示（见第 4 步）；position 4（@深度）按 depth / role 插进历史（同 RP：同 depth 同 role 合成一条，
- *      深度按第 2 步合并之后的消息数）；示例对话（5 / 6）丢掉；outlet（7）只给宏 {{outlet::名字}} 用。
+ *      深度按第 2 步合并之后的消息数；深度超过历史条数的放在历史最前面）；扫描深度数的也是合并之后的条数；示例对话（5 / 6）丢掉；outlet（7）只给宏 {{outlet::名字}} 用。
  *   4. 第一条 system = substitute(preset.system)（压空行） + 世界书那一段（有才加，前面空一行） + format（{{maxBubbles}} 换好） + stickerHint（preset.stickers 为真且 stickers 不空才加，{{stickers}} 换好）。
  *   5. 历史（含第 3 步插进去的 @深度 条目）。
  *   6. 最后一条 system（timeHint 为真或有 extras 时才有）：「现在是 2026年11月28日 星期六 21:03。」+ extras 每项一行「label：text」。
  *      时间按 now 的本地时间写，自己拼字符串，不靠宏。
- *   7. 上限：contextTokens − （params.max_tokens ?? 400）。第 1、6 条必须发；历史从最老的开始丢，丢到放得下（@深度条目跟着它挂靠的位置走，同 RP）。
+ *   7. 上限：contextTokens − （params.max_tokens ?? 400）。第 1、6 条必须发；历史从最老的开始丢，丢到放得下。每个 @深度条目挂在「它后面紧挨着的那条历史」上（在所有历史之后的挂最后一条），那条历史没发它也不发，它的 token 算在那条历史头上；没有历史时照发、算必需内容。
  *      放不下必需内容 → overflow = true，只发第 1 条 + 最新的一条历史 + 第 6 条。
  *   不做：正则（全局 / 预设 / 卡，显示的发送的都不跑）、作者注释、示例对话、开场白、卡的 system_prompt / post_history_instructions / depth_prompt、assistant_prefill、外置记忆（暂定，见报告）。
  *   缓存：前面不变的部分（第 1 条 + 较早的历史）每次一样，变的（新气泡、时间）都在后面；@深度的世界书条目会随聊天变长挪位置，和 RP 一样会打断缓存。
