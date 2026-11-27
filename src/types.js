@@ -849,6 +849,11 @@ export {};
  *   删楼：任一端在被删的楼里 → 删掉；其余的挪楼号。入口：chat.js deleteFrom（截断）、generateReply 失败时删占位、frame-host.js deleteChatMessages。
  *   换候选 / 重新生成：不动，按 swipe 号决定显示哪些（visibleHighlights：两端的候选都正好是现在显示的才显示）。
  *   原地换开场白（startChat）：当前存档的划线清空；开场白上划过线的存档不再算「没动过」（archive.js untouched），会新开存档。
+ *   摘抄页删除 / 改备注（2026-11-28，可以跨存档、跨卡）：唯一入口 archive.js editHighlightsAcross(edits)，edits = [{cardId, chatId, remove?: id[], notes?: {id: 备注}}]
+ *     （纯逻辑 highlight.js editHighlights）。当前存档改内存（state.js editChatHighlights）再落盘；非当前存档在【一个事务】里现读记录、
+ *     按消息清洗后改、只换 highlights（一条不剩删键）、同一事务里重算目录条目——消息、记忆摘要、变量、作者注释、名字、updatedAt 一律不动。
+ *     在存档层的 op 里做（期间不能切换）；全成或全不成（当前存档那部分在事务失败时换回去）。
+ *     拒绝（archive.js highlightEditBlocked）：只读标签页、停止保存之后、正在恢复备份、正在生成（非当前存档的也拒，同删除非当前存档）、正在切换。
  */
 
 /**

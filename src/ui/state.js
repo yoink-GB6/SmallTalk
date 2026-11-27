@@ -23,7 +23,7 @@ import { storedAuthorNote } from '../author-note.js';
 import { normalizeMerged } from '../memory-fold.js';
 import { cardVarsKey, normalizeCardVars } from '../cardvars.js';
 import {
-    chatDoc, storedHighlights, newHighlight, addHighlight, removeHighlight, setHighlightNote, shiftAfterEdit, afterDeleteFloors, afterTruncate,
+    chatDoc, storedHighlights, newHighlight, addHighlight, removeHighlight, setHighlightNote, editHighlights, shiftAfterEdit, afterDeleteFloors, afterTruncate,
 } from '../highlight.js';
 
 // ───────────────────────────── 状态 ─────────────────────────────
@@ -500,6 +500,26 @@ export function highlightsAfterTruncate(n) {
     const r = afterTruncate(currentHighlights(), n);
     if (r.changed) putHighlights(r.list);
     return r.removed;
+}
+
+/**
+ * 摘抄页改当前存档的划线（删一批 / 改备注，highlight.js editHighlights）。只改内存（persist.chatMeta.highlights），然后 save()——
+ * 和聊天里点高亮删除 / 改备注是同一条路。调用方（archive.js editHighlightsAcross）先查拒绝条件。
+ * 返回 {changed, removed, noted, before}：before 是改之前的列表，后面的存储写入失败时用 restoreChatHighlights 换回去
+ */
+export function editChatHighlights(edit) {
+    const before = persist.chatMeta?.highlights;
+    const r = editHighlights(currentHighlights(), edit);
+    if (!r.changed) return { ...r, before };
+    putHighlights(r.list);
+    save();
+    return { ...r, before };
+}
+
+/** editChatHighlights 的撤回：把列表换回 before（undefined = 原来就没有这个键）并保存 */
+export function restoreChatHighlights(before) {
+    putHighlights(Array.isArray(before) ? before : []);
+    save();
 }
 
 /** 钩子：当前存档的聊天整个重来了（startChat 原地换开场白）。不 save() */

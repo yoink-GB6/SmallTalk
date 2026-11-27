@@ -1240,19 +1240,22 @@ details[open] > .scr-head::before { content: '▾'; }
 .hl-pop .row { flex-wrap: nowrap; }
 .hl-pop .row .ghost { margin-left: auto; }
 .hl-pop-why { font-size: var(--font-size-sm); }
-/* 「摘抄」页：每条一行（备注标记 + 文字省略 + 楼号 + 跳转 / 删除），点文字展开全文和备注 */
-.exc-summary { margin-bottom: 4px; font-size: var(--font-size-sm); }
-.exc-chat { margin: 0 0 8px; }
-.exc-chat-name { font-size: var(--font-size-sm); margin: 2px 0 2px 4px; }
-.exc-item { border-bottom: var(--border-width) solid var(--line); }
-.exc-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.exc-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-align: left; border-color: transparent; background: transparent; padding: 3px 4px; }
-.exc-main:hover:not(:disabled) { background: var(--panel-2); }
-.exc-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 「摘抄」页：三层折叠（角色 → 存档 → 每条划线一行：名字 + 备注标记 + 楼号 + 删除）；顶上搜索框和批量 */
+.exc-toolbar { flex-wrap: wrap; }
+.exc-search { flex: 1 1 10em; min-width: 0; }
+.exc-card { margin-bottom: 6px; }
+.exc-card-head, .exc-chat-head { display: flex; align-items: center; gap: 4px; min-width: 0; cursor: pointer; }
+.exc-chat-head { font-size: var(--font-size-sm); margin: 2px 0 2px 12px; }
+.exc-head-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exc-head-count { flex: none; font-size: var(--font-size-xs); font-weight: normal; }
+.exc-toggle { flex: none; padding: 0 4px; min-width: 1.6em; }
+.exc-chat { margin: 0 0 6px; }
+.exc-item { display: flex; align-items: center; gap: 6px; min-width: 0; margin-left: 24px; padding: 3px 4px; border-bottom: var(--border-width) solid var(--line); cursor: pointer; user-select: none; touch-action: manipulation; }
+.exc-item:hover { background: var(--panel-2); }
+.exc-item.exc-other-swipe .exc-name { opacity: .7; }
+.exc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exc-note-input { flex: 1; min-width: 0; }
+.exc-pick { flex: none; margin: 0; }
 .exc-notemark { flex: none; font-size: var(--font-size-xs); padding: 0 6px; border: var(--border-width) solid var(--hl-line); border-radius: var(--radius-pill); color: var(--hl-line); }
 .exc-floor { flex: none; font-size: var(--font-size-xs); }
-.exc-row > button.ghost { flex: none; }
-.exc-detail { padding: 4px 6px 8px; font-size: var(--font-size-md); }
-.exc-detail[hidden] { display: none; }
-.exc-full { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14em; overflow: auto; }
-.exc-note { margin-top: 6px; padding-left: 8px; border-left: var(--bar-width-thin) solid var(--hl-line); white-space: pre-wrap; overflow-wrap: anywhere; }
+.exc-item > button.ghost { flex: none; }

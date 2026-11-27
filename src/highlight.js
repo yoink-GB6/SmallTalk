@@ -250,6 +250,35 @@ export function setHighlightNote(list, id, note) {
 }
 
 /**
+ * 一次改一组：删掉 remove 里的 id、把 notes 里的 id 的备注换成给的值（空 = 去掉备注，同 setHighlightNote）。
+ * 摘抄页的删除 / 改备注都走它（当前存档：state.js editChatHighlights 改内存；非当前存档：archive.js editHighlightsAcross 在事务里改存储）。
+ * 不改输入；不认识的 id 忽略。changed = 真有变化（备注改成和原来一样的不算）。没变化时返回的 list 就是输入（或 []）。
+ * @param {any} list   已经清洗过的列表（normalizeHighlights 的结果）
+ * @param {{remove?: string[], notes?: Object<string, string>}} edit
+ * @returns {{list: import('./types.js').Highlight[], changed: boolean, removed: number, noted: number}}
+ */
+export function editHighlights(list, { remove = [], notes = {} } = {}) {
+    const input = Array.isArray(list) ? list : [];
+    let cur = input;
+    const gone = new Set(remove);
+    if (gone.size) cur = cur.filter(h => !(isObj(h) && gone.has(h.id)));
+    const removed = input.length - cur.length;
+    let noted = 0;
+    for (const id of Object.keys(notes ?? {})) {
+        if (gone.has(id) || UNSAFE.has(id)) continue;
+        const i = cur.findIndex(h => isObj(h) && h.id === id);
+        if (i < 0) continue;
+        const n = cleanNote(notes[id]);
+        if (n === cur[i].note || (n === undefined && cur[i].note === undefined)) continue;
+        const { note: _old, ...rest } = cur[i];
+        cur = cur.slice();
+        cur[i] = n === undefined ? rest : { ...rest, note: n };
+        noted++;
+    }
+    return { list: cur, changed: removed > 0 || noted > 0, removed, noted };
+}
+
+/**
  * 新旧原文的改动段：公共前缀 + 公共后缀之外的那一段。没改 = null。
  * @returns {{start: number, oldEnd: number, newEnd: number}|null}  旧原文里 [start, oldEnd) 换成了新原文里 [start, newEnd)
  */
