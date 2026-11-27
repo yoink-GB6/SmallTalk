@@ -19,8 +19,8 @@
 //   3. 盖上「正在恢复…」的遮罩（withRestoreOverlay：整页点不动、键盘也挡住，结束后一定撤掉），
 //      拿存档层的锁（archive.js 的 op：生成中 / 只读 / 正在切换时拒绝），先落盘，然后暂停保存（persist.paused）
 //   4. 一个事务里读出所有已有的卡 / 存档 / 预设，算出导入计划（planBackupImport，纯函数）；空浏览器的判断在这里再核对一次
-//   5. 一个事务里写入全部新记录 + 新卡的目录 + （并进已有卡的）目录补条目 + 新的 global（内容并集 + 设置；什么都没变时不写），详见 doImport 的注释
-//   6. 逐条读回比较；不一致就把这次新建的键删掉、把改过的目录 / global 还原
+//   5. 一个事务里写入全部新记录 + 新卡的目录 + （并进已有卡的）目录补条目 + 并进本机已有存档的划线（只改那条记录的 highlights）+ 新的 global（内容并集 + 设置；什么都没变时不写），详见 doImport 的注释
+//   6. 逐条读回比较；不一致就把这次新建的键删掉、把改过的目录 / 存档记录（并划线的）/ global 还原
 //   7. 内存跟上：预设列表、当前卡的目录、（写了 global 时）重读全局层；恢复保存，补一次保存，刷新界面
 //   8. 接口：逐个新建 / 补 key（失败只影响接口这一项）。聊天 / 记忆用的模型【不】自动指到新建的接口上（当前选择不从备份拿）
 //   9. 原来一张卡都没有：切到备份里原来的当前卡 / 存档
@@ -36,12 +36,12 @@
 
 import { store } from '../store.js';
 import { cardKey, chatKey, indexKey, presetKey, indexEntry } from '../migrate.js';
-import { buildBackup, backupFileName, parseBackup, planBackupImport, mergeIndex, summaryText, countBackup, isEmptyForRestore,
+import { buildBackup, backupFileName, parseBackup, planBackupImport, mergeIndex, mergeChatHighlights, summaryText, countBackup, isEmptyForRestore,
     endpointsForExport, planEndpointImport, endpointSummaryText, settingsInBackup, exportSelfCheck, apiKeyFieldPlace, presetSensitivePlace, endpointHost } from '../backup.js';
 import { encryptBackup, decryptBackup, cryptoAvailable, BackupCryptoError } from '../backup-crypto.js';
 import { listEndpoints, createEndpoint, updateEndpoint, exportEndpointsForBackup, backendKind } from '../llm.js';
 import { h, toast, uid, download } from './dom.js';
-import { ui, persist, presets, flushNow, presetBlocked, reloadGlobalFromStore, reloadCardVars, stopSaving, STOPPED_TEXT } from './state.js';
+import { ui, persist, presets, flushNow, presetBlocked, reloadGlobalFromStore, reloadCardVars, stopSaving, STOPPED_TEXT, adoptRestoredHighlights } from './state.js';
 import { runArchiveOp, openChat, showStoreError } from './archive.js';
 import { renderAll } from './shell.js';
 import { stopScripts, reconcileScripts } from './script-host.js';   // 循环依赖：只在函数体里调用
@@ -581,10 +581,11 @@ async function importEndpoints(items) {
  *   0. 进来之前：op 先 flushNow，页面上所有改动都已经在存储里；之后 persist.paused = true，普通的保存一律不写
  *      （关页面时的那次保存也不写），免得一次带着旧 global 的保存排在导入后面把它盖掉。
  *   1. 读快照、算计划：只读不写。这里失败 / 关页面 = 什么都没写。
- *   2. 【一个事务】写下全部新记录：新卡、新存档、新预设、新卡的目录、并进已有卡的目录补条目，以及新的 'global'
+ *   2. 【一个事务】写下全部新记录：新卡、新存档、新预设、新卡的目录、并进已有卡的目录补条目、
+ *      并进本机已有存档的划线（备份里的存档和它除划线外相同：现读那条记录，只换 highlights，见 backup.js mergeChatHighlights），以及新的 'global'
  *      （内容类——人设、世界书、正则、便签、全局变量——的并集，加上本机的或备份的设置）。IndexedDB 的事务要么全成要么全不成：
  *      写到一半失败 / 关页面 = 事务中止，一条都没写进去。事务里还会核对 'global' 和第 1 步读到的一样，不一样（这期间别处改了）就中止。
- *   3. 逐条读回比较（global 也比）。不一致：删掉这次新建的键、把目录和 global 还原成写之前的值（又是一个事务）。
+ *   3. 逐条读回比较（global 也比）。不一致：删掉这次新建的键、把目录、并过划线的存档记录和 global 还原成写之前的值（又是一个事务）。
  *      在第 2 步提交之后、第 3 步还原之前关掉页面：存储里留下的是【完整的】导入结果（事务是整体提交的），不会是半份。
  *   4. 内存跟上：预设列表、当前卡的目录；写了 global 就 reloadGlobalFromStore 重读全局层（内容并集和设置一起进 state；
  *      当前选择本来就是本机的，重读后不变。空浏览器时当前预设是恢复进来的第一个，也在这里装进来）。
@@ -635,13 +636,18 @@ async function doImport(backup, { applySettings, fresh }) {
         const taken = new Set(keys);
         const clash = sets.find(s => taken.has(s.set));
         if (clash) throw new Error(`新记录的键已经存在（${clash.set}），为了不覆盖已有数据，没有导入`);
-        if (!sets.length && !plan.global && !plan.cardvarsMerges.length) return { plan, switchTo: null };
+        if (!sets.length && !plan.global && !plan.cardvarsMerges.length && !plan.highlightMerges.length) return { plan, switchTo: null };
 
-        // 写：一个事务。并进已有卡的目录、并进已有卡的 cardvars、旧 global 都在同一个事务里现读
-        const mergeKeys = plan.merges.map(m => indexKey(m.cardId));
+        // 写：一个事务。并进已有卡的目录、并进已有卡的 cardvars、要并进划线的本机已有存档、旧 global 都在同一个事务里现读。
+        // 目录：并进了新存档的卡、并进了划线的存档所在的卡，每张卡一个键（两种都有的卡只读写一次）
+        const indexCards = [...new Set([...plan.merges.map(m => m.cardId), ...plan.highlightMerges.map(m => m.cardId)])];
+        const mergeKeys = indexCards.map(indexKey);
         const cvKeys = plan.cardvarsMerges.map(m => cardVarsKey(m.cardId));
-        const readKeys = [...mergeKeys, ...cvKeys, 'global'];
+        const hlKeys = plan.highlightMerges.map(m => chatKey(m.cardId, m.chatId));
+        const readKeys = [...mergeKeys, ...cvKeys, ...hlKeys, 'global'];
         const cvMerged = new Map();   // cardvars 键 → 合并后的值（读回校验、撤销用）
+        const hlMerged = new Map();   // 并进了划线的本机存档的键 → {cardId, chatId, rec（写进去的整条记录）, before（写之前读到的整条记录）}
+        let hlAdded = 0, hlFilled = 0;
         let before = [];
         const merged = new Map();   // 目录键 → 补好的目录
         const planned = JSON.stringify(storedGlobal);
@@ -650,9 +656,25 @@ async function doImport(backup, { applySettings, fresh }) {
             // 万一变了，用旧的算出来的结果会盖掉新的改动：宁可不导入（抛错 = 中止事务，一条都不写）
             if (plan.global && JSON.stringify(values.at(-1) ?? null) !== planned) throw new Error('就在刚才，全局设置在别处被改了。为了不覆盖它，没有导入，请重新选择备份文件');
             before = values;
+            // transact 可能重跑这个回调（同一份 values）：每次从头算
+            hlMerged.clear(); merged.clear(); cvMerged.clear(); hlAdded = 0; hlFilled = 0;
             const ops = [...sets];
-            plan.merges.forEach((m, i) => {
-                const next = mergeIndex(values[i], m.cardId, m.chats);
+            // 划线并进本机已有的存档：按事务里现读的记录重算（backup.js mergeChatHighlights，只改 highlights，updatedAt 等一律不动）；
+            // 记录不在了 / 没有新东西可并就不写
+            plan.highlightMerges.forEach((m, i) => {
+                const old = values[mergeKeys.length + cvKeys.length + i];
+                const r = mergeChatHighlights(old, m.copies);
+                if (!r.rec) return;
+                ops.push({ set: hlKeys[i], value: r.rec });
+                hlMerged.set(hlKeys[i], { cardId: m.cardId, chatId: m.chatId, rec: r.rec, before: old });
+                hlAdded += r.added; hlFilled += r.filled;
+            });
+            indexCards.forEach((cardId, i) => {
+                const newChats = plan.merges.find(m => m.cardId === cardId)?.chats ?? [];
+                const touched = [...hlMerged.values()].filter(x => x.cardId === cardId).map(x => x.rec);
+                if (!newChats.length && !touched.length) return;
+                // 目录条目跟着重算（hl 计数）；目录不存在 / 不是这张卡的不写，archive.js loadIndex 会从存档重建
+                const next = mergeIndex(values[i], cardId, [...newChats, ...touched]);
                 if (next) { ops.push({ set: mergeKeys[i], value: next }); merged.set(mergeKeys[i], next); }
             });
             // 并进本机已有的卡：按键取并集，本机已有的键保留本机的值（cardvars.js unionCardVars）；没有新东西就不写
@@ -665,8 +687,10 @@ async function doImport(backup, { applySettings, fresh }) {
             return ops;
         });
         wroteGlobal = !!plan.global;
+        // 提示里的数按实际写进去的算（计划之后、事务之前存档要是被改过，两者可能不同）
+        Object.assign(plan.summary, { highlightsMerged: hlAdded, highlightNotesFilled: hlFilled, highlightChats: hlMerged.size });
 
-        // 读回：新记录逐字比较；补过的目录只看新存档是不是都在（这期间后台的记忆摘要可能改了别的条目，正常）
+        // 读回：新记录逐字比较；补过的目录只看新存档是不是都在（这期间后台的记忆摘要可能改了别的条目，正常）；并进了划线的存档逐字比较
         try {
             for (const s of sets) {
                 if (JSON.stringify(await store.get(s.set)) !== JSON.stringify(s.value)) throw new Error(`读回校验不一致：${s.set}`);
@@ -677,10 +701,11 @@ async function doImport(backup, { applySettings, fresh }) {
                 const idx = await store.get(ik);
                 if (!m.chats.every(c => idx?.chats?.[c.id])) throw new Error(`读回校验不一致：${ik}`);
             }
+            for (const [k, x] of hlMerged) if (JSON.stringify(await store.get(k)) !== JSON.stringify(x.rec)) throw new Error(`读回校验不一致：${k}`);
             for (const [k, v] of cvMerged) if (JSON.stringify(await store.get(k)) !== JSON.stringify(v)) throw new Error(`读回校验不一致：${k}`);
             if (plan.global && JSON.stringify(await store.get('global')) !== JSON.stringify(plan.global)) throw new Error('读回校验不一致：global');
         } catch (e) {
-            // 撤掉：删的只有这次新生成 id 的键（不可能是已有的数据），目录、cardvars 和 global 还原成写之前读到的
+            // 撤掉：删的只有这次新生成 id 的键（不可能是已有的数据），目录、cardvars、并进了划线的存档和 global 还原成写之前读到的
             const undo = sets.map(s => ({ del: s.set }));
             mergeKeys.forEach((k, i) => { if (merged.has(k) && before[i] !== undefined) undo.push({ set: k, value: before[i] }); });
             cvKeys.forEach((k, i) => {
@@ -688,6 +713,8 @@ async function doImport(backup, { applySettings, fresh }) {
                 const old = before[mergeKeys.length + i];
                 undo.push(old === undefined ? { del: k } : { set: k, value: old });
             });
+            // 被改写的本机存档（只动过 highlights）：整条换回写之前事务里读到的那份（写的前提就是它存在，所以不会是 undefined）
+            for (const [k, x] of hlMerged) undo.push({ set: k, value: x.before });
             if (wroteGlobal) undo.push(before.at(-1) === undefined ? { del: 'global' } : { set: 'global', value: before.at(-1) });
             try {
                 await store.batch(undo);
@@ -699,7 +726,7 @@ async function doImport(backup, { applySettings, fresh }) {
                 stopSaving();
                 showStoreError('从备份恢复没有完整完成：写进去的内容没能读回核对，撤销也失败了。为了不让这个页面里的旧数据盖掉存储里的内容，'
                     + '已经停止保存（之后在这个页面上的改动都不会保存）。请刷新页面，刷新后看到的就是存储里实际的样子；需要的话可以再恢复一次（重复的会自动跳过）。');
-                outcome = '撤销刚写进去的记录也失败了（详见控制台），已停止保存：请刷新页面。可能多出了一部分导入的卡 / 存档 / 预设和合并进来的人设、世界书、正则、便签、全局变量，原有的内容没有被删改';
+                outcome = '撤销刚写进去的记录也失败了（详见控制台），已停止保存：请刷新页面。可能多出了一部分导入的卡 / 存档 / 预设和合并进来的人设、世界书、正则、便签、全局变量、划线，原有的内容没有被删掉';
             }
             throw e;
         }
@@ -709,6 +736,12 @@ async function doImport(backup, { applySettings, fresh }) {
         // 并进的正是当前卡：内存里那份目录是之后保存的依据，也要补上，不然下次保存会用旧目录把补好的盖回去
         for (const m of plan.merges) {
             if (persist.index?.cardId === m.cardId) for (const c of m.chats) persist.index.chats[c.id] = indexEntry(c);
+        }
+        // 并进了划线的本机存档：当前卡的目录条目跟着换（hl 计数）；正好是当前存档的，内存里的 persist.chatMeta.highlights 换成存储里的
+        // （不换的话，下一次保存会拿内存里的旧列表把并进来的划线盖掉）。界面在 finally 的 renderAll 里重画，高亮跟着 renderChat 重建
+        for (const x of hlMerged.values()) {
+            if (persist.index?.cardId === x.cardId && persist.index.chats[x.chatId]) persist.index.chats[x.chatId] = indexEntry(x.rec);
+            adoptRestoredHighlights(x.cardId, x.chatId, x.rec.highlights);
         }
         // 写了 global（内容有新增，或应用了备份里的设置）：重读全局层，人设 / 世界书 / 正则 / 便签 / 全局变量和设置一起进 state。
         // 预设引用是本机原来的（或空浏览器时刚恢复进来的第一个），找不到也不是这次恢复改的，不另外报

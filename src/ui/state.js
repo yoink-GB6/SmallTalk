@@ -507,6 +507,21 @@ export function clearChatHighlights() {
     putHighlights([]);
 }
 
+/**
+ * 恢复整体备份把备份里的划线并进了存储里的【当前存档】（ui/backup.js doImport：写入事务和读回校验都成功之后调）：内存跟上存储。
+ * stored = 写进存储的那条记录的 highlights。按消息清洗后装进 persist.chatMeta（和读档 applyCardChat 同一个规矩）。
+ * 快照原来和内存一致（doImport 进来前落过盘、之后暂停保存）就跟着换成新的，于是不会多一次重写；
+ * 不更新内存的话，下一次保存会拿内存里的旧列表把并进来的划线盖掉。不是当前存档 → 什么都不做，返回 false
+ */
+export function adoptRestoredHighlights(cardId, chatId, stored) {
+    if (!persist.chatMeta || persist.cardId !== cardId || persist.chatId !== chatId) return false;
+    const synced = snap.chatMeta === JSON.stringify(persist.chatMeta);
+    const hl = storedHighlights(stored, chatDoc(state.chat));
+    if (hl) persist.chatMeta.highlights = hl; else delete persist.chatMeta.highlights;
+    if (synced) snap.chatMeta = JSON.stringify(persist.chatMeta);
+    return true;
+}
+
 /** 当前卡的存档目录装进来（fresh = 还没写进存储） */
 export function applyIndex(index, { fresh = false } = {}) {
     persist.index = index;

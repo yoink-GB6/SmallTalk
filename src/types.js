@@ -799,7 +799,16 @@ export {};
  *   运行时：当前存档的在 persist.chatMeta.highlights（state 的形状不变；同作者注释，chatMeta 变了就重写这条存档记录，不更新 updatedAt）。
  *   读入容错（highlight.js normalizeHighlights，读档 state.js applyCardChat、恢复备份 backup.js planBackupImport 都走）：按这个存档的消息核对，
  *     楼号越界、候选号不存在、offset 超出那段原文、同一楼两端候选不同、长度为 0 的丢掉；from 在 to 之后的对调；id 缺 / 重复的补确定的 'hl-<下标>'。
- *   它算存档的【内容】：判重（backup.js chatSig）在作者注释之后追加清洗后的划线（只比位置、整楼标记、备注；不比 id、at），没有划线时签名和以前逐字相同。
+ *   它算存档的【内容】（进备份、恢复时取并集、本机的不删不改），但【不参与存档判重】（backup.js chatSig 不看它，2026-11-28 用户定的）：
+ *     恢复整体备份时，备份里的存档和本机某个存档除划线外完全相同 → 不新增存档，备份里的划线并进本机那个（highlight.js mergeHighlights）：
+ *     - 备份里的先按那个存档的消息清洗（normalizeHighlights），坏的丢掉；
+ *     - 位置相同（from / to 的楼、候选、offset 都相同，whole 也相同）算同一条，保留本机的（id、at、note）；本机那条没有 note 而备份的有 → 补上备份的 note；
+ *     - 本机已有的一条不删、位置不改、顺序不变，新的接在后面；id 和已有的撞了换确定的 '<原 id>-<n>'；
+ *     - 没有新东西可并 → 不写（不重写存档记录、不动 updatedAt），所以同一份备份导两遍第二遍全是跳过、零写入；
+ *     - 被并入的存档只换 highlights：消息、变量、作者注释、名字、updatedAt 一律不变，目录条目的 hl 跟着重算；
+ *       写入和恢复的其它记录在同一个事务里，读回不一致时整条换回写之前的（ui/backup.js doImport）；被并入的是当前存档时内存跟着换（state.js adoptRestoredHighlights）；
+ *     - 备份里两个除划线外相同、都不在本机的存档：只进来第一个，后面的划线并进它；
+ *     - 恢复到空浏览器：存档连同（清洗过的）划线原样进来。
  *   不发给模型；前端卡和脚本读不到也改不了；不进 .jsonl、不进酒馆 zip。
  */
 

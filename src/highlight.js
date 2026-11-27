@@ -25,6 +25,7 @@
 // - 读入（normalizeHighlights）：形状不对、楼号越界、候选号不存在、offset 超出那段原文长度、同一楼却两端候选不同、长度为 0 → 丢掉；
 //   from 在 to 之后 → 两端对调；id 缺 / 重复 → 补一个确定的 'hl-<位置>'；备注不是字符串 → 去掉；at 不是数字 → 0。
 //   不认识的字段原样带着（以后的版本加的），只挡 __proto__ / constructor / prototype。
+// - 恢复整体备份（2026-11-28 改的）：存档判重不看划线；备份里的存档和本机的除划线外相同 → 不新增存档，划线并进本机那个（mergeHighlights）。
 //
 // ─────────────────────────── 已知的局限 ───────────────────────────
 // - 不存文字，所以「原文在别处被改了、却没经过这里的钩子」时发现不了：旧版本的页面（离线缓存还没更新的标签页）编辑了消息、
@@ -159,6 +160,54 @@ export function normalizeHighlights(raw, doc) {
 export function storedHighlights(raw, doc) {
     const { list } = normalizeHighlights(raw, doc);
     return list.length ? list : null;
+}
+
+/** 一条划线的「位置」：两端的楼、候选、offset 和整楼标记。合并时位置相同 = 同一条（不看 id、建立时间、备注） */
+const positionKey = h => JSON.stringify([h.from.floor, h.from.swipe, h.from.offset, h.to.floor, h.to.swipe, h.to.offset, h.whole === true]);
+
+/**
+ * 恢复整体备份时，把备份里的划线并进本机【除划线以外完全相同】的那个存档（用户 2026-11-28 定的规矩；backup.js planBackupImport、ui/backup.js doImport 用）。
+ * - 本机那份（mine）一条不删、位置不改、顺序不变；坏的也原样留着（读档时 normalizeHighlights 会照常处理，这里不替它做决定）。
+ * - 备份那份（theirs）先按这个存档的消息清洗（normalizeHighlights，坏的丢掉）。
+ * - 位置相同（两端的楼、候选、offset，整楼标记都相同）算同一条：保留本机那条（id、建立时间、备注都用本机的）；
+ *   例外：本机那条没有备注而备份里那条有 → 用备份的备注补上（filled）。
+ *   theirs 里自己位置重复的：只进来第一条，后面的同样只可能给它补备注（也计入 filled）。
+ * - 新并进来的接在本机的后面；id 和已有的（本机的、先并进来的）撞了换一个确定的新 id：'<原 id>-<n>'（n 从 2 起，找到不撞的为止）。
+ * - 总数不超过 MAX_HIGHLIGHTS（多出来的不并）。
+ * 不改输入。changed = false 时 list 就是 mine 的浅拷贝（调用方据此决定「不写」）。
+ * @param {any} mine    本机存档记录里的 highlights（可能没有 / 不是数组）
+ * @param {any} theirs  备份里的 highlights（未清洗也行）
+ * @param {import('./types.js').HighlightDoc} doc   这个存档的消息（chatDoc(rec.messages)）
+ * @returns {{list: import('./types.js').Highlight[], added: number, filled: number, changed: boolean}}
+ */
+export function mergeHighlights(mine, theirs, doc) {
+    const list = Array.isArray(mine) ? [...mine] : [];
+    const byPos = new Map();   // 位置 → list 里的下标（只登记读得懂的那些条）
+    const ids = new Set();
+    list.forEach((m, i) => {
+        if (isObj(m) && typeof m.id === 'string') ids.add(m.id);
+        const c = normalizeHighlight(m, doc, '');
+        if (c) { const k = positionKey(c); if (!byPos.has(k)) byPos.set(k, i); }
+    });
+    let added = 0, filled = 0;
+    for (const t of normalizeHighlights(theirs, doc).list) {
+        const k = positionKey(t);
+        if (byPos.has(k)) {
+            const i = byPos.get(k), m = list[i];
+            // 只在本机那条确实没有备注时补；本机那条是自己这次并进来的（theirs 里位置重复）也一样处理：先来的那条的备注优先
+            if (t.note !== undefined && cleanNote(m.note) === undefined) { list[i] = { ...m, note: t.note }; filled++; }
+            continue;
+        }
+        if (list.length >= MAX_HIGHLIGHTS) break;
+        let id = t.id;
+        if (ids.has(id)) { let n = 2; while (ids.has(`${t.id}-${n}`)) n++; id = `${t.id}-${n}`; }
+        const h = id === t.id ? t : { ...t, id };
+        ids.add(id);
+        byPos.set(k, list.length);
+        list.push(h);
+        added++;
+    }
+    return { list, added, filled, changed: added > 0 || filled > 0 };
 }
 
 /** 存储里有几条（不清洗，只数对象；给存档目录 index 的 hl 计数用） */
@@ -342,8 +391,9 @@ export function sliceHighlight(h, doc, joiner = '\n') {
 }
 
 /**
- * 判重用（backup.js chatSig）：清洗后的划线只留位置、整楼标记和备注，去掉 id、at 和不认识的字段，按位置排好。
- * 所以同一份备份导两遍、或者两边各自给同一段字划过线，签名都一样。没有划线 = null（签名里不加这一项，和划线功能出现之前逐字相同）。
+ * 一组划线的「内容签名」：清洗后的划线只留位置、整楼标记和备注，去掉 id、at 和不认识的字段，按位置排好。没有划线 = null。
+ * 2026-11-28 起存档判重（backup.js chatSig）【不再】用它——只差划线的两个存档算同一个，恢复时划线并进本机那个（mergeHighlights）。
+ * 留着给测试比较「两份划线内容是否一样」用。
  */
 export function highlightSigPart(raw, messages) {
     const { list } = normalizeHighlights(raw, chatDoc(messages));

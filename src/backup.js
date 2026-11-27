@@ -24,7 +24,7 @@ import { normalizeNotes, mergeNotes } from './notes.js';
 import { alignPersonas, mergePersonas, switchPersona } from './personas.js';
 import { bookContent, bookScopeOf, remapBookCards, setBookScope, setBookName, isBookActiveFor } from './books.js';
 import { storedAuthorNote } from './author-note.js';
-import { highlightSigPart, storedHighlights, chatDoc } from './highlight.js';
+import { storedHighlights, mergeHighlights, chatDoc } from './highlight.js';
 import { cardScripts } from './scripts.js';
 import { CARDVARS_PREFIX, normalizeCardVars, unionCardVars } from './cardvars.js';
 
@@ -47,8 +47,8 @@ export function canonical(v) {
 //     不比 id、createdAt、usedAt、activeChatId——这些是「这张卡在这个浏览器里的元数据」，
 //     导出再导入、或者在两边各自用过之后都会不一样，但卡还是那张卡。
 //     卡被改过（比如在正则页切了一个开关）就是不同的卡：宁可多出一张，也不把存档并到内容不一样的卡下面。
-// 存档：只比「名字 + 消息（含每条消息上的记忆摘要、swipes、st 等全部字段）+ 局部变量 + 作者注释（有的话）+ 划线（有的话，见 chatSig）」。
-//     不比 id、cardId、createdAt、updatedAt、greeting、stHeader。
+// 存档：只比「名字 + 消息（含每条消息上的记忆摘要、swipes、st 等全部字段）+ 局部变量 + 作者注释（有的话）」。
+//     不比 id、cardId、createdAt、updatedAt、greeting、stHeader、划线（highlights：相同的存档之间划线取并集，见 chatSig）。
 //     同一个存档在一边接着聊了几句，消息就不同了，会作为另一个存档导入（旧的不动），不会覆盖。
 // 预设：只比预设本体，并且是「一字不差」（JSON.stringify 原样比较，和 migrate.js planPresetMigration 一致）。
 //     名字不算内容：内容一样、名字不一样也算重复。名字一样、内容不一样的，新的名字后面加序号。
@@ -66,16 +66,13 @@ const cardContent = card => {
 export const cardSig = rec => canonical([cardContent(rec?.card), typeof rec?.avatar === 'string' ? rec.avatar : '']);
 // 作者注释（ChatRecord.authorNote）算存档的内容：规范化后不是默认值时追加在最后。没有 / 坏到全是默认值的存档（包括作者注释出现之前的所有备份）
 // 签名和以前【逐字相同】，判重结果不变。只差作者注释的两个存档是两个存档（宁可多一个，也不丢掉一份注释）
-// 划线（ChatRecord.highlights）同理：清洗后有划线才追加（highlight.js highlightSigPart：只比位置、整楼标记和备注，不比 id / 建立时间，
-// 顺序无关），所以没有划线的存档签名和以前逐字相同；同一份备份导两遍、第二遍照样全是跳过。
-// 只差划线的两个存档是两个存档（和隐藏标记那条已知副作用同类：划过线的存档再恢复划线之前的备份，会多出一个存档）。
-// 追加时带一个标签，免得和作者注释的位置混淆（两者都可能单独出现）
+// 划线（ChatRecord.highlights）【不算】判重的内容（用户 2026-11-28 定的）：只差划线的两个存档是同一个存档，
+// 恢复时不新增存档，而是把备份里的划线并进本机那个（planBackupImport 的 highlightMerges、highlight.js mergeHighlights）。
+// 所以签名和划线功能出现之前逐字相同。（2026-11-28 第一版曾把划线追加进签名，结果「本机没划线、备份划过线」会多出一个几乎一样的存档。）
 export const chatSig = rec => {
     const base = [rec?.name ?? '', rec?.messages ?? [], isObj(rec?.variables) ? rec.variables : {}];
     const note = storedAuthorNote(rec?.authorNote);
-    const hl = highlightSigPart(rec?.highlights, Array.isArray(rec?.messages) ? rec.messages : []);
-    const parts = note ? [...base, note] : base;
-    return canonical(hl ? [...parts, { highlights: hl }] : parts);
+    return canonical(note ? [...base, note] : base);
 };
 export const presetSig = rec => JSON.stringify(rec?.preset);
 
@@ -868,6 +865,12 @@ function unionContent(g, localG, backupG, { summary, newId, now, cardIdMap }) {
  *   presets: Object[],            新预设的 PresetRecord（新 id）
  *   indexes: Object[],            新卡的存档目录（buildIndex 的结果）
  *   merges: {cardId: string, chats: Object[]}[],   并进【已有的卡】的存档（它们的目录要在写入的事务里读出来再补条目）
+ *   highlightMerges: {cardId: string, chatId: string, copies: Highlight[][]}[],
+ *                                 要并进【本机已有存档】的划线（备份里的存档和它除划线外完全相同，chatSig）。copies：备份里每个这样的存档的划线
+ *                                 （已按消息清洗）。写入事务里现读那条存档记录，按顺序 mergeChatHighlights 进去、只改 highlights；
+ *                                 只列真的会并进新东西（新划线或补上的备注）的存档，所以同一份备份导第二遍这里是空的
+ *   summary 另有 highlightsMerged（并进已有存档的划线条数）、highlightNotesFilled（给本机已有的同位置划线补上了几条备注）、highlightChats（涉及几个存档）。
+ *   备份里两个除划线外相同、都不在本机的存档：只进来第一个，后面的划线并进它（还在 chats 里，直接改；不计入上面三个数）
  *   cardvars: {cardId: string, value: CardVars}[],        新建的卡的 cardvars:<id>（规范化过）
  *   cardvarsMerges: {cardId: string, value: CardVars}[],  并进【已有的卡】的 cardvars（写入事务里和本机那条按键取并集，见 cardvars.js unionCardVars）
  *   global: Object|null,          要写进 'global' 的新记录；null = 不用动
@@ -885,8 +888,9 @@ function unionContent(g, localG, backupG, { summary, newId, now, cardIdMap }) {
 export function planBackupImport(backup, existing, { newId, now, fresh = false, applySettings = false }) {
     const summary = { cardsAdded: 0, cardsMerged: 0, chatsAdded: 0, chatsDup: 0, presetsAdded: 0, presetsDup: 0,
         personasAdded: 0, personasDup: 0, booksAdded: 0, booksDup: 0, booksRenamed: 0, booksRebound: 0, regexAdded: 0, regexDup: 0, notesAdded: 0, notesDup: 0, varsAdded: 0, varsDup: 0,
+        highlightsMerged: 0, highlightNotesFilled: 0, highlightChats: 0,
         settingsApplied: [], renamed: [], skipped: [], notes: [], worldKept: [], worldReenabled: [] };
-    const out = { cards: [], chats: [], presets: [], indexes: [], merges: [], cardvars: [], cardvarsMerges: [], global: null, settingsApplied: summary.settingsApplied, target: null, summary };
+    const out = { cards: [], chats: [], presets: [], indexes: [], merges: [], highlightMerges: [], cardvars: [], cardvarsMerges: [], global: null, settingsApplied: summary.settingsApplied, target: null, summary };
     const ex = { cards: existing?.cards ?? [], chats: existing?.chats ?? [], presets: existing?.presets ?? [] };
 
     // ── 预设 ──
@@ -926,13 +930,18 @@ export function planBackupImport(backup, existing, { newId, now, fresh = false, 
     // 内容签名 → 导入后挂到哪张卡（已有的卡，或这次新建的卡）。备份里两张一模一样的卡也会并成一张
     const cardBySig = new Map();
     for (const c of ex.cards) if (isObj(c) && isObj(c.card)) { const s = cardSig(c); if (!cardBySig.has(s)) cardBySig.set(s, { id: c.id, isNew: false, rec: c }); }
-    // 每张卡（含新建的）已有存档的签名 → 存档 id，用来跳过重复的存档
+    // 每张卡（含新建的）已有存档的签名 → {id, rec, isNew}，用来跳过重复的存档、把重复存档的划线并进去。
+    // 本机自己就有两个签名相同的存档（只差划线，按旧规矩恢复出来的）：认存储里排在前面的那个，划线只并进它
     const chatSigs = new Map();
     for (const ch of ex.chats) {
         if (!isObj(ch) || chatProblem(ch)) continue;
         if (!chatSigs.has(ch.cardId)) chatSigs.set(ch.cardId, new Map());
-        chatSigs.get(ch.cardId).set(chatSig(ch), ch.id);
+        const s = chatSig(ch), m = chatSigs.get(ch.cardId);
+        if (!m.has(s)) m.set(s, { id: ch.id, rec: ch, isNew: false });
     }
+    // 并进【本机已有存档】的划线：'卡id\n存档id' → {cardId, chatId, copies（备份里每个重复存档的划线各一份，清洗过，按出现顺序）,
+    // list（按计划合并后的）, added, filled}。只记真的会有变化的（没有新划线可并 = 不写，同一份备份导第二遍零写入）
+    const hlMerges = new Map();
     const mergeMap = new Map();   // 已有卡 id → 并进去的新存档
     // 备份里的卡 id → 导入后的卡 id（新建的卡是新 id；内容和本机已有的相同而没新建的，指向本机那张）。
     // 额外世界书的绑定（books[].cards）靠它换算；格式不对被跳过的卡不在里面，绑定到它的 id 会被丢掉
@@ -999,7 +1008,32 @@ export function planBackupImport(backup, existing, { newId, now, fresh = false, 
             const why = chatProblem(ch);
             if (why) { summary.skipped.push(`角色卡${label}的第 ${j + 1} 个存档${typeof ch?.name === 'string' ? `「${ch.name}」` : ''}（${why}）`); return; }
             const s = chatSig(ch);
-            if (sigs.has(s)) { chatMap.set(ch.id, sigs.get(s)); summary.chatsDup++; return; }
+            const dup = sigs.get(s);
+            if (dup) {
+                chatMap.set(ch.id, dup.id);
+                summary.chatsDup++;
+                // 除划线以外完全相同：备份里的划线并进那个存档（规矩见 highlight.js mergeHighlights）。备份里的先按它自己的消息清洗——
+                // 消息和那个存档的一样（签名相同），所以按哪边清洗结果都一样
+                if (ch.highlights !== undefined) {
+                    const theirs = storedHighlights(ch.highlights, chatDoc(ch.messages));
+                    if (theirs) {
+                        if (dup.isNew) {
+                            // 备份里两个互为重复的存档（都不在本机）：进来的是第一个，后面的划线并进它（它还在 out.chats 里，直接改）
+                            const r = mergeHighlights(dup.rec.highlights, theirs, chatDoc(dup.rec.messages));
+                            if (r.changed) dup.rec.highlights = r.list;
+                        } else {
+                            const k = `${target.id}\n${dup.id}`;
+                            const prev = hlMerges.get(k);
+                            const r = mergeHighlights(prev ? prev.list : dup.rec.highlights, theirs, chatDoc(dup.rec.messages));
+                            if (r.changed) {
+                                if (prev) { prev.copies.push(theirs); prev.list = r.list; prev.added += r.added; prev.filled += r.filled; }
+                                else hlMerges.set(k, { cardId: target.id, chatId: dup.id, copies: [theirs], list: r.list, added: r.added, filled: r.filled });
+                            }
+                        }
+                    }
+                }
+                return;
+            }
             const { id: _old, ...rest } = ch;
             const iso = now.toISOString();
             const rec = { ...structuredClone(rest), id: newId(), cardId: target.id, name: nameOf(ch.name, '导入的存档'),
@@ -1009,7 +1043,7 @@ export function planBackupImport(backup, existing, { newId, now, fresh = false, 
             // 划线：按这个存档的消息清洗后再存（越界 / 坏的丢掉，一条不剩就不写这个键），和读档时的容错一致。id 和建立时间原样保留
             if ('highlights' in rec) { const hl = storedHighlights(rec.highlights, chatDoc(rec.messages)); if (hl) rec.highlights = hl; else delete rec.highlights; }
             out.chats.push(rec);
-            sigs.set(s, rec.id);
+            sigs.set(s, { id: rec.id, rec, isNew: true });
             if (ch.id !== undefined) chatMap.set(ch.id, rec.id);
             if (!latest || String(rec.updatedAt ?? '') > String(latest.updatedAt ?? '')) latest = rec;
             if (!target.isNew) {
@@ -1028,6 +1062,9 @@ export function planBackupImport(backup, existing, { newId, now, fresh = false, 
 
     for (const c of out.cards) out.indexes.push(buildIndex(c.id, out.chats.filter(x => x.cardId === c.id)));
     out.merges = [...mergeMap].map(([cardId, chats]) => ({ cardId, chats }));
+    out.highlightMerges = [...hlMerges.values()].map(({ cardId, chatId, copies }) => ({ cardId, chatId, copies }));
+    for (const m of hlMerges.values()) { summary.highlightsMerged += m.added; summary.highlightNotesFilled += m.filled; }
+    summary.highlightChats = hlMerges.size;
     if (best) out.target = { cardId: best.cardId, chatId: best.chatId };
 
     // ── 全局记录：内容取并集；设置看 fresh / applySettings；当前选择永远不从备份拿 ──
@@ -1139,6 +1176,34 @@ export function mergeIndex(idx, cardId, chats) {
 }
 
 /**
+ * 把备份里的划线（planBackupImport 的 highlightMerges[].copies，按顺序）并进一条本机已有的存档记录（导入时在写入事务里调用：rec 是事务里刚读出来的）。
+ * 只改 highlights：消息、变量、作者注释、名字、updatedAt 一律不动（返回的新记录是 {...rec, highlights}）。
+ * 按事务里现读的记录重算，而不是直接用计划里的结果：这期间迟到的记忆摘要（state.js patchStoredChat）可能改过这条记录，用旧的会把它盖掉。
+ * @returns {{rec: Object|null, added: number, filled: number}}  rec = null：记录不在了 / 没有新东西可并（不写）
+ */
+export function mergeChatHighlights(rec, copies) {
+    if (!isObj(rec)) return { rec: null, added: 0, filled: 0 };
+    const doc = chatDoc(rec.messages);
+    let list = rec.highlights, added = 0, filled = 0;
+    for (const theirs of copies ?? []) {
+        const r = mergeHighlights(list, theirs, doc);
+        if (r.changed) { list = r.list; added += r.added; filled += r.filled; }
+    }
+    if (!added && !filled) return { rec: null, added: 0, filled: 0 };
+    return { rec: { ...rec, highlights: list }, added, filled };
+}
+
+/** 恢复摘要里划线那一句（没有并进任何东西 = null） */
+export function highlightMergeText(s) {
+    const n = s.highlightsMerged ?? 0, f = s.highlightNotesFilled ?? 0, c = s.highlightChats ?? 0;
+    if (!n && !f) return null;
+    const bits = [];
+    if (n) bits.push(`${n} 条划线并进了这里已有的 ${c} 个存档（存档和备份里的相同，没有另外多出存档）`);
+    if (f) bits.push(`${n ? '另外' : ''}给 ${f} 条位置相同、原来没有备注的划线补上了备份里的备注${n ? '' : `（${c} 个存档）`}`);
+    return bits.join('，');
+}
+
+/**
  * 全局记录里的内容逐类怎么说：[新增数的字段, 跳过数的字段, 量词 + 名字, 跳过时的说法]。
  * 全局变量的「跳过」和别的不一样：本机已有这个键就保留本机的值，备份里的值不一定相同，所以不说「完全相同」。
  */
@@ -1162,7 +1227,8 @@ export function summaryText(s) {
     const bits = [];
     const n = k => s[k] ?? 0;
     const added = s.cardsAdded + s.chatsAdded + s.presetsAdded;
-    const contentAdded = CONTENT_SUMMARY.reduce((t, [a]) => t + n(a), 0);
+    // 划线并进已有存档也算「带进来了东西」，不说「没有新增任何东西」
+    const contentAdded = CONTENT_SUMMARY.reduce((t, [a]) => t + n(a), 0) + n('highlightsMerged') + n('highlightNotesFilled');
     const contentDup = CONTENT_SUMMARY.reduce((t, [, d]) => t + n(d), 0);
     if (added) bits.push(`新增 ${s.cardsAdded} 张卡、${s.chatsAdded} 个存档、${s.presetsAdded} 个预设`);
     else if (!contentAdded) bits.push('没有新增任何东西');
@@ -1171,6 +1237,8 @@ export function summaryText(s) {
     const dup = s.chatsDup + s.presetsDup;
     if (dup) bits.push(`跳过了 ${dup} 个重复的（${s.chatsDup} 个存档、${s.presetsDup} 个预设）`);
     for (const [, d, , say] of CONTENT_SUMMARY) if (n(d)) bits.push(say(n(d)));
+    const hl = highlightMergeText(s);
+    if (hl) bits.push(hl);
     if (!added && !contentAdded && (dup || contentDup)) bits[0] = '没有新增任何东西：备份里的内容这里都已经有了';
     if (s.renamed.length) bits.push(`${s.renamed.length} 个重名，名字后面加了序号：${s.renamed.slice(0, 3).join('、')}${s.renamed.length > 3 ? ' 等' : ''}`);
     if (n('booksRenamed')) bits.push(booksRenamedText(n('booksRenamed')));
