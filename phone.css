@@ -1,0 +1,250 @@
+/* ═════════════════════════════════════════════════════════════════
+   手机壳（src/ui/phone/）：第一版只有外观和导航，没有应用的功能。
+   单独一个文件：只影响顶栏的 #phone-toggle 和 #phone 里面的东西，不改 style.css 的任何公共规则。
+
+   · 颜色、圆角、字体、边框宽度全部取自 style.css 的主题变量，所以默认 / Princesse、浅色 / 深色四种组合自动跟着变；
+     手机自己要的几个变量（机身色、机身圆角……）定义在 #phone 上（--ph-*），Princesse 在文件后半段按它的调子覆盖。
+   · 层级：z-index 19，高于窄屏抽屉（16），低于拖放提示（20）、页内弹框（25，含恢复备份的遮罩和确认框）、提示条（30）。
+   · 宽屏（> 900px，和 drawer.js 的断点一致）：浮在页面上的手机形状窗口，位置由 JS 写在 left / top 上（可拖动）；
+     窄屏：铺满全屏，没有机身边框。
+   ═════════════════════════════════════════════════════════════════ */
+
+/* ── 顶栏的入口按钮 ── */
+/* 选择器写成 #top-bar #phone-toggle（比 style.css 里按钮的 hover / 主题规则高一档），只留图标，不要边框和 Princesse 的底线 */
+#top-bar #phone-toggle {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 32px; padding: 0; border: 0; background: transparent; color: var(--dim); box-shadow: none;
+}
+#top-bar #phone-toggle:hover { color: var(--text); background: transparent; box-shadow: none; }
+#top-bar #phone-toggle[aria-expanded="true"] { color: var(--accent); }
+#top-bar #phone-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; box-shadow: none; }
+
+/* ── 手机本体 ── */
+#phone {
+  /* 手机自己的变量（都可以被主题覆盖） */
+  --ph-w: 336px;
+  --ph-status-h: calc(38px + env(safe-area-inset-top, 0px));
+  --ph-bezel: #17181b;                       /* 机身 */
+  --ph-bezel-w: 9px;
+  --ph-outline: transparent;                 /* 机身外沿的一圈细线（深色下让黑机身和页面分得开） */
+  --ph-r: calc(var(--radius-large) * 2.6);   /* 机身外圆角；主题把 --radius-large 设成 0 时就是方的 */
+  --ph-shadow: 0 18px 50px rgb(0 0 0 / .32);
+  --ph-focus: var(--accent);
+  --ph-tile-r: calc(var(--radius-card) * 2);
+  --ph-ink: var(--text);
+  position: fixed; z-index: 19; left: 0; top: 0;
+  width: var(--ph-w); height: min(700px, calc(100vh - 16px)); height: min(700px, calc(100dvh - 16px));
+  color: var(--ph-ink); font-family: var(--font-ui);
+  user-select: none; -webkit-user-select: none;
+}
+@media (prefers-color-scheme: dark) {
+  #phone { --ph-bezel: #08090a; --ph-outline: var(--line); --ph-shadow: 0 18px 50px rgb(0 0 0 / .6); }
+}
+/* 收起 = 隐藏，不是移除：#phone 和里面的常驻层 .ph-persist 一直在 DOM 里（音乐以后挂在那里，见 phone.js 文件头） */
+#phone[data-open="0"] { display: none; }
+
+#phone button {                               /* 抹掉 style.css 里通用按钮的盒子；box-shadow 用 !important 是为了压住 Princesse 的悬停底线 */
+  appearance: none; margin: 0; padding: 0; border: 0; border-radius: 0; background: none; min-height: 0;
+  font: inherit; color: inherit; text-align: inherit; cursor: pointer; box-shadow: none !important;
+}
+#phone button:focus-visible { outline: 2px solid var(--ph-focus); outline-offset: 2px; }
+
+.ph-frame {
+  position: absolute; inset: 0; box-sizing: border-box; overflow: hidden;
+  background: var(--ph-bezel); border: var(--ph-bezel-w) solid var(--ph-bezel); border-radius: var(--ph-r);
+  box-shadow: var(--ph-shadow), 0 0 0 1px var(--ph-outline);
+}
+#phone[data-open="1"] .ph-frame { animation: ph-in .2s ease-out; }
+@keyframes ph-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+.ph-screen {
+  position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--bg);
+  border-radius: max(0px, calc(var(--ph-r) - var(--ph-bezel-w)));
+}
+
+/* ── 壁纸：纯 CSS，颜色取自主题变量（强调色和信息色各占一角，叠在面板底色上），所以各主题自动不同 ── */
+.ph-wall {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(120% 55% at 10% 0%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 62%),
+    radial-gradient(90% 50% at 100% 100%, color-mix(in srgb, var(--info) 26%, transparent), transparent 64%),
+    linear-gradient(170deg, var(--panel-2), var(--bg));
+}
+.ph-wall::before {                            /* 一个大圆圈，只是添点几何感 */
+  content: ""; position: absolute; width: 150%; aspect-ratio: 1; left: -25%; bottom: -62%;
+  border: var(--border-width) solid color-mix(in srgb, var(--text) 14%, transparent); border-radius: 50%;
+}
+.ph-wall::after {
+  content: ""; position: absolute; width: 110%; aspect-ratio: 1; left: -5%; bottom: -48%;
+  border: var(--border-width) solid color-mix(in srgb, var(--text) 9%, transparent); border-radius: 50%;
+}
+
+/* ── 状态栏（兼拖动把手） ── */
+.ph-statusbar {
+  position: absolute; z-index: 3; left: 0; right: 0; top: 0; height: var(--ph-status-h); box-sizing: border-box;
+  padding: env(safe-area-inset-top, 0px) 20px 0 24px; display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; letter-spacing: .02em; color: var(--ph-ink); touch-action: none;
+}
+.ph-spacer { flex: 1; }
+.ph-statusbar svg { display: block; }
+.ph-sig { display: inline-flex; }
+.ph-sig .slash { display: none; }
+.ph-sig[data-online="0"] .b { opacity: .3; }
+.ph-sig[data-online="0"] .slash { display: block; }
+.ph-bat { display: inline-flex; align-items: center; gap: 4px; }
+.ph-bat-pct { font-size: 11px; font-weight: 600; }
+.ph-bat[data-level="unknown"] .ph-bat-pct { display: none; }       /* 拿不到真实电量就不写百分比 */
+.ph-bat[data-charging="1"] .lvl { fill: var(--ok); }
+.ph-statusbar::before {                       /* 前置摄像头的小孔，只在宽屏的机身上有 */
+  content: ""; position: absolute; left: 50%; top: 11px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%;
+  background: var(--ph-bezel); display: none;
+}
+@media (min-width: 901px) {
+  .ph-statusbar { cursor: grab; }
+  .ph-statusbar::before { display: block; }
+  #phone.ph-dragging .ph-statusbar { cursor: grabbing; }
+}
+
+/* ── 子视图 ── */
+.ph-views { position: absolute; inset: 0; z-index: 1; }
+.ph-view {
+  position: absolute; inset: 0; box-sizing: border-box; display: flex; flex-direction: column;
+  padding: var(--ph-status-h) 0 28px;
+}
+.ph-view[hidden] { display: none; }
+
+/* 锁屏：很大的时间、日期，下面一个假指纹 */
+.ph-lock { align-items: center; text-align: center; transition: transform .3s ease-in, opacity .3s ease-in; }
+.ph-lock.ph-leaving { transform: translateY(-12%); opacity: 0; }
+.ph-lock-clock { margin-top: 14%; }
+.ph-lock-time { font-size: 84px; line-height: 1; font-weight: 300; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.ph-lock-date { margin-top: 12px; font-size: 15px; color: color-mix(in srgb, var(--ph-ink) 78%, transparent); }
+.ph-lock-foot { margin-top: auto; padding-bottom: 8%; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.ph-finger {
+  position: relative; width: 68px; height: 68px; display: grid; place-items: center; border-radius: 50%;
+  background: color-mix(in srgb, var(--panel) 62%, transparent); color: var(--ph-ink);
+}
+#phone .ph-finger { border: 1.5px solid color-mix(in srgb, var(--ph-ink) 38%, transparent); border-radius: 50%; }   /* 带 #phone：压过上面 #phone button 的 border:0 */
+.ph-finger .ph-ico svg { width: 34px; height: 34px; }
+.ph-finger-ring { position: absolute; inset: -4px; border: 2px solid var(--accent); border-radius: inherit; opacity: 0; pointer-events: none; }
+.ph-scanning .ph-finger-ring { animation: ph-scan .45s ease-out; }
+@keyframes ph-scan { 0% { opacity: .95; transform: scale(.82); } 100% { opacity: 0; transform: scale(1.4); } }
+.ph-lock-hint { font-size: 12px; color: var(--dim); }
+
+/* 桌面：按清单自动排的格子 */
+.ph-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px 6px; align-content: start; padding: 26px 18px 0; }
+.ph-tile { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; color: var(--ph-ink); }
+.ph-tile-plate {
+  position: relative; width: 58px; height: 58px; display: grid; place-items: center; box-sizing: border-box;
+  border-radius: var(--ph-tile-r); background: var(--panel); border: var(--border-width) solid var(--line);
+  box-shadow: var(--shadow-card), 0 3px 10px rgb(0 0 0 / .1); color: var(--accent);
+  transition: transform var(--transition-fast);
+}
+.ph-tile:active .ph-tile-plate { transform: scale(.94); }
+.ph-tile-plate .ph-ico svg { width: 28px; height: 28px; }
+.ph-ico { display: inline-flex; position: relative; z-index: 1; }
+.ph-tile-name { font-size: 12px; font-weight: 500; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 应用画面：标题栏（返回 + 名字）+ 内容 */
+.ph-app { background: var(--bg); }
+.ph-app-head {
+  flex: none; display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; height: 46px;
+  background: var(--panel); border-bottom: var(--border-width) solid var(--line);
+}
+.ph-back { width: 44px; height: 46px; display: grid; place-items: center; color: var(--ph-ink); }
+.ph-back .ph-ico svg { width: 22px; height: 22px; }
+.ph-app-title { margin: 0; text-align: center; font-size: 16px; font-weight: 600; }
+.ph-app-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; user-select: text; -webkit-user-select: text; }
+.ph-empty { height: 80%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--dim); text-align: center; }
+.ph-empty .ph-ico svg { width: 40px; height: 40px; }
+.ph-empty p { margin: 6px 0 0; font-size: var(--font-size-md); }
+.ph-set-list { background: var(--panel); border: var(--border-width) solid var(--line); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+.ph-set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; font-size: var(--font-size-base); }
+.ph-set-row + .ph-set-row { border-top: var(--border-width) solid var(--line); }
+.ph-set-row select { max-width: 60%; }
+.ph-set-todo .dim { font-size: var(--font-size-md); }
+
+/* 底部 home 指示条：点一下 = 回桌面 / 收起手机（和顶栏图标同一件事） */
+.ph-homebar { position: absolute; z-index: 3; left: 0; right: 0; bottom: 0; height: 28px; display: grid; place-items: center; }
+.ph-homebar-line { width: 112px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--ph-ink) 55%, transparent); }
+
+/* 常驻层：不随应用切换、不随收起销毁，以后音乐播放器挂在这里；自己不占地方、不拦点击 */
+.ph-persist { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+
+/* ── 窄屏：铺满全屏，没有机身 ──
+   JS 在宽屏时把位置写在 left / top 上（内联样式），从宽屏缩到窄屏时它还在，所以这里用 !important 盖掉 */
+@media (max-width: 900px) {
+  #phone { inset: 0 !important; width: 100% !important; height: 100% !important; }
+  .ph-frame { border: 0; border-radius: 0; box-shadow: none; }
+  .ph-screen { border-radius: 0; }
+  .ph-statusbar { padding-left: 22px; padding-right: 18px; }
+  .ph-view { padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px)); }
+  .ph-homebar { height: calc(28px + env(safe-area-inset-bottom, 0px)); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .ph-lock-time { font-size: 96px; }
+  .ph-tile-plate { width: 62px; height: 62px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #phone[data-open="1"] .ph-frame, .ph-scanning .ph-finger-ring { animation: none; }
+  .ph-lock, .ph-tile-plate { transition: none; }
+}
+
+/* ═════════════════════════════════════════════════════════════════
+   Princesse：细线、切角、宋体
+   机身是象牙白 / 纯黑的方框加一圈 1px 线（没有阴影）；图标底板和指纹是"切掉四角"的细线框（和它的主按钮同一种切角），
+   底板用两层伪元素画：外层铺线色、里层铺底色并往里缩 1px，露出的就是 1px 的线（clip-path 会连边框一起裁，所以不能直接用 border）；
+   应用名全大写、拉开字距；壁纸浅色是象牙白 + 一朵淡淡的山茶花（themes/princesse/ 里现成的素材），深色是纯黑 + 一点香槟金的光。
+   ═════════════════════════════════════════════════════════════════ */
+:root[data-theme="princesse"] #phone {
+  --ph-bezel: var(--panel);
+  --ph-bezel-w: 7px;
+  --ph-outline: var(--pr-strong-line);
+  --ph-r: 2px;
+  --ph-shadow: 0 0 0 0 transparent;   /* 不能写 none：它放在逗号列表里（见 .ph-frame 的 box-shadow），none 在列表里是非法的 */
+  --ph-focus: var(--pr-gold);
+  --ph-tile-r: 0;
+  --ph-cut: 9px;
+}
+:root[data-theme="princesse"] .ph-frame { border-radius: 2px; }
+:root[data-theme="princesse"] .ph-screen { border-radius: 0; outline: var(--border-width) solid var(--line); outline-offset: -1px; }
+:root[data-theme="princesse"] .ph-statusbar::before { display: none; }
+:root[data-theme="princesse"] .ph-statusbar { font-weight: 400; letter-spacing: .08em; }
+
+:root[data-theme="princesse"] #phone :is(.ph-tile-plate, .ph-finger) {
+  border: 0; border-radius: 0; background: transparent; box-shadow: none !important; transition: none;
+}
+:root[data-theme="princesse"] :is(.ph-tile-plate, .ph-finger)::before,
+:root[data-theme="princesse"] :is(.ph-tile-plate, .ph-finger)::after {
+  content: ""; position: absolute; pointer-events: none;
+  clip-path: polygon(var(--ph-cut) 0, calc(100% - var(--ph-cut)) 0, 100% var(--ph-cut), 100% calc(100% - var(--ph-cut)),
+                     calc(100% - var(--ph-cut)) 100%, var(--ph-cut) 100%, 0 calc(100% - var(--ph-cut)), 0 var(--ph-cut));
+}
+:root[data-theme="princesse"] :is(.ph-tile-plate, .ph-finger)::before { inset: 0; background: var(--pr-strong-line); }
+:root[data-theme="princesse"] :is(.ph-tile-plate, .ph-finger)::after { inset: 1px; background: var(--panel); --ph-cut: 8px; }
+:root[data-theme="princesse"] .ph-finger::after { background: var(--bg); }
+:root[data-theme="princesse"] .ph-tile-plate { color: var(--text); }
+:root[data-theme="princesse"] .ph-finger-ring { border-radius: 0; inset: -5px; border-width: 1px; border-color: var(--pr-gold); }
+:root[data-theme="princesse"] .ph-tile-name { font-size: 10.5px; font-weight: 400; text-transform: uppercase; letter-spacing: .16em; margin-right: -.16em; }
+:root[data-theme="princesse"] .ph-lock-time { font-weight: 300; letter-spacing: .04em; font-family: var(--pr-font-heading); }
+:root[data-theme="princesse"] .ph-lock-date { letter-spacing: .14em; }
+:root[data-theme="princesse"] .ph-lock-hint { letter-spacing: .12em; }
+:root[data-theme="princesse"] .ph-app-title { font-weight: 400; text-transform: uppercase; letter-spacing: .24em; margin-right: -.24em; font-size: 14px; }
+:root[data-theme="princesse"] .ph-homebar-line { border-radius: 0; height: 2px; width: 96px; }
+:root[data-theme="princesse"] .ph-wall {
+  background: linear-gradient(170deg, var(--panel-2), var(--bg));
+}
+:root[data-theme="princesse"] .ph-wall::before {   /* 山茶花：墨线素材当遮罩，颜色取 --text，只露很淡的一层（浅色同 --pr-deco-opacity 的量级） */
+  inset: auto; width: 128%; height: 82%; left: -28%; bottom: -16%; aspect-ratio: auto; border: 0; border-radius: 0;
+  background: var(--text); opacity: .075;
+  -webkit-mask: var(--pr-deco-image) center / contain no-repeat; mask: var(--pr-deco-image) center / contain no-repeat;
+}
+:root[data-theme="princesse"] .ph-wall::after { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="princesse"] .ph-wall {
+    background: radial-gradient(120% 60% at 85% 0%, rgb(210 190 142 / .16), transparent 62%), #000;
+  }
+  :root[data-theme="princesse"] .ph-wall::before { display: none; }   /* 深色：只留金色的光，山茶花是浅色版的装饰 */
+  :root[data-theme="princesse"] .ph-wall::after {
+    display: block; content: ""; position: absolute; width: 130%; aspect-ratio: 1; left: -15%; bottom: -66%;
+    border: var(--border-width) solid rgb(236 230 217 / .16); border-radius: 50%;
+  }
+}

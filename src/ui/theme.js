@@ -24,11 +24,15 @@ export function applyTheme(id) {
 /** 当前生效的主题 id（以 <html> 上的属性为准；没有就是默认） */
 export const currentTheme = () => themeOrDefault(document.documentElement.getAttribute('data-theme') ?? DEFAULT_THEME);
 
-/** 按清单（重新）填下拉框并选中当前主题。清单变了（测试里临时加一项）可以再调一次 */
+/** 所有主题下拉框：「杂项」页的 #theme-select，加上用 bindThemeSelect 登记过的（手机 Settings 里那个）。它们永远同步 */
+const themeSelects = () => document.querySelectorAll('#theme-select, select[data-theme-select]');
+
+/** 按清单（重新）填所有主题下拉框并选中当前主题。清单变了（测试里临时加一项）可以再调一次 */
 export function fillThemeSelect() {
-    const sel = document.querySelector('#theme-select');
-    if (!sel) return;
     const cur = currentTheme();
+    for (const sel of themeSelects()) fillOne(sel, cur);
+}
+function fillOne(sel, cur) {
     sel.replaceChildren(...THEMES.map(t => {
         const o = document.createElement('option');
         o.value = t.id; o.textContent = t.name; o.selected = t.id === cur;
@@ -68,9 +72,20 @@ export function initTheme() {
     applyTheme(id);   // 内联脚本已经设过一次；这里再按清单校验一遍（清单里没有的 id 在这里被去掉）
     fillThemeSelect();
     const sel = document.querySelector('#theme-select');
-    sel?.addEventListener('change', () => {
-        const next = themeOrDefault(sel.value);
-        applyTheme(next);
-        writeStored(next);
-    });
+    sel?.addEventListener('change', () => chooseTheme(sel.value));
+}
+
+/** 用户选了一个主题：生效、记住、让别的下拉框跟着变 */
+function chooseTheme(value) {
+    const next = themeOrDefault(value);
+    applyTheme(next);
+    writeStored(next);
+    fillThemeSelect();
+}
+
+/** 把另一个下拉框也接上同一套主题逻辑（手机的 Settings 用）：填选项、选了就走 chooseTheme；之后和「杂项」页那个互相同步 */
+export function bindThemeSelect(sel) {
+    sel.dataset.themeSelect = '1';
+    fillOne(sel, currentTheme());
+    sel.addEventListener('change', () => chooseTheme(sel.value));
 }

@@ -22,6 +22,8 @@
      不依赖任何模块，读不了就当默认。值只接受简单的 id（字母数字下划线连字符），'default' 不设属性；清单里有没有这个 id 由 src/ui/theme.js 启动时再校验 -->
 <script>try{var t=localStorage.getItem('smalltalk.theme');if(t&&t!=='default'&&/^[A-Za-z0-9_-]{1,32}$/.test(t))document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
 <link rel="stylesheet" href="style.css">
+<!-- 手机壳的样式（src/ui/phone/）：单独一个文件，只影响 #phone 和顶栏的 #phone-toggle -->
+<link rel="stylesheet" href="phone.css">
 <!-- 酒馆页面上放「用户自定义 CSS」的那个 <style>（酒馆的 #custom-style）。我们自己不用它，留着空的给「允许直接操作页面」的脚本改；
      拆掉脚本时内容换回空的（ui/page-guard.js） -->
 <style id="custom-style"></style>
@@ -46,6 +48,8 @@
   <!-- 手动模式开着时的提醒（点它去「杂项」页关掉）；没开就不显示 -->
   <button id="manual-badge" class="manual-badge" type="button" hidden title="手动模式已开：发送时不调用模型，prompt 拼好后由你自己去用、再把回复贴回来。点这里去「杂项」页关闭">手动</button>
   <span id="health" class="health" title="模型桥状态">●</span>
+  <!-- 手机壳的入口（src/ui/phone/phone.js 接上点击；图标是内联 SVG，线条画，颜色跟文字色） -->
+  <button id="phone-toggle" class="phone-btn" type="button" title="打开手机" aria-label="打开手机" aria-expanded="false" aria-controls="phone"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M10.6 18.6h2.8"/></svg></button>
 </header>
 <!-- 导入文件的选择框：顶栏的「导入」按钮没了，现在由「存档」页顶部的「导入…」按钮点它。拖文件进页面也走同一条路（src/app.js） -->
 <input type="file" id="file-input" multiple accept=".png,.json,.jsonl,.zip" hidden>
