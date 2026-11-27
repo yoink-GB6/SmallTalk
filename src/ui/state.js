@@ -734,6 +734,59 @@ export function patchStoredChat(cardId, chatId, mutate) {
     return p;
 }
 
+/**
+ * 改【非当前】存档的划线（摘抄页的删除 / 改备注；入口是 archive.js editHighlightsAcross，契约和交叠分析见 types.js「划线」）。
+ * edits：[{cardId, chatId, remove?: id[], notes?: {id: 备注}}]，都不能是当前存档（有就整批 reject）。
+ * 【一个事务】里现读这些存档记录和它们所在卡的目录 → 按消息清洗后改（highlight.js editHighlights）→ 只换 highlights（一条不剩删键）写回，
+ * 同一事务里用 indexEntry 重算目录条目。消息、记忆摘要、变量、作者注释、名字、updatedAt 都是事务里读到的原样。存档不在了就跳过（不复活）。
+ * 和 patchStoredChat 一样【排在写入链后面】：之前已经排进去的保存先写完；之后的切换 / 删存档（op 先 flushNow = 等这条链）要等它写完才动存档。
+ * 所以它不需要存档层的锁，生成中也能做（2026-11-28 用户定的：生成写的是当前存档，和别的存档无关）。
+ * 当前卡的目录在内存里也有一份（persist.index，每次保存整份写回）：写完后跟着换，并 save() 一次——万一有一次保存在这之前就拼好了
+ * （拼的时候用的是旧条目）、排在这次事务后面执行，把 hl 盖回了旧值，这次保存会再写一遍对的。
+ * @returns {Promise<{removed: number, noted: number, gone: number, touched: {cardId, chatId}[]}>}  事务失败 → reject（IndexedDB 整体回滚，什么都没写）
+ */
+export function writeStoredHighlights(edits) {
+    if (persist.readOnly || persist.stopped) return Promise.reject(new Error(persist.stopped ? STOPPED_TEXT : '这个标签页是只读的'));
+    if (edits.some(e => e.cardId === persist.cardId && e.chatId === persist.chatId)) return Promise.reject(new Error('当前存档的划线要走内存'));
+    const ck = edits.map(e => chatKey(e.cardId, e.chatId));
+    const cards = [...new Set(edits.map(e => e.cardId))];
+    const ik = cards.map(indexKey);
+    const touched = [];
+    let gone = 0;
+    const prev = writing;
+    const p = prev.then(() => store.transact([...ck, ...ik], values => {
+        touched.length = 0; gone = 0;   // 回调重跑时从头算
+        const ops = [];
+        const idx = new Map();
+        edits.forEach((e, i) => {
+            const rec = values[i];
+            if (!rec || typeof rec !== 'object') { gone++; return; }
+            const clean = storedHighlights(rec.highlights, chatDoc(rec.messages)) ?? [];
+            const r = editHighlights(clean, e);
+            if (!r.changed) return;
+            const { highlights: _old, ...rest } = rec;
+            const next = r.list.length ? { ...rest, highlights: r.list } : rest;
+            ops.push({ set: ck[i], value: next });
+            touched.push({ cardId: e.cardId, chatId: e.chatId, entry: indexEntry(next), removed: r.removed, noted: r.noted });
+            const old = idx.get(e.cardId) ?? values[ck.length + cards.indexOf(e.cardId)];
+            if (old?.chats?.[e.chatId]) idx.set(e.cardId, { ...old, chats: { ...old.chats, [e.chatId]: indexEntry(next) } });
+        });
+        for (const [cardId, v] of idx) ops.push({ set: indexKey(cardId), value: v });
+        return ops;
+    })).then(() => {
+        let mine = false;
+        for (const t of touched) {
+            if (t.cardId === persist.cardId && persist.index?.cardId === t.cardId && persist.index.chats[t.chatId]) { persist.index.chats[t.chatId] = t.entry; mine = true; }
+        }
+        if (mine) save();
+        return { removed: touched.reduce((n, t) => n + t.removed, 0), noted: touched.reduce((n, t) => n + t.noted, 0), gone,
+            touched: touched.map(t => ({ cardId: t.cardId, chatId: t.chatId })) };
+    });
+    // 链上保留之前那次写入的成败（这次失败不算「保存失败」，调用方自己看返回值）
+    writing = p.then(() => prev, () => prev);
+    return p;
+}
+
 // ───────────────────────────── 多预设 ─────────────────────────────
 // 存储：每个预设一个键 'preset:<id>' → PresetRecord；'global' 里只有 activePresetId（规则见 types.js GlobalRecord）。
 // 运行时：state.preset / state.presetName 永远是「当前预设」，别的模块照旧原地改它、调 save()；

@@ -150,6 +150,49 @@ function scheduleRepaint() {
     paintTimer = setTimeout(repaintHighlights, 40);
 }
 
+/**
+ * 摘抄页「跳转」：把这条划线滚到聊天区可视范围的中间偏上（第一行距顶部约 30%）。跨楼的按第一楼那一段。
+ * id 传 null（调用方已知它画不出来）或画不出来（在别的候选上、整段被显示正则吃掉、浏览器不支持高亮 API）→ 退回到把那一楼的顶部滚到聊天区顶上。返回是否定位到了划线本身。
+ * 为什么要校正：消息里的图片、前端卡 iframe 晚一点才撑开高度，上面的楼变高会把位置顶走；高亮也可能在 DOM 变动后被重建（Range 换了新的）。
+ * 所以每次都按 id 从当前画着的高亮里重新找 Range 再算：滚完之后下一帧校正一次、400 ms 后再一次，聊天区里还没加载完的图片 / iframe
+ * 加载完各校正一次（3 秒内）。期间用户自己动了滚动条就不再校正。
+ */
+export function scrollToHighlight(id, row) {
+    const box = $('#chat');
+    if (!box) return false;
+    const find = () => {
+        const hits = entries.filter(e => e.id === id && e.range.startContainer.isConnected);
+        return hits.length ? hits.reduce((a, b) => (b.floor < a.floor ? b : a)) : null;
+    };
+    if (id != null && !find() && supported()) repaintHighlights();   // 刚换过存档 / 重画过、还没重建：先重建一次
+    let last = -1;
+    const place = () => {
+        const e = find();
+        const b = box.getBoundingClientRect();
+        let target;
+        if (e) {
+            const rects = e.range.getClientRects();
+            const r = rects.length ? rects[0] : e.range.getBoundingClientRect();
+            target = box.scrollTop + (r.top - b.top) - box.clientHeight * 0.3;
+        } else if (row?.isConnected) {
+            target = box.scrollTop + (row.getBoundingClientRect().top - b.top) - 8;
+        } else return false;
+        box.scrollTop = Math.max(0, Math.min(target, box.scrollHeight - box.clientHeight));
+        last = box.scrollTop;
+        return !!e;
+    };
+    const found = place();
+    const until = Date.now() + 3000;
+    const again = () => { if (Date.now() > until || Math.abs(box.scrollTop - last) > 2) return; place(); };
+    requestAnimationFrame(() => requestAnimationFrame(again));
+    setTimeout(again, 400);
+    for (const el of box.querySelectorAll('img, iframe')) {
+        if (el.tagName === 'IMG' && el.complete) continue;
+        el.addEventListener('load', again, { once: true });
+    }
+    return found;
+}
+
 /** 摘抄页「跳转」之后让这条划线闪一下：换一层更醒目的高亮，1.6 秒后撤掉。滚动由调用方做 */
 export function flashHighlight(id) {
     const hit = entries.filter(e => e.id === id);

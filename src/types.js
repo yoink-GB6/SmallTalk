@@ -850,10 +850,19 @@ export {};
  *   换候选 / 重新生成：不动，按 swipe 号决定显示哪些（visibleHighlights：两端的候选都正好是现在显示的才显示）。
  *   原地换开场白（startChat）：当前存档的划线清空；开场白上划过线的存档不再算「没动过」（archive.js untouched），会新开存档。
  *   摘抄页删除 / 改备注（2026-11-28，可以跨存档、跨卡）：唯一入口 archive.js editHighlightsAcross(edits)，edits = [{cardId, chatId, remove?: id[], notes?: {id: 备注}}]
- *     （纯逻辑 highlight.js editHighlights）。当前存档改内存（state.js editChatHighlights）再落盘；非当前存档在【一个事务】里现读记录、
- *     按消息清洗后改、只换 highlights（一条不剩删键）、同一事务里重算目录条目——消息、记忆摘要、变量、作者注释、名字、updatedAt 一律不动。
- *     在存档层的 op 里做（期间不能切换）；全成或全不成（当前存档那部分在事务失败时换回去）。
- *     拒绝（archive.js highlightEditBlocked）：只读标签页、停止保存之后、正在恢复备份、正在生成（非当前存档的也拒，同删除非当前存档）、正在切换。
+ *     （纯逻辑 highlight.js editHighlights）。当前存档改内存（state.js editChatHighlights）再落盘；非当前存档走 state.js writeStoredHighlights：
+ *     【一个事务】里现读记录、按消息清洗后改、只换 highlights（一条不剩删键）、同一事务里重算目录条目——消息、记忆摘要、变量、作者注释、名字、updatedAt 一律不动。
+ *     只涉及非当前存档的：不走存档层的 op，排在写入链（state.js writing）后面，【生成中也能做】。有当前存档的：在 op 里做；全成或全不成（当前存档那部分在事务失败时换回去）。
+ *     拒绝（archive.js highlightEditBlocked）：只读标签页、停止保存之后、正在恢复备份、正在切换 / 上一个存档操作没做完——全拒；
+ *       正在生成：里面有当前存档的划线就整批拒绝（「里面有当前存档的划线，等这次回复生成完」），只涉及别的存档的照做。
+ *     生成中改别的存档为什么不会和别的写入互相盖（2026-11-28 分析）：
+ *       - 生成只改 state（当前存档）：流式结束、失败删占位都是改 state.chat 后 save()，buildWrites 只写当前存档那一条记录、当前卡的目录、卡记录等，
+ *         从不写别的存档的记录。别的存档的记录只有这几个写入者：这里、迟到的记忆摘要（state.js patchStoredChat）、改名、删存档、恢复备份。
+ *       - 这里、patchStoredChat、改名（renameChat）都是「一个 IndexedDB readwrite 事务里先读再写」，范围重叠的事务由浏览器串行执行，
+ *         后执行的读到的是先执行的结果，所以各自的字段（highlights / 消息上的 memory 和 updatedAt / name）都留得住；前两者还排在同一条写入链上。
+ *       - 删存档、恢复备份走 op，op 先 flushNow = 等写入链，排在这次之后；存档删了之后这里读到 undefined 就跳过、不复活；恢复备份期间这里被拒。
+ *       - 唯一被整份覆盖的是当前卡的目录（persist.index 每次保存整份写回）：拼得早、执行得晚的一次保存可能把这次改的 hl 计数盖回旧值，
+ *         所以写完后更新内存里的目录条目并 save() 一次，最终是对的；中间那一下 hl 偏大只会让摘抄页多读一次记录，不会漏；划线本身在存档记录里，不受影响。
  */
 
 /**

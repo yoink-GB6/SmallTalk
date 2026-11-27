@@ -1240,7 +1240,7 @@ details[open] > .scr-head::before { content: '▾'; }
 .hl-pop .row { flex-wrap: nowrap; }
 .hl-pop .row .ghost { margin-left: auto; }
 .hl-pop-why { font-size: var(--font-size-sm); }
-/* 「摘抄」页：三层折叠（角色 → 存档 → 每条划线一行：名字 + 备注标记 + 楼号 + 删除）；顶上搜索框和批量 */
+/* 「摘抄」页：三层折叠（角色 → 存档 → 每条划线一行：名字 + 楼号 + 删除）；顶上搜索框和批量 */
 .exc-toolbar { flex-wrap: wrap; }
 .exc-search { flex: 1 1 10em; min-width: 0; }
 .exc-card { margin-bottom: 6px; }
@@ -1256,6 +1256,5 @@ details[open] > .scr-head::before { content: '▾'; }
 .exc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .exc-note-input { flex: 1; min-width: 0; }
 .exc-pick { flex: none; margin: 0; }
-.exc-notemark { flex: none; font-size: var(--font-size-xs); padding: 0 6px; border: var(--border-width) solid var(--hl-line); border-radius: var(--radius-pill); color: var(--hl-line); }
 .exc-floor { flex: none; font-size: var(--font-size-xs); }
 .exc-item > button.ghost { flex: none; }

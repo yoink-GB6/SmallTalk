@@ -3,7 +3,7 @@
 // 界面（用户定的）：
 //   - 默认只展开当前卡的当前存档那一支，其余折着（同世界书页「默认只展开对当前卡生效的」）；展开状态只在内存里（view.open）。
 //   - 每条一行，只显示一个「名字」：有备注显示备注，没有就是摘抄的前 15 个字（excerpts.js excerptName）。悬停（title）看全文和备注。
-//   - 单击一行 = 跳转（切到那张卡的那个存档、滚到那一楼、闪一下）；双击 = 就地改备注（Enter / 失焦保存，Esc 取消，清空 = 去掉备注）。
+//   - 单击一行 = 跳转（切到那张卡的那个存档、把这条划线滚到聊天区中间偏上、闪一下）；双击 = 就地改备注（Enter / 失焦保存，Esc 取消，清空 = 去掉备注）。
 //     单击的跳转推迟 CLICK_DELAY 毫秒：这期间同一行来了第二下就算双击，不跳。不靠浏览器的 dblclick 事件（手机上双触不一定有），
 //     而是自己数两次 click 的间隔。
 //   - 顶上一个搜索框（按摘抄文字和备注筛，不分大小写、按字面；匹配到的那几支自动展开），旁边「批量」：
@@ -29,7 +29,7 @@ import { state, persist, currentHighlights } from './state.js';
 import { store } from '../store.js';
 import { chatKey } from '../migrate.js';
 import { listCards, cardChats, liveChats, openChat, editHighlightsAcross, highlightEditBlocked } from './archive.js';   // 循环依赖：只在函数体里调用
-import { flashHighlight, repaintHighlights } from './highlight-ui.js';     // 同上
+import { flashHighlight, repaintHighlights, scrollToHighlight } from './highlight-ui.js';     // 同上
 import { restoreActive } from './backup.js';                              // 同上
 import { closeDrawer } from './drawer.js';
 import { chatDoc, isShown, sliceHighlight, storedHighlights, comparePoint } from '../highlight.js';
@@ -99,7 +99,11 @@ async function gather(force) {
 
 // ───────────────────────────── 操作 ─────────────────────────────
 
-/** 跳转：切到那张卡的那个存档，滚到那一楼，闪一下 */
+/**
+ * 跳转：切到那张卡的那个存档，把这条划线滚到聊天区中间偏上（highlight-ui.js scrollToHighlight，跨楼的按第一楼那一段），闪一下。
+ * 以前是 row.scrollIntoView({block: 'center'})：把【整楼】居中——楼比聊天区还高时露出来的是这一楼的中段，划在靠后位置的字落在屏幕外。
+ * 划线现在画不出来（别的候选上、被显示正则吃掉）：滚到那一楼的顶部，提示照旧。
+ */
 async function jump(cardId, chatId, hl) {
     const same = cardId === persist.cardId && chatId === persist.chatId;
     if (!same && !await openChat(cardId, chatId)) return;   // 被拒（只读、生成中……）openChat 里已经弹过原因
@@ -108,9 +112,12 @@ async function jump(cardId, chatId, hl) {
     const floor = cur?.from.floor ?? hl.from.floor;
     const row = $('#chat').children[floor];
     if (!cur || !row) { toast('这条划线对应的楼已经不在了', 'error'); return; }
-    row.scrollIntoView({ block: 'center' });
-    if (!isShown(cur, chatDoc(state.chat))) {
-        toast(`这条划在另一个候选上（第 ${cur.from.swipe + 1} 个候选），那一楼现在显示的不是它`);
+    const shown = isShown(cur, chatDoc(state.chat));
+    const found = scrollToHighlight(shown ? cur.id : null, row);
+    const eaten = shown && !found && typeof Highlight !== 'undefined' && !!globalThis.CSS?.highlights;
+    if (!shown || eaten) {
+        toast(eaten ? '这条划线在现在的显示里画不出来（可能被显示正则换掉了），已滚到那一楼'
+            : `这条划在另一个候选上（第 ${cur.from.swipe + 1} 个候选），那一楼现在显示的不是它`);
         row.classList.add('hl-flash-row');
         setTimeout(() => row.classList.remove('hl-flash-row'), 1700);
         return;
@@ -132,7 +139,7 @@ async function applyEdits(edits) {
 
 /** 单条删除（当前存档和别的存档都行）。带备注的先确认 */
 async function removeOne(cardId, chatId, hl) {
-    const why = highlightEditBlocked();
+    const why = highlightEditBlocked([{ cardId, chatId }]);
     if (why) return void toast(why, 'error');
     if (hl.note && !confirm('这条划线带着备注，删除后备注也没了。确定删除？')) return;
     await applyEdits([{ cardId, chatId, remove: [hl.id] }]);
@@ -140,10 +147,11 @@ async function removeOne(cardId, chatId, hl) {
 
 /** 批量删除：勾选的全部（含被搜索藏起来的），确认一次，一个事务 */
 async function batchDelete() {
-    const why = highlightEditBlocked();
-    if (why) return void toast(why, 'error');
     const { edits, count, chats } = picksToEdits(groupsNow, view.picked);
     if (!count) return;
+    // 生成中：只涉及别的存档的照删；里面有当前存档的整批拒绝（archive.js highlightEditBlocked）
+    const why = highlightEditBlocked(edits);
+    if (why) return void toast(why, 'error');
     if (!confirm(`删除选中的 ${count} 条划线（涉及 ${chats} 个存档）？删掉就找不回来了。`)) return;
     const r = await applyEdits(edits);
     if (r) {
@@ -155,7 +163,7 @@ async function batchDelete() {
 
 /** 双击：把这一行的名字换成输入框改备注 */
 function startEdit(row, g, c, it) {
-    const why = highlightEditBlocked();
+    const why = highlightEditBlocked([{ cardId: g.cardId, chatId: c.chatId }]);
     if (why) return void toast(why, 'error');
     const name = row.querySelector('.exc-name');
     if (!name || view.editing) return;
@@ -238,7 +246,6 @@ function rowOf(g, c, it, ro) {
         'data-fk': 'exc-item', 'data-id': hl.id, 'data-key': key, title },
         view.batch ? checkbox(picked ? 'all' : 'none', 'exc-pick', '选中这条划线', e => { if (e.target.checked) view.picked.add(key); else view.picked.delete(key); draw(); }) : null,
         h('span', { class: 'exc-name', 'data-fk': 'exc-name' }, excerptName(hl, it.text)),
-        hl.note ? h('span', { class: 'exc-notemark', 'data-fk': 'exc-notemark', title: '这条有备注（名字显示的就是备注）' }, '备注') : null,
         h('span', { class: 'dim exc-floor' }, hl.from.floor === hl.to.floor ? `#${hl.from.floor}` : `#${hl.from.floor}–${hl.to.floor}`),
         view.batch ? null : h('button', { class: 'ghost', 'data-fk': 'exc-del', type: 'button', disabled: ro,
             title: ro ? (highlightEditBlocked() ?? '现在不能删') : '删除这条划线', onclick: e => { e.stopPropagation(); removeOne(g.cardId, c.chatId, hl); } }, '删除'));
