@@ -22,7 +22,7 @@ import {
 import { importFiles, importBlockedReason } from './importer.js';   // 循环依赖（importer 导入 archive）：只在函数体里调用
 import { openSearch } from './chat-search.js';   // 「搜索聊天记录」按钮用（只在函数体里调用）
 import { closeDrawer } from './drawer.js';
-import { writerOwnsTab, drawWriter, openWriter } from './card-writer.js';   // 循环依赖：只在函数体里调用
+import { writerOwnsTab, drawWriter, openWriter, editCard } from './card-writer.js';   // 循环依赖：只在函数体里调用
 
 // ───────────────────────────── 运行期界面状态（不持久化，刷新页面就没了） ─────────────────────────────
 
@@ -191,10 +191,10 @@ function draw() {
     // 聊天内搜索的入口（原来在「杂项」页）：排在这一行最后。窄屏下检查器是盖住聊天区的抽屉，先收起才看得到搜索栏
     const searchBtn = h('button', { id: 'misc-search-btn', 'data-fk': 'misc-search', type: 'button', title: '在当前存档里搜索',
         onclick: () => { closeDrawer(); openSearch(); } }, '搜索聊天记录');
-    // 「写卡」（card-writer.js）：排在这一行最前面。点了这一页换成写卡页，编辑的是当前卡（没有卡时只有「新建空白卡」）。
+    // 「写卡」（card-writer.js）：排在这一行最前面。新建一张空白卡（已经有一张没动过的空白卡就打开它）并进写卡页；改已有的卡用每行的「编辑」。
     // 只读标签页里禁用（写卡页里全是写操作），和这一页别的操作按钮一样
     const writeBtn = h('button', { 'data-fk': 'card-writer', type: 'button', disabled: ro,
-        title: ro ? RO_TIP : '写卡：从零新建一张角色卡，或者改当前卡的名字、头像、人设、开场白', onclick: openWriter }, '写卡');
+        title: ro ? RO_TIP : '写卡：新建一张空白角色卡并打开写卡页（已经有一张没动过的空白卡时直接打开它）', onclick: () => act(openWriter) }, '写卡');
     // 整体备份 / 恢复在「杂项」页（src/ui/backup.js 的 backupSection），这一页不再有备份那一行
     const kids = [];
     if (!cards.length) {
@@ -332,6 +332,8 @@ function cardBlock(c, ro) {
         // 当前卡这一行的开场白下拉框落脚处（draw 里把 #greeting-select 挪进来；只有一个开场白时它自己是 hidden 的）
         c.active ? h('span', { class: 'arch-greeting-slot' }) : null,
         actionBtn('导入', `导入酒馆的聊天记录（.jsonl），作为「${c.name}」的新存档并切过去`, `import:${c.id}`, ro, () => { picker.dataset.card = c.id; picker.click(); }),
+        // 写卡页改这张卡（card-writer.js editCard：不是当前卡先切过去，聊天区当预览；切换被拒就留在这一页）
+        actionBtn('编辑', `在写卡页改「${c.name}」的名字、头像、人设、开场白${c.active ? '' : '（会先切到这张卡）'}`, `edit:${c.id}`, ro, () => act(() => editCard(c.id))),
         // 每卡的导出 / 删除按钮收进了顶上的「批量」。这个位置显示这张卡最后聊天的日期（没有存档记录就不显示）
         c.lastDay ? h('span', { class: 'dim arch-last', title: '最后聊天的日期' }, c.lastDay) : null);
 

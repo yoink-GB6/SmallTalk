@@ -1,6 +1,9 @@
 // 「写卡」：在应用里从零写一张角色卡，或者改当前卡的名字 / 头像 / 人设（描述）/ 开场白（含备选开场白）。
-// 入口是「存档」页最上面的「写卡」按钮；写卡页、挑对比的角色列表、对比用的只读视图都画在「存档」页（#tab-archive）里，不加页签、不加导航栏。
-// 纯逻辑（空白卡、字段写回、开场白列表、头像尺寸）在 ../card-writer.js；建卡走 archive.js 的 createBlankCard（= 现成的导入卡流程）。
+// 两个入口（用户 2026-11-28 定的：「写卡」= 新建，「编辑」= 改已有的卡）：
+//   「存档」页最上面的「写卡」：打开一张还完全没动过的空白卡，没有就新建一张（archive.js openBlankCard，新建 = 现成的导入卡流程）；
+//   每张卡那一行的「编辑」：这张卡不是当前卡就先走现成的切卡（聊天区要当预览），再进写卡页（editCard）。
+// 写卡页、挑对比的角色列表、对比用的只读视图都画在「存档」页（#tab-archive）里，不加页签、不加导航栏。
+// 纯逻辑（空白卡、没动过的判断、字段写回、开场白列表、头像尺寸）在 ../card-writer.js。
 //
 // 画面的几种状态（只在内存里，刷新页面就回到普通的「存档」页；卡的内容本身是随写随存的）：
 //   mode null      普通的「存档」页（tab-archive.js 自己画）
@@ -27,7 +30,7 @@ import {
     applyCardFields, greetingList, setGreetings, filteredIndex, slotOfFiltered, followSlot, applyListOp, fitWithin, AVATAR_MAX_SIDE,
 } from '../card-writer.js';
 import { parseCardScripts, flattenScripts } from '../scripts.js';
-import { createBlankCard, refreshGreetingInPlace, chatUntouched, listCards } from './archive.js';   // 循环依赖：只在函数体里调用
+import { openBlankCard, switchCard, newChat, refreshGreetingInPlace, chatUntouched, listCards } from './archive.js';   // 循环依赖：只在函数体里调用
 import { renderArchiveTab } from './tab-archive.js';                     // 同上
 import { chatWriteBlocked } from './chat.js';                            // 同上
 import { renderAll } from './shell.js';                                  // 同上
@@ -45,8 +48,30 @@ function go(mode, compareId = null) {
     renderArchiveTab(true);
 }
 
-/** 「存档」页顶上的「写卡」按钮 */
-export const openWriter = () => go('write');
+/**
+ * 「存档」页顶上的「写卡」：打开一张没动过的空白卡（没有就新建），进写卡页。被拒（生成中、只读……）时 archive.js 已经提示了原因，不进写卡页
+ */
+export async function openWriter() {
+    const r = await openBlankCard();
+    if (!r || !state.card) return;
+    clearTimeout(previewTimer);
+    toast(r === 'created' ? `已新建空白卡「${state.card.name}」：写名字、人设和开场白，聊天区就是预览`
+        : `还有一张没动过的空白卡「${state.card.name}」，接着用它`, 'ok');
+    go('write');
+    // 新卡第一件事多半是改名：焦点放进名字框并选中
+    setTimeout(() => { const el = page?.els.name; if (el && page.cardId === persist.cardId) { el.focus(); el.select(); } }, 0);
+}
+
+/**
+ * 每张卡那一行的「编辑」：不是当前卡就先切过去（现成的 switchCard：先落盘、生成中 / 只读 / 正在恢复时拒绝并提示原因），
+ * 切成了才进写卡页；被拒就停在「存档」页
+ */
+export async function editCard(cardId) {
+    if (cardId !== persist.cardId) {
+        if (!await switchCard(cardId) || persist.cardId !== cardId) return;
+    }
+    go('write');
+}
 /** 写卡页的「返回」：回到普通的「存档」页 */
 export const closeWriter = () => go(null);
 /** 写卡页的「对比参考…」：一列角色 */
@@ -78,8 +103,6 @@ const HINTS = {
     avatar: '可选。顶栏和「存档」页显示用；导出时有头像就导出成 PNG 卡（数据写在这张图里），没有就是 JSON。'
         + `不裁剪；长边超过 ${AVATAR_MAX_SIDE} 像素的图会等比缩小。`,
     description: '角色是谁：外貌、性格、说话方式、背景、和 {{user}} 的关系。对应酒馆卡的「描述」（description），每次都会发给模型。',
-    greetings: '角色说的第一句话：新对话开始时显示在第 0 楼，也给模型定下文风和格式。可以用 {{user}}、{{char}}。'
-        + '可以写好几个：第一个是默认的（酒馆卡的 first_mes），其余是备选（alternate_greetings），新对话时在「存档」页选用哪个；空着的不算。',
     extras: '按关键词才出现的设定（地点、人物、物品……）放世界书；美化（把回复里的标记换成好看的样子）是这张卡自带的正则。'
         + '两个按钮跳到现成的页，编辑的就是这张卡自带的那份。',
 };
@@ -116,16 +139,13 @@ export function drawWriter(tab) {
 
 function buildPage(cardId) {
     const back = h('button', { 'data-fk': 'cw-back', type: 'button', title: '回到「存档」页', onclick: closeWriter }, '← 返回');
-    const create = h('button', { class: 'primary', 'data-fk': 'cw-new', type: 'button', title: '新建一张空白卡并切过去：聊天区就是它的实时预览',
-        onclick: onCreate }, '新建空白卡');
-    const head = h('div', { class: 'summary cw-bar' }, back, h('b', null, '写卡'), h('span', { class: 'spacer' }), create);
+    const head = h('div', { class: 'summary cw-bar' }, back, h('b', null, '写卡'), h('span', { class: 'spacer' }));
     const why = h('div', { class: 'dim cw-why', 'data-fk': 'cw-why', hidden: true });
 
+    // 正常进不到这里（「写卡」会先建好卡）：写卡页开着时当前卡被删光了之类
     if (!cardId) {
-        const root = h('div', { class: 'cw', 'data-card': '' }, head, why,
-            h('div', { class: 'empty' }, '现在还没有角色卡。点「新建空白卡」从零开始写一张：它会直接成为当前卡，聊天区就是开场白和美化的实时预览。'
-                + '也可以先导入一张卡，再回到这里改它。'));
-        return { root, cardId, greetRows: [], els: { create, why } };
+        const root = h('div', { class: 'cw', 'data-card': '' }, head, why, h('div', { class: 'empty' }, '现在没有当前卡。点「← 返回」回到「存档」页。'));
+        return { root, cardId, greetRows: [], els: { why } };
     }
 
     const compare = h('button', { 'data-fk': 'cw-compare', type: 'button', title: '挑一张别的卡，只读地看它的内容，写的时候参考', onclick: pickCompare }, '对比参考…');
@@ -147,14 +167,14 @@ function buildPage(cardId) {
     const regexBtn = h('button', { 'data-fk': 'cw-regex', type: 'button', onclick: () => $('#tabs button[data-tab="regex"]')?.click() }, '编辑美化（正则）');
 
     const field = (label, hint, ...kids) => h('div', { class: 'cw-field' },
-        h('div', { class: 'cw-label' }, label), h('div', { class: 'dim cw-hint' }, hint), ...kids);
+        h('div', { class: 'cw-label' }, label), hint ? h('div', { class: 'dim cw-hint' }, hint) : null, ...kids);
     const root = h('div', { class: 'cw', 'data-card': cardId }, head, why,
         field('名字', HINTS.name, name, nameWarn),
         field('头像', HINTS.avatar, h('div', { class: 'row cw-avatar-row' }, img, noImg, pickBtn, dropBtn)),
         field('人设（描述）', HINTS.description, desc),
-        field('开场白', HINTS.greetings, greetBox, h('div', { class: 'row' }, addGreet), greetNote),
+        field('开场白', null, greetBox, h('div', { class: 'row' }, addGreet), greetNote),
         field('世界书和美化', HINTS.extras, h('div', { class: 'row' }, worldBtn, regexBtn)));
-    return { root, cardId, greetRows: [], els: { create, compare, why, name, nameWarn, img, noImg, pickBtn, dropBtn, desc, greetBox, addGreet, greetNote, worldBtn, regexBtn } };
+    return { root, cardId, greetRows: [], els: { compare, why, name, nameWarn, img, noImg, pickBtn, dropBtn, desc, greetBox, addGreet, greetNote, worldBtn, regexBtn } };
 }
 
 /**
@@ -169,9 +189,11 @@ function buildGreetRows(n) {
             onclick: () => listOp({ type: 'move', from: i, to: i - 1 }) }, '↑');
         const down = h('button', { class: 'ghost', 'data-fk': `cw-greet-down:${i}`, type: 'button', title: '往后挪', onclick: () => listOp({ type: 'move', from: i, to: i + 1 }) }, '↓');
         const del = h('button', { class: 'ghost', 'data-fk': `cw-greet-del:${i}`, type: 'button', title: '删除这个开场白', onclick: () => listOp({ type: 'delete', at: i }) }, '删除');
+        const cur = h('input', { type: 'radio', name: `cw-cur-${page.cardId}`, 'data-fk': `cw-greet-cur:${i}`, onchange: () => useGreeting(i) });
+        const curLabel = h('label', { class: 'cw-greet-cur', title: '当前存档开头用的是这个开场白。点别的那个：当前存档改用它（只有还没聊过的存档能这样换）' }, cur, '当前');
         const row = h('div', { class: 'cw-greet-row', 'data-i': String(i) },
-            h('div', { class: 'row cw-greet-head' }, h('span', { class: 'cw-greet-label' }, i ? `备选 ${i}` : '第一个（默认）'), h('span', { class: 'spacer' }), up, down, del), ta);
-        return { row, ta, up, down, del };
+            h('div', { class: 'row cw-greet-head' }, h('span', { class: 'cw-greet-label' }, i ? `备选 ${i}` : '第一个（默认）'), curLabel, h('span', { class: 'spacer' }), up, down, del), ta);
+        return { row, ta, up, down, del, cur };
     });
     page.els.greetBox.replaceChildren(...page.greetRows.map(r => r.row));
 }
@@ -183,8 +205,6 @@ function updatePage() {
     const ro = why !== null;
     e.why.hidden = !why;
     e.why.textContent = why ? `现在不能改：${why}` : '';
-    // 新建也是一次「切到另一张卡」：照 archive.js canSwitch 的条件（它自己还会再查一遍并提示）
-    e.create.disabled = ro || ui.busy || persist.readOnly;
     if (!page.cardId) return;
     const c = state.card;
     const setVal = (el, v) => { if (document.activeElement !== el && el.value !== v) el.value = v; };
@@ -193,7 +213,10 @@ function updatePage() {
     setVal(e.desc, c.description ?? '');
     const list = greetingList(c);
     if (page.greetRows.length !== list.length) buildGreetRows(list.length);
+    const curSlot = trackedSlot();   // 当前存档用的是哪一个（跟丢了 / 开的时候一个都没有 = 哪个都不勾）
     page.greetRows.forEach((r, i) => {
+        r.cur.checked = curSlot === i;
+        r.cur.disabled = ro || !list[i];   // 空着的开场白不能选（新对话也不会用到它）
         setVal(r.ta, list[i]);
         r.ta.readOnly = ro;
         r.up.disabled = ro || i === 0;
@@ -248,6 +271,29 @@ function onGreeting(i, el) {
     if (!setGreetings(state.card, list)) return;
     save();
     schedulePreview(true);
+}
+
+/**
+ * 点某个开场白的「当前」：当前存档改用它。走「存档」页换开场白的同一条路（archive.js newChat：存档没动过就原地换第 0 楼，
+ * 照常发酒馆的 CHAT_CREATED 等事件），换完存档的 greeting 记录变了，trackedSlot 自然认到这一项。
+ * 存档已经聊过：不能原地换（newChat 会另开一个存档，这里不该这么做），提示一句，勾选回到原来那个。
+ */
+async function useGreeting(i) {
+    if (!stillMine() || !guard()) { updatePage(); return; }
+    const list = greetingList(state.card);
+    const fi = filteredIndex(list, i);
+    if (fi < 0) { updatePage(); return; }
+    if (!chatUntouched()) {
+        toast('这个存档已经聊过了，开新对话时在「存档」页选', 'error');
+        updatePage();
+        return;
+    }
+    clearTimeout(previewTimer);   // 还没到点的预览别在换完之后又按旧的一项重建
+    previewChat = false;
+    const sel = $('#greeting-select');
+    if (sel && fi < sel.options.length) sel.value = String(fi);   // 「存档」页的下拉框也指到这一项
+    await newChat(fi);
+    if (page) updatePage();
 }
 
 /** 增 / 删 / 挪：先算出存档用的那个开场白去了哪，再改列表、存盘、重画 */
@@ -319,19 +365,6 @@ function schedulePreview(chat) {
         if (!updated) { ui.previewIsSent = false; renderAll(); }   // 顶栏、开场白下拉框（renderTopbar）、拼装预览
         if (page && page.cardId === cardId) updatePage();
     }, 300);
-}
-
-async function onCreate() {
-    if (!guard()) return;
-    clearTimeout(previewTimer);
-    greetingNote = '';
-    const ok = await createBlankCard();
-    if (!ok || !state.card) return;
-    toast(`已新建空白卡「${state.card.name}」：在这里写名字、人设和开场白，聊天区就是预览`, 'ok');
-    view.mode = 'write';
-    renderArchiveTab(true);
-    // 新卡第一件事多半是改名：焦点放进名字框并选中
-    setTimeout(() => { const el = page?.els.name; if (el && page.cardId === persist.cardId) { el.focus(); el.select(); } }, 0);
 }
 
 // ───────────────────────────── 头像 ─────────────────────────────

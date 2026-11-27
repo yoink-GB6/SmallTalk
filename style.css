@@ -1227,6 +1227,7 @@ details[open] > .scr-head::before { content: '▾'; }
 .cw-greet-row { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .cw-greet-head { gap: 4px; }
 .cw-greet-label { font-size: var(--font-size-sm); color: var(--dim); }
+.cw-greet-cur { display: inline-flex; align-items: center; gap: 3px; font-size: var(--font-size-sm); color: var(--dim); cursor: pointer; }
 .cw-pick-list { display: flex; flex-direction: column; gap: 4px; }
 .cw-pick-item { display: flex; align-items: center; gap: 8px; min-width: 0; text-align: left; padding: 6px 8px; }
 .cw-pick-item .arch-name { min-width: 0; }

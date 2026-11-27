@@ -30,7 +30,7 @@ import { askRegexFate, moveAndFlush, undoMove, refreshRegexViews, moveSummary } 
 import { enabledScripts } from '../regex-move.js';
 import { restoreActive } from './backup.js';   // 循环依赖（backup.js 导入本文件）：只在函数体里调用
 import { cardVarsKey } from '../cardvars.js';
-import { blankCard, uniqueCardName, BLANK_CARD_NAME } from '../card-writer.js';
+import { blankCard, uniqueCardName, isPristineBlank, BLANK_CARD_NAME } from '../card-writer.js';
 
 // ───────────────────────────── 读列表 ─────────────────────────────
 
@@ -631,16 +631,29 @@ export const addCard = (parsed, avatar) => op(async () => {
 });
 
 /**
- * 「写卡」页的「新建空白卡」：造一张空白的酒馆 V2 卡（card-writer.js blankCard），交给上面的 addCard——
- * 和导入一张卡走同一条路（新卡记录 + 第一个存档 + 切过去），存储、目录、切卡、导出都不另写一套。
+ * 「存档」页顶上的「写卡」：先找一张「还完全没动过的空白卡」（card-writer.js isPristineBlank）直接打开（不是当前卡就切过去），
+ * 没有才新建——不然每点一次就多一张空卡。
+ * 新建：造一张空白的酒馆 V2 卡（card-writer.js blankCard），交给上面的 addCard——和导入一张卡走同一条路
+ * （新卡记录 + 第一个存档 + 切过去），存储、目录、切卡、导出都不另写一套。
  * 名字避开已有的卡（「新角色」「新角色 2」…），所以 addCard 不会弹「已经有同名卡、要不要更新」。
  * 开场白是空的：startChat 什么都不推，第一个存档是 0 楼（markGreeting 记下空开场白，untouched 照样认它「没动过」）。
- * @returns {Promise<boolean>} 建成了没有（只读 / 生成中 / 停止保存 / 上一个操作没做完时 op 会拒绝并提示）
+ * 判断要读每张卡的记录和存档目录（当前卡用内存里的）；只读不写。
+ * @returns {Promise<'reused'|'created'|false>} false = 没成（只读 / 生成中 / 停止保存 / 上一个操作没做完时 op 会拒绝并提示）
  */
-export async function createBlankCard() {
+export async function openBlankCard() {
     if (!canSwitch()) return false;
-    const name = uniqueCardName(BLANK_CARD_NAME, (await listCards()).map(c => c.name));
-    return addCard(blankCard(name), '');
+    const cards = await listCards();
+    for (const c of cards) {
+        const cur = c.id === persist.cardId;
+        const rec = cur ? currentCardRec() : await store.get(cardKey(c.id));
+        if (!rec) continue;
+        const counts = (cur ? liveChats() : await cardChats(c.id)).map(x => x.count ?? 0);
+        if (!isPristineBlank(rec.card, rec.avatar ?? '', counts)) continue;
+        if (!cur && !await switchCard(c.id)) return false;
+        return persist.cardId === c.id ? 'reused' : false;
+    }
+    const name = uniqueCardName(BLANK_CARD_NAME, cards.map(c => c.name));
+    return (await addCard(blankCard(name), '')) ? 'created' : false;
 }
 
 /** 当前存档「没动过」吗（untouched 给写卡页用：决定开场白下面那行提示怎么说） */

@@ -78,6 +78,29 @@ export function uniqueCardName(base, taken) {
     for (let i = 2; ; i++) if (!used.has(`${base} ${i}`)) return `${base} ${i}`;
 }
 
+/**
+ * 这张卡是不是「还完全没动过的空白卡」：「存档」页的「写卡」先找这样一张直接打开，没有才新建（不然每点一次就多一张空卡）。
+ * 全部满足才算：
+ *   - 名字是默认名（「新角色」或重名时起的「新角色 2」「新角色 3」…）；
+ *   - 描述、开场白都空，没有备选开场白（空串的备选也不算——那是在写卡页点过「再加一个」）；没有头像；
+ *   - 卡自带的世界书、正则、脚本也都没有（写卡页能跳去加这些，加过就算动过；碰巧叫「新角色」的导入卡多半带着这些）；
+ *   - 每个存档都是 0 楼（空白卡的开场白是空的，没聊过的存档就是 0 楼）。
+ * @param {import('./types.js').Card} card
+ * @param {string} avatar
+ * @param {number[]} chatCounts  这张卡每个存档的楼数（存档目录里的 count）
+ */
+export function isPristineBlank(card, avatar, chatCounts) {
+    if (!isObj(card)) return false;
+    const name = str(card.name);
+    if (name !== BLANK_CARD_NAME && !new RegExp(`^${BLANK_CARD_NAME} \\d+$`).test(name)) return false;
+    if (str(card.description) || str(card.firstMes) || avatar) return false;
+    if (Array.isArray(card.alternateGreetings) && card.alternateGreetings.length) return false;
+    for (const k of ['worldEntries', 'regexScripts', 'scripts']) if (Array.isArray(card[k]) && card[k].length) return false;
+    const ext = card.raw?.data?.extensions;
+    if (isObj(ext) && (ext.tavern_helper !== undefined || ext.TavernHelper_scripts !== undefined)) return false;
+    return (Array.isArray(chatCounts) ? chatCounts : []).every(n => !n);
+}
+
 /** 一张空白卡：Card（parseCard 的结果），raw 就是 blankCardJson */
 export function blankCard(name, now) {
     return parseCard(blankCardJson(name, now));
