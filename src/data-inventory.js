@@ -71,7 +71,7 @@ export const GLOBAL_FIELDS = {
     books: {
         what: '额外导入的世界书 [{name, entries, enabled?: false, scope?: \'cards\', cards?: 卡id[]}]（不是角色卡内嵌的那本）。'
             + '后三个是开关 / 生效范围 / 绑定的卡，默认（启用、所有聊天）时不写（types.js ExtraBook、books.js）',
-        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'remap', export: '「世界书」页：每本书的「导出」（酒馆世界书 JSON，不带开关和绑定）；导入走拖文件 / 「存档」页的导入…（启用、所有聊天）；「杂项」页「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并；开关和绑定按酒馆里的全局选中 / 卡绑定定） / 导出成酒馆目录结构的 zip（worlds/）',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'remap', export: '「世界书」页：每本书的「导出」（酒馆世界书 JSON，不带开关和绑定）；导入走拖文件 / 「存档」页的导入…（启用、所有聊天）；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并；开关和绑定按酒馆里的全局选中 / 卡绑定定） / 导出成酒馆目录结构的 zip（worlds/）',
         how: 'unionBooks：去掉 name、enabled / scope / cards、条目上的 book 之后内容相同的跳过（不管叫什么、开没开、绑给了谁），保留本机那本和它的开关、范围；'
             + '但备份里那本「只对指定的卡」绑定的卡换算成本机的卡 id 后并进本机那本的 cards（本机那本也是「只对指定的卡」时；摘要里的 booksRebound）。'
             + '内容不同而重名的两本都留，后一本名字加「 (2)」（世界书按名字找，名字不能重复），摘要里提醒可能重复发给模型。'
@@ -81,20 +81,20 @@ export const GLOBAL_FIELDS = {
     },
     globalRegex: {
         what: '单独导入的全局正则脚本',
-        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「杂项」页「和酒馆整体互通」：从酒馆整体备份 zip 导入（settings.json 里的全局正则，合并）；导出 zip 不带',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（settings.json 里的全局正则，合并）；导出 zip 不带',
         how: '导入走拖文件 / 「存档」页的导入…；没有单独导出（角色卡导出时只带卡自己的正则）。'
             + '恢复时 unionRegex：去掉 id、origin（运行时的标签）、disabled（开关状态）之后内容相同的跳过，保留本机那条和它的开关；id 和本机的撞了换新 id；不是对象的丢掉',
     },
     persona: {
         what: '当前人设 {name, description, remark?}（永远是当前那一项的副本，宏 {{user}} 和拼装只读名字和描述）。'
             + 'remark = 备注，只用来在列表上区分重名的人设，不发给模型；空备注时不写这个键（personas.js cleanRemark：非字符串丢掉、压成一行、最长 200 字）',
-        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'remap', export: '「人设」页：批量 → 导出（酒馆人设备份文件，备注 ↔ title）/ 导入（合并）；「杂项」页「和酒馆整体互通」：从酒馆整体备份 zip 导入（settings.json 里的人设，含备注，合并、不切换当前人设）；导出 zip 不带',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'remap', export: '「人设」页：批量 → 导出（酒馆人设备份文件，备注 ↔ title）/ 导入（合并）；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（settings.json 里的人设，含备注，合并、不切换当前人设）；导出 zip 不带',
         how: '和 personas 一起合并（unionPersonas → personas.js mergePersonas）：名字、描述、备注都相同的算重复（备注算内容，没有备注 = 空备注）；本机当前人设永远不变。'
             + '备份里只有一个出厂默认人设（User、没有描述、没有备注）时不加进来。空浏览器：有列表时变成列表第一项的副本（当前人设 = 第一个），只有一个人设时原样',
     },
     personas: {
         what: '多人设列表 [{id, name, description, remark?}]；只有一个人设时不写（OPTIONAL_GLOBAL_KEYS）。remark 见 persona',
-        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「人设」页：批量 → 导出 / 导入（合并，personas.js mergePersonas）；「杂项」页「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并）',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「人设」页：批量 → 导出 / 导入（合并，personas.js mergePersonas）；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并）',
         how: '见 persona。导出前先 alignPersonas 把 persona 对齐进列表（因为 activePersonaId 不进备份，读的一方以列表为准）。'
             + '合并后仍只有一个人设（备份里的都是重复的）时不写这个字段，存储形状不变；有新增时本机原来那个变成第一项',
     },
@@ -130,7 +130,7 @@ export const GLOBAL_FIELDS = {
         how: '弹框答「是」才用备份里的（不是对象 / 空对象 = 没有，本机的不动）',
     },
     manual: {
-        what: '手动模式开关（「杂项」页）',
+        what: '手动模式开关（手机 Settings）',
         kind: 'selection', backup: 'no', restore: 'never', fresh: 'default', export: null,
         how: '导出时不写进备份；已有数据：保持本机的；空浏览器：关',
     },
@@ -183,7 +183,7 @@ export const STORE_KEYS = {
     },
     card: {
         key: 'card:<cardId>', what: '角色卡（CardRecord：卡本体 + 头像 + 停在哪个存档）',
-        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「存档」页：卡的导出（酒馆 PNG / JSON）；导入走拖文件 / 导入…；「杂项」页「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（characters/）；「脚本」页：单个脚本 / 文件夹的导出导入（酒馆助手脚本 JSON）',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「存档」页：卡的导出（酒馆 PNG / JSON）；导入走拖文件 / 导入…；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（characters/）；「脚本」页：单个脚本 / 文件夹的导出导入（酒馆助手脚本 JSON）',
         how: '恢复时换新 id；内容相同（cardSig，不看卡自带世界书的开关 card.worldDisabled）的不新建，存档并进已有的卡，本机那张的开关不动；开关跟着卡记录进备份，不进导出的酒馆卡。'
             + '酒馆助手脚本（card.scripts，2026-11-23 第 1 期加、第 2 期起运行；缺省 = 跟着 raw，见 types.js Card.scripts、src/scripts.js）是卡内容的一部分：'
             + '跟着卡记录进整体备份；判重时算内容（代码、名字、开关 enabled 都算，和卡自带正则的 disabled 一样——它们都写在卡文件里），用 cardScripts 的值比，'
@@ -205,7 +205,7 @@ export const STORE_KEYS = {
     },
     chat: {
         key: 'chat:<cardId>:<chatId>', what: '存档（ChatRecord：消息、局部变量、名字、作者注释 authorNote（默认值时不写）、划线 highlights（没有时不写）……）',
-        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「存档」页：存档的导出 / 导入（酒馆 .jsonl；作者注释在头的 chat_metadata.note_*）；「杂项」页「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（chats/<卡文件名>/）',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「存档」页：存档的导出 / 导入（酒馆 .jsonl；作者注释在头的 chat_metadata.note_*）；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（chats/<卡文件名>/）',
         how: '恢复时换新 id；名字 + 消息 + 变量 + 作者注释相同（chatSig）的跳过——作者注释只在不是默认值时才参与比较，所以没有作者注释的存档（含旧备份）判重和以前一样；'
             + '新加进来的存档的作者注释先规范化（坏值回默认）。'
             + '作者注释（2026-11-22 加，types.js ChatRecord.authorNote）是存档内容的一部分：跟着存档进整体备份、跟着 .jsonl 往返；'
@@ -236,7 +236,7 @@ export const STORE_KEYS = {
     },
     preset: {
         key: 'preset:<presetId>', what: '保存下来的预设（PresetRecord）',
-        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「预设」页：导出（酒馆预设 JSON）/ 导入预设；「杂项」页「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（OpenAI Settings/）',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「预设」页：导出（酒馆预设 JSON）/ 导入预设；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（OpenAI Settings/）',
         how: '恢复时换新 id；本体一字不差的跳过，同名不同内容的加「 (2)」。'
             + '酒馆写进预设的连接信息（反代地址 / 密码、附加请求头……）在所有入口去掉、打开页面时从存储里删掉、所有导出出口再去一遍（types.js PresetRecord「预设本体的清洗」）',
     },

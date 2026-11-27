@@ -2,13 +2,12 @@
 //
 // 加一个应用要改的地方：
 //   1. 下面 APPS 加一项 { id, name, icon }（icon 是 icons.js 里的名字，没有就在那边加一个线条图标）；
-//   2. 要有自己的画面就在 buildAppView 里给它加分支（现在 Chat / Music / Reading 是空白占位，Settings 有内容）；
+//   2. 要有自己的画面就在 buildAppView 里给它加分支（现在 Chat / Music / Reading 是空白占位；Settings 有内容：原来右侧面板的「杂项」页整个搬进来了）；
 //   3. phone.css 里一般不用动：桌面是按清单自动排的格子。
 // 第一版全是空壳：这里不读不写任何用户数据。
 
 import { h } from '../dom.js';
 import { icon } from './icons.js';
-import { bindThemeSelect } from '../theme.js';
 
 /** kind: 'view' = 点了进它自己的画面；'exit' = 点了收起手机、露出后面原来的 RP 画面（Meetup） */
 export const APPS = [
@@ -34,14 +33,21 @@ const PLACEHOLDER = {
 export function buildAppView(app, goHome) {
     const body = h('div', { class: 'ph-app-body' });
     if (app.id === 'settings') {
-        // 主题：复用 src/ui/theme.js 的选择逻辑（bindThemeSelect 填选项、选了就切并记进 localStorage，和「杂项」页那个下拉框是同一套、互相同步），这里不另存一份
-        const sel = h('select', { id: 'phone-theme-select', 'aria-label': '界面主题' });
-        bindThemeSelect(sel);
-        body.append(
-            h('div', { class: 'ph-set-list' },
-                h('label', { class: 'ph-set-row', for: 'phone-theme-select' }, h('span', { class: 'ph-set-name' }, '主题'), sel),
-                h('div', { class: 'ph-set-row ph-set-todo' }, h('span', { class: 'ph-set-name' }, '壁纸'), h('span', { class: 'dim' }, '以后在这里换')),
-            ));
+        // 原来右侧面板的「杂项」页整个搬进来了：把 index.html 里的 #tab-misc 这个节点本身挪进这里（不是复制）。
+        // 为什么挪节点而不是在这里重画一份：里面的 id / data-fk（#theme-select、#manual-mode、#misc-rest……）、
+        // 手动模式勾选框的事件（app.js）、renderMiscTab（tab-misc.js）都认这个节点，一份就够，也不会出现两个主题下拉框。
+        // 去掉 class="tab"：那个类是右侧面板「一次只显示一页」的机制（style.css 的 .tab / .tab.active），搬进手机后不归它管。
+        // 内容由 tab-misc.js 的 renderMiscTab 填：每次进入 Settings、Settings 开着时状态变了都会重画（见 shell.js 的 renderInspector）。
+        const misc = document.querySelector('#tab-misc');
+        if (misc) {
+            misc.classList.remove('tab');
+            misc.classList.add('ph-settings');
+            // 壁纸占位放在主题那一行后面（主题行是静态的，不随 renderMiscTab 重画）
+            misc.querySelector('.theme-row')?.after(
+                h('div', { class: 'ph-set-list ph-wall-row' },
+                    h('div', { class: 'ph-set-row ph-set-todo' }, h('span', { class: 'ph-set-name' }, '壁纸'), h('span', { class: 'dim' }, '以后在这里换'))));
+            body.append(misc);
+        }
     } else {
         body.append(h('div', { class: 'ph-empty' }, icon(app.icon), h('p', null, PLACEHOLDER[app.id] ?? '还没做。')));
     }

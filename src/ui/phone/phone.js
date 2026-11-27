@@ -27,6 +27,12 @@
 //
 // 拖动（只在宽屏，> 900px）：抓状态栏拖，位置限制在视口里；位置只在内存里，刷新回到默认（右上角、顶栏下面）。窄屏没有拖动。
 //
+// Settings（原来右侧面板的「杂项」页，整页搬进来了；见 apps.js）：
+//   · 进入 Settings 视图时通过 onPhoneView 通知 app.js 重画它（renderMiscTab），所以收起再打开、从别处跳进来，看到的都是最新的；
+//   · Settings 开着时状态变了（切存档、恢复备份……）由 shell.js 的 renderInspector 用 isSettingsShown() 判断要不要重画，不可见时不白画；
+//   · openSettings(选择器?)：给「点顶栏的"手动"徽标」这类跳转用——手机收着就打开，没解过锁直接当作解锁（不为一个跳转再点一次指纹），
+//     进 Settings 并滚到那一节。
+//
 // 层级：z-index 19，高于窄屏抽屉（16），低于拖放提示（20）、页内弹框（25，含恢复备份的遮罩和各种确认框）、提示条（30）。
 //
 // 本模块导入 drawer.js（只用它的 closeDrawer，在函数体里调用），drawer.js 不导入本模块，不涉及循环依赖。
@@ -53,12 +59,39 @@ const isNarrow = () => matchMedia(NARROW).matches;
 
 export const isPhoneOpen = () => open;
 export const phoneView = () => view;
+/** Settings 现在正显示在屏幕上（手机开着且在 Settings 视图）：shell.js 靠它决定要不要重画那一页 */
+export const isSettingsShown = () => open && view === 'settings';
+
+let viewListener = null;
+/** 登记「切到某个视图」的回调（app.js 用它在进入 Settings 时重画；phone.js 不导入 tab-misc，免得绕圈） */
+export function onPhoneView(fn) { viewListener = fn; }
 
 function showView(next) {
     view = next;
     root.dataset.view = next;
     for (const v of root.querySelectorAll('.ph-view')) v.hidden = v.dataset.view !== next;
     syncChrome();
+    viewListener?.(next);
+}
+
+/**
+ * 打开手机、进 Settings、（可选）滚到某一节。手机收着就打开；没解过锁就直接解锁。
+ * @param {string} [sectionSelector] Settings 里某一节的 CSS 选择器，比如 '#misc-manual'；找不到就停在最上面
+ */
+export function openSettings(sectionSelector) {
+    if (!root) return;
+    unlocked = true;                      // 跳转是用户自己点的，不再让他为此多点一次指纹
+    if (!open) openPhone();
+    unlocking = false;                    // 正在播解锁动效时跳进来：动效的收尾发现已经不用做了（finish 里 wasOpen 为假）
+    showView('settings');
+    const body = root.querySelector('.ph-view[data-view="settings"] .ph-app-body');
+    const target = sectionSelector ? body?.querySelector(sectionSelector) : null;
+    if (body) {
+        body.scrollTop = 0;
+        // 手动算偏移而不是 scrollIntoView：后者可能连手机外面的页面一起滚
+        if (target) body.scrollTop = target.getBoundingClientRect().top - body.getBoundingClientRect().top - 8;
+    }
+    // 不把焦点挪到返回按钮：程序设的焦点会让它画出一圈键盘焦点框，鼠标用户看着像出了问题（点击跳转时没有地方需要焦点）
 }
 
 /** 顶栏图标 / home 条的提示文字、aria 状态跟着当前情形走 */

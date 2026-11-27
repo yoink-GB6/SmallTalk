@@ -43,11 +43,12 @@
 /* 收起 = 隐藏，不是移除：#phone 和里面的常驻层 .ph-persist 一直在 DOM 里（音乐以后挂在那里，见 phone.js 文件头） */
 #phone[data-open="0"] { display: none; }
 
-#phone button {                               /* 抹掉 style.css 里通用按钮的盒子；box-shadow 用 !important 是为了压住 Princesse 的悬停底线 */
+#phone button:not(.ph-settings *) {          /* :not(.ph-settings *)：Settings 里装的是原来「杂项」页的按钮，要保留页面通用按钮的样子，不能被抹掉 */
+  /* 抹掉 style.css 里通用按钮的盒子；box-shadow 用 !important 是为了压住 Princesse 的悬停底线 */
   appearance: none; margin: 0; padding: 0; border: 0; border-radius: 0; background: none; min-height: 0;
   font: inherit; color: inherit; text-align: inherit; cursor: pointer; box-shadow: none !important;
 }
-#phone button:focus-visible { outline: 2px solid var(--ph-focus); outline-offset: 2px; }
+#phone button:not(.ph-settings *):focus-visible { outline: 2px solid var(--ph-focus); outline-offset: 2px; }
 
 .ph-frame {
   position: absolute; inset: 0; box-sizing: border-box; overflow: hidden;
@@ -161,6 +162,18 @@
 .ph-set-row + .ph-set-row { border-top: var(--border-width) solid var(--line); }
 .ph-set-row select { max-width: 60%; }
 .ph-set-todo .dim { font-size: var(--font-size-md); }
+
+/* Settings 里装着原来「杂项」页的内容（节点是 index.html 的 #tab-misc，见 apps.js）：
+   按手机屏幕（电脑上约 310px 宽、手机全屏 390px）排：长说明换行、按钮行折行、宽内容（变量 / 日志）在自己的框里滚，整页不横向溢出。 */
+.ph-settings { min-width: 0; font-size: var(--font-size-md); }
+.ph-settings .section-title { margin-top: 18px; font-size: var(--font-size-base); }   /* 各节标题（备份 / 酒馆互通 / 安装是嵌在 #misc-rest 里的，不是直接子元素）之间留出空隙 */
+.ph-settings > .theme-row + .ph-wall-row { margin-top: 8px; }
+.ph-settings .ph-wall-row { margin: 8px 0 0; }
+.ph-settings .row, .ph-settings .pwa-section .row { flex-wrap: wrap; }
+.ph-settings .row > span { min-width: 0; overflow-wrap: anywhere; }
+.ph-settings .dim, .ph-settings .bkx-desc, .ph-settings .pwa-desc { overflow-wrap: anywhere; }
+.ph-settings pre, .ph-settings .card { max-width: 100%; box-sizing: border-box; overflow-x: auto; }
+.ph-settings select { max-width: 100%; }
 
 /* 底部 home 指示条：点一下 = 回桌面 / 收起手机（和顶栏图标同一件事） */
 .ph-homebar { position: absolute; z-index: 3; left: 0; right: 0; bottom: 0; height: 28px; display: grid; place-items: center; }

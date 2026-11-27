@@ -531,7 +531,7 @@ export {};
  *           （ui/frame-host.js 把 messageId 包成上下文 {kind:'message', messageId} 交给宿主方法；脚本沙箱用 {kind:'script', cardId, scriptId}，见那个文件头）
  * @property {(entry: {messageId: number, level: 'call'|'unimplemented'|'error'|'console', text: string}) => void} log
  *
- * 日志条目（ui.frameLog，「杂项」页和「脚本」页共用一份，最多 500 条）：前端卡 {time, messageId, level, text}；
+ * 日志条目（ui.frameLog，手机 Settings 和「脚本」页共用一份，最多 500 条）：前端卡 {time, messageId, level, text}；
  * 酒馆助手脚本 {time, scriptId（认不出是哪个脚本时为 null）, scriptName, cardId, level, text}。level 还可能是 'warn' / 'unsupported'（脚本用：SmallTalk 做不到的事）
  */
 
@@ -975,7 +975,7 @@ export {};
 
 // ───────────────────────────── 备份文件 ─────────────────────────────
 //
-// 「杂项」页「整体备份」一节：「备份全部数据」写出、「从备份恢复」读入的 .json
+// 手机 Settings「整体备份」一节：「备份全部数据」写出、「从备份恢复」读入的 .json
 // （src/backup.js 纯函数，src/backup-crypto.js 加密，src/ui/backup.js 读写存储和弹框）。用途是换设备。
 // 整体备份就是全部，没有勾选：所有卡和存档、所有预设、全局设置、接口列表。只读标签页也能备份（备份存储里已保存的内容）。
 // 不导出 'meta'、'index:*'（都能重建）、旧版本的 'state' / 'state.v1.bak*'。
@@ -1085,7 +1085,7 @@ export {};
  *          global：要写的新 global（null = 不用写）；summary 里每类内容各有 xxxAdded / xxxDup 两个数（见 backup.js planBackupImport）
  */
 
-// ───────────────────────────── 和酒馆整体互通（「杂项」页；src/tavern-convert.js、src/ui/tavern-ui.js） ─────────────────────────────
+// ───────────────────────────── 和酒馆整体互通（手机 Settings；src/tavern-convert.js、src/ui/tavern-ui.js） ─────────────────────────────
 //
 // 导入酒馆的整体备份 zip（酒馆「备份」打出的整个用户目录）：
 //   zip.js openZip → tavern-backup.js classifyTavernEntries（分类）→ tavern-convert.js analyzeTavernZip（预览用的摘要，只读 settings.json）
@@ -1378,7 +1378,7 @@ export {};
 
 /**
  * 手机壳只有外观和导航，**不存任何数据**（不写 IndexedDB / localStorage，不进备份）：状态全在内存里，刷新后回到「收起、锁屏」。
- * 唯一碰到存储的地方是 Settings 里的主题下拉框，它复用 src/ui/theme.js 的 bindThemeSelect(select)（和「杂项」页那个同一套逻辑，互相同步）。
+ * Settings 里装着原来右侧面板的「杂项」页（src/ui/tab-misc.js；index.html 的 #tab-misc 节点在启动时被挪进来），所以备份、主题、手动模式等的存储行为和以前完全一样，手机壳自己仍不存任何东西。
  *
  * phone.js：initPhone()（app.js 启动时调一次；建好 #phone 挂在 body 末尾，接上顶栏 #phone-toggle）、
  *           openPhone() / closePhone() / togglePhone()、isPhoneOpen()、phoneView()（'lock' | 'home' | 应用 id）。
