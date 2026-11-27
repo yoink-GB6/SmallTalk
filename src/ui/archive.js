@@ -30,6 +30,7 @@ import { askRegexFate, moveAndFlush, undoMove, refreshRegexViews, moveSummary } 
 import { enabledScripts } from '../regex-move.js';
 import { restoreActive } from './backup.js';   // 循环依赖（backup.js 导入本文件）：只在函数体里调用
 import { cardVarsKey } from '../cardvars.js';
+import { blankCard, uniqueCardName, BLANK_CARD_NAME } from '../card-writer.js';
 
 // ───────────────────────────── 读列表 ─────────────────────────────
 
@@ -628,6 +629,40 @@ export const addCard = (parsed, avatar) => op(async () => {
     await flushNow();
     redraw();
 });
+
+/**
+ * 「写卡」页的「新建空白卡」：造一张空白的酒馆 V2 卡（card-writer.js blankCard），交给上面的 addCard——
+ * 和导入一张卡走同一条路（新卡记录 + 第一个存档 + 切过去），存储、目录、切卡、导出都不另写一套。
+ * 名字避开已有的卡（「新角色」「新角色 2」…），所以 addCard 不会弹「已经有同名卡、要不要更新」。
+ * 开场白是空的：startChat 什么都不推，第一个存档是 0 楼（markGreeting 记下空开场白，untouched 照样认它「没动过」）。
+ * @returns {Promise<boolean>} 建成了没有（只读 / 生成中 / 停止保存 / 上一个操作没做完时 op 会拒绝并提示）
+ */
+export async function createBlankCard() {
+    if (!canSwitch()) return false;
+    const name = uniqueCardName(BLANK_CARD_NAME, (await listCards()).map(c => c.name));
+    return addCard(blankCard(name), '');
+}
+
+/**
+ * 「写卡」页改了开场白 / 名字之后：当前存档还「没动过」（untouched，只有用第一个开场白建的那一楼）就原地按新的卡重建那一楼，
+ * 聊天区就是实时预览；否则不碰历史。做法同 newChat 里「原地换开场白」那一支（startChat + markGreeting），只是：
+ *   - 不发酒馆事件（打字时每停一下就重建一次，发 CHAT_CREATED 会把脚本闹翻；楼层内容的变化由 renderAll 里的 reconcileScripts 推副本）；
+ *   - 不经过 op（op 每次都先整个落盘，打字时太重）：拦截条件照 canSwitch / chatWriteBlocked 一样判断，楼层的落盘走 startChat 里的防抖 save()；
+ *   - 只认第一个开场白（greeting.index 为 0）：用备选开场白建的存档，改 first_mes 不影响它。
+ * 「没动过」的判断本身已经保证没有外置记忆摘要、局部变量和建的时候一样（见 untouched），所以重建不会丢东西。
+ * @returns {'updated'|'kept'|'blocked'} kept = 这个存档已经聊过（或不是用第一个开场白建的），新对话才会用到新的开场白
+ */
+export function refreshGreetingInPlace() {
+    if (working || ui.switching || ui.busy || persist.readOnly || persist.stopped || restoreActive() || !persist.cardId) return 'blocked';
+    if (!persist.chatMeta || !untouched() || (persist.chatMeta.greeting?.index ?? 0) !== 0) return 'kept';
+    // 旧的第 0 楼可能带着前端卡 iframe：先 unmountMessage 释放它的监听，再整体清掉（同 teardownChatUi）
+    const box = $('#chat');
+    for (const el of box.querySelectorAll('.mes_text')) unmountMessage(el);
+    box.replaceChildren();
+    startChat(0);
+    markGreeting(0);
+    return 'updated';
+}
 
 /**
  * 删除角色卡（连同它的全部存档）。

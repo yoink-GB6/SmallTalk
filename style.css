@@ -1206,3 +1206,21 @@ details[open] > .scr-head::before { content: '▾'; }
 .pedit-where { font-size: var(--font-size-xs); }
 .pedit textarea { width: 100%; max-width: 100%; box-sizing: border-box; min-height: 5em; resize: vertical; font-family: var(--font-mono, monospace); }
 .pedit .row { display: flex; gap: 6px; }
+/* 写卡页（ui/card-writer.js）：画在「存档」页里。只用现有的变量和控件样式 */
+.cw { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cw-why { margin-bottom: 6px; color: var(--warn); }
+.cw-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; min-width: 0; }
+.cw-label { font-weight: 600; }
+.cw-hint, .cw-note { font-size: var(--font-size-sm); }
+.cw-warn { font-size: var(--font-size-sm); color: var(--bad); }
+.cw-name { width: 100%; max-width: 24em; box-sizing: border-box; }
+.cw textarea { width: 100%; max-width: 100%; box-sizing: border-box; }
+.cw-avatar { width: 64px; height: 96px; border-radius: var(--radius-control); object-fit: cover; flex: none; border: var(--border-width) solid var(--line); }
+.cw-avatar-none { display: inline-block; background: var(--panel-2); }
+.cw-avatar[hidden] { display: none; }
+.cw-compare-head { margin-bottom: 8px; }
+.cw-compare-name { font-size: 1.1em; }
+.cw-pre { white-space: pre-wrap; word-break: break-word; margin: 0 0 6px; max-height: 24em; overflow: auto; }
+.cw-item > header { cursor: default; }
+.cw-keys { font-size: var(--font-size-sm); overflow-wrap: anywhere; }
+.cw-pick-bar { padding: 6px 8px; border: var(--border-width) dashed var(--accent); border-radius: var(--radius-card); }
