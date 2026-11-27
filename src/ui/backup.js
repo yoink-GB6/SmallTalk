@@ -1,4 +1,4 @@
-// 「杂项」页的「整体备份」：备份全部数据 / 从备份恢复。读存储、落盘、弹框、提示。
+// 手机 Settings 的「整体备份」：备份全部数据 / 从备份恢复。读存储、落盘、弹框、提示。
 // 要写哪些记录由 src/backup.js 的纯函数算；加密 / 解密在 src/backup-crypto.js。
 //
 // 用途：换设备（电脑 ↔ 手机、换浏览器、从本地版搬到网页版）。整体备份就是全部，没有勾选：
@@ -767,7 +767,7 @@ async function doImport(backup, { applySettings, fresh }) {
 // ───────────────────────────── 界面 ─────────────────────────────
 
 let picker = null;
-/** 备份文件的选择框（第一次用到时才建；放在「杂项」页的整体备份一节里，测试脚本用 #backup-file-input 找它） */
+/** 备份文件的选择框（第一次用到时才建；放在手机 Settings 的整体备份一节里，测试脚本用 #backup-file-input 找它） */
 function backupPicker() {
     if (!picker) {
         picker = h('input', { type: 'file', id: 'backup-file-input', accept: '.json,application/json', hidden: true });
@@ -780,7 +780,7 @@ function backupPicker() {
     return picker;
 }
 
-/** 「杂项」页的「整体备份」一节（tab-misc.js 每次重画时调用） */
+/** 手机 Settings 的「整体备份」一节（tab-misc.js 每次重画时调用） */
 export function backupSection() {
     const ro = persist.readOnly;
     const roTip = '存储处于只读状态（另一个标签页正在写，见页面顶上的说明），不能恢复';

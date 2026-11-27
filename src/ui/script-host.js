@@ -274,7 +274,7 @@ function build(list, trusted = false) {
     // 拖动中（沙箱报了整块区域）在 iframe 外面松开鼠标：沙箱收不到 pointerup（见「悬浮区」的原型结论），由宿主告诉它
     window.addEventListener('pointerup', () => { if (me === rec && me.dragOpen) post(me, { kind: 'release' }); }, { signal: ac.signal, capture: true });
     window.addEventListener('blur', () => { if (me === rec && me.dragOpen) post(me, { kind: 'release' }); }, { signal: ac.signal });
-    // 系统深浅切换 / 「杂项」页换主题：把新的 color-scheme 和主题变量推过去（不一致时浏览器会给覆盖层画不透明的底）
+    // 系统深浅切换 / 手机 Settings 换主题：把新的 color-scheme 和主题变量推过去（不一致时浏览器会给覆盖层画不透明的底）
     try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (me === rec) flushScripts(); }, { signal: ac.signal }); } catch { /* ignore */ }
     const themeMo = new MutationObserver(() => { if (me === rec) flushScripts(); else themeMo.disconnect(); });
     themeMo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });

@@ -36,7 +36,7 @@ export async function importFiles(files) {
     if (why) return void toast(why, 'error');
     for (const file of files) {
         try {
-            // 酒馆的整体备份 .zip：交给「杂项」页的同一条导入路线（预览、勾选、一个事务写入，见 tavern-ui.js）
+            // 酒馆的整体备份 .zip：交给手机 Settings 的同一条导入路线（预览、勾选、一个事务写入，见 tavern-ui.js）
             if (/\.zip$/i.test(file.name) || file.type === 'application/zip' || file.type === 'application/x-zip-compressed') {
                 await importTavernZip(file);
                 continue;

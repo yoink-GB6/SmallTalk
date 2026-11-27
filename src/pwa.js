@@ -57,7 +57,7 @@ function readStandalone() {
 if (hasWindow) {
     st.standalone = readStandalone();
     addEventListener('beforeinstallprompt', (e) => {
-        e.preventDefault();          // 不让浏览器自己弹小横条，改由「杂项」页的「安装」按钮触发
+        e.preventDefault();          // 不让浏览器自己弹小横条，改由手机 Settings 的「安装」按钮触发
         deferredPrompt = e;
         st.installable = true;
         emit();
