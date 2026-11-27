@@ -103,6 +103,7 @@
     <nav id="tabs">
       <button data-tab="archive" class="active">存档</button>
       <button data-tab="memory">记忆</button>
+      <button data-tab="excerpts">摘抄</button>
       <button data-tab="persona">人设</button>
       <button data-tab="world">世界书</button>
       <button data-tab="preset">预设</button>
@@ -113,6 +114,8 @@
     </nav>
     <div id="tab-archive" class="tab active"></div>
     <div id="tab-memory" class="tab"></div>
+    <!-- 「摘抄」页（src/ui/tab-excerpts.js）：划过的文字，按卡 / 存档分组，每次打开重画 -->
+    <div id="tab-excerpts" class="tab"></div>
     <!-- 人设页（tab-persona.js）：首行工具条 #persona-bar 和人设列表 #persona-list 每次打开重画；每个人设是一个可折叠的框。
          当前人设的三个输入框 #persona-fields（名字 #persona-name、备注 #persona-remark、描述 #persona-desc）是常驻控件：
          不随页签重画（事件在 bindPersonaTab，值由 shell.js 的 renderTopbar / renderPersonaTab 同步），平时待在隐藏的 #persona-fields-home 里，

@@ -20,7 +20,7 @@
 
 import { substitute } from '../macros.js';
 import { $, toast, safeJson } from './dom.js';
-import { state, ui, card, save, persist, cardVarsReady, setCardVarsField } from './state.js';
+import { state, ui, card, save, persist, cardVarsReady, setCardVarsField, highlightsAfterEdit, highlightsAfterDelete } from './state.js';
 import { macroContext, permanentRegex, refreshPreview } from './pipeline.js';
 import { generateReply, scrollChatToEnd, chatWriteBlocked, fitInput } from './chat.js';   // chatWriteBlocked：只在函数体里调用（循环依赖）
 import { renderAll, renderInspector } from './shell.js';
@@ -303,7 +303,8 @@ const hostImpl = {
             const m = state.chat[i];
             // 原文真的变了：这一轮的摘要作废重压（和手动编辑同一条规则，见 memory-fold.js）
             if (typeof u.message === 'string') {
-                if (m.content !== u.message) { m.content = u.message; invalidateTurnAt(state.chat, i); setTimeout(ensureMemories, 0); }
+                // 划线跟着平移 / 删掉，和界面上的编辑同一条规则（state.js highlightsAfterEdit）
+                if (m.content !== u.message) { const before = m.content; m.content = u.message; invalidateTurnAt(state.chat, i); highlightsAfterEdit(i, before, m.content); setTimeout(ensureMemories, 0); }
                 ui.rendered.delete(i);
             }
             // data = 这一楼当前候选的楼层变量（整张换掉；酒馆助手 setChatMessages 也是整张换）。不碰原文，所以不作废记忆
@@ -319,7 +320,7 @@ const hostImpl = {
                 const greeting = [c.firstMes, ...c.alternateGreetings].filter(Boolean)[u.swipe_id];
                 if (greeting != null) {
                     const text = permanentRegex(substitute(greeting, macroContext([], state.variables)), 'assistant');
-                    if (m.content !== text) { m.content = text; invalidateTurnAt(state.chat, 0); setTimeout(ensureMemories, 0); }
+                    if (m.content !== text) { const before = m.content; m.content = text; invalidateTurnAt(state.chat, 0); highlightsAfterEdit(0, before, text); setTimeout(ensureMemories, 0); }
                     ui.rendered.delete(0);
                     $('#greeting-select').value = String(u.swipe_id);
                 }
@@ -395,6 +396,7 @@ const hostImpl = {
         if (!drop.size) return;
         // 前端卡可以单删任意一楼（酒馆的接口就是这样）：删掉的楼后面那一轮变了（少了输入，或两轮并成一轮），它的摘要作废重压
         invalidateAfterDelete(state.chat, drop); setTimeout(ensureMemories, 0);
+        highlightsAfterDelete(drop);   // 任一端在被删的楼里的划线删掉，其余的楼号往前挪
         state.chat = state.chat.filter((_, i) => !drop.has(i));
         ui.rendered.clear(); $('#chat').replaceChildren(); save(); renderAll();
         emitTavernEvent('message_deleted', state.chat.length);   // 酒馆：删完之后的楼数

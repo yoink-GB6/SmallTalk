@@ -18,6 +18,7 @@ import { initTheme } from './ui/theme.js';
 import { bindPersonaTab } from './ui/tab-persona.js';
 import { initPwaUi } from './ui/pwa-ui.js';
 import { bindChatSearch } from './ui/chat-search.js';
+import { bindHighlights } from './ui/highlight-ui.js';
 import { emitTavernEvent } from './ui/script-host.js';
 
 // ───────────────────────────── 事件绑定 ─────────────────────────────
@@ -107,6 +108,7 @@ initDrawer();
 initTheme();          // 「杂项」页最上面的主题下拉框（<html data-theme> 的首屏设置在 index.html 的内联脚本里）
 bindArchive();
 bindChatSearch();     // 聊天区工具栏的「搜索」
+bindHighlights();      // 划线：选中文字出按钮、画高亮、点高亮出备注浮层（src/ui/highlight-ui.js）
 renderAll();
 scrollChatToEnd();
 initPwaUi();          // 网页版：注册离线缓存、盯着有没有新版本（不 await，不挡启动；本地版什么都不做）

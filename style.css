@@ -43,6 +43,9 @@
   --src-utility: #8a8f99;
   --src-prefill: #c0392b;
   --src-memory: #0e7490;
+  --hl-bg: rgb(245 190 50 / .42);     /* 划线的底色（半透明：下面的字照常清楚；浅色底上偏黄） */
+  --hl-line: #b4532a;                /* 带备注的划线的下划线颜色 */
+  --hl-flash-bg: rgb(245 150 40 / .75);   /* 摘抄页「跳转」后闪一下的底色 */
   --src-authorNote: #2b6cb0;
 
   /* ── 背景：页面底、聊天区底，以及给背景花纹预留的口子 ── */
@@ -121,6 +124,9 @@
     --src-utility: #a9aeb8;
     --src-prefill: #ef7b6c;
     --src-memory: #67d3e8;
+    --hl-bg: rgb(230 175 60 / .32);
+    --hl-line: #e0855a;
+    --hl-flash-bg: rgb(240 160 60 / .65);
     --src-authorNote: #7ab8f5;
     color-scheme: dark;
   }
@@ -226,6 +232,9 @@
   --pr-gold-on-accent: #c9a86a;    /* 主按钮（黑底）上的焦点金线 */
   --pr-disabled: #69645c;          /* 禁用的文字 / 线 */
   --pr-disabled-bg: #f1ede6;       /* 禁用的主按钮底 */
+  --hl-bg: rgb(168 132 63 / .24);  /* 划线：琥珀金的淡底（字仍是近黑，对比度不掉） */
+  --hl-line: var(--pr-gold);
+  --hl-flash-bg: rgb(168 132 63 / .55);
   --pr-strong-line: var(--text);   /* 强一点的线：表头底线、弹出层的框、用户消息左侧（深色里换成半透明暖白） */
   --pr-current: var(--text);       /* 当前项的标记：当前卡 / 存档 / 人设左侧的线、下拉面板当前项（深色里是金） */
   --pr-pre-bg: var(--panel-2);     /* 代码块：浅色用底色，深色用一圈细线 */
@@ -320,6 +329,9 @@
     --pr-disabled: #a39e94;        /* 禁用的字 / 线（暖白在纯黑上压暗，不另调灰） */
     --pr-disabled-bg: transparent; /* 禁用的主按钮：不填色，只剩虚线底线 */
     --hint-neutral: #a39e94;
+    --hl-bg: rgb(210 190 142 / .26);   /* 划线：香槟金的淡底压在纯黑上 */
+    --hl-line: var(--pr-gold);
+    --hl-flash-bg: rgb(210 190 142 / .5);
     /* 装饰图：深色是鸡尾酒。--pr-deco-pick 由 src/ui/theme.js 在页面启动时从 src/themes.js 的清单里随机挑一张、设在 <html> 上，
        同时设 data-pr-deco-fit（corner / width），下面的「装饰图」规则按它换摆法；没有 JS / 清单为空时用兜底图（马天尼，corner）。
        下面这组是 corner（马天尼）的值：贴左下角、完整露出，可以比线稍明显；width（场景）的值在「装饰图」规则里。
@@ -1206,3 +1218,43 @@ details[open] > .scr-head::before { content: '▾'; }
 .pedit-where { font-size: var(--font-size-xs); }
 .pedit textarea { width: 100%; max-width: 100%; box-sizing: border-box; min-height: 5em; resize: vertical; font-family: var(--font-mono, monospace); }
 .pedit .row { display: flex; gap: 6px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   划线与摘抄（src/ui/highlight-ui.js、tab-excerpts.js）
+   高亮用 CSS Custom Highlight API 画在文字上，不改 DOM（::highlight 只能设颜色 / 下划线这类不影响排版的属性）。
+   颜色全是上面各主题里的 --hl-* 变量；带备注的多一条下划线，让人知道点开有话说。
+   ═══════════════════════════════════════════════════════════════════════════ */
+::highlight(st-hl) { background-color: var(--hl-bg); }
+::highlight(st-hl-note) { text-decoration: underline; text-decoration-color: var(--hl-line); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+::highlight(st-hl-flash) { background-color: var(--hl-flash-bg); }
+/* 摘抄页「跳转」到不是当前候选的划线时，没有高亮可闪：整楼闪一下轮廓。也给不支持高亮 API 的浏览器兜底 */
+.mes.hl-flash-row { outline: 2px solid var(--accent); outline-offset: -1px; transition: outline-color .4s; }
+/* 选中文字后冒出来的小按钮（position: fixed，位置由 JS 算；挂在 body 上，z-index 在抽屉 16 之上、toast 30 之下） */
+.hl-btn { position: fixed; z-index: 22; padding: 5px 14px; font-weight: 600; background: var(--accent); color: var(--accent-text);
+  border: var(--border-width) solid var(--accent); border-radius: var(--radius-pill); box-shadow: var(--shadow-pop); cursor: pointer; }
+.hl-btn[hidden] { display: none; }
+/* 点已有的划线冒出来的浮层：备注 + 保存 / 删除 */
+.hl-pop { position: fixed; z-index: 22; width: min(300px, calc(100vw - 16px)); box-sizing: border-box; padding: 8px; display: flex; flex-direction: column; gap: 6px;
+  background: var(--panel); color: var(--text); border: var(--border-width) solid var(--line); border-radius: var(--radius-card); box-shadow: var(--shadow-dropdown); }
+.hl-pop textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 4.5em; }
+.hl-pop .row { flex-wrap: nowrap; }
+.hl-pop .row .ghost { margin-left: auto; }
+.hl-pop-why { font-size: var(--font-size-sm); }
+/* 「摘抄」页：三层折叠（角色 → 存档 → 每条划线一行：名字 + 楼号 + 删除）；顶上搜索框和批量 */
+.exc-toolbar { flex-wrap: wrap; }
+.exc-search { flex: 1 1 10em; min-width: 0; }
+.exc-card { margin-bottom: 6px; }
+.exc-card-head, .exc-chat-head { display: flex; align-items: center; gap: 4px; min-width: 0; cursor: pointer; }
+.exc-chat-head { font-size: var(--font-size-sm); margin: 2px 0 2px 12px; }
+.exc-head-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exc-head-count { flex: none; font-size: var(--font-size-xs); font-weight: normal; }
+.exc-toggle { flex: none; padding: 0 4px; min-width: 1.6em; }
+.exc-chat { margin: 0 0 6px; }
+.exc-item { display: flex; align-items: center; gap: 6px; min-width: 0; margin-left: 24px; padding: 3px 4px; border-bottom: var(--border-width) solid var(--line); cursor: pointer; user-select: none; touch-action: manipulation; }
+.exc-item:hover { background: var(--panel-2); }
+.exc-item.exc-other-swipe .exc-name { opacity: .7; }
+.exc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exc-note-input { flex: 1; min-width: 0; }
+.exc-pick { flex: none; margin: 0; }
+.exc-floor { flex: none; font-size: var(--font-size-xs); }
+.exc-item > button.ghost { flex: none; }

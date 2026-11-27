@@ -395,6 +395,9 @@ export {};
  * @property {number} [depth]                楼层深度；不传则不做深度过滤
  * @property {(text: string) => string} [substitute]  宏替换；默认原样返回
  * @property {(info: {script: RegexScript, before: string, after: string}) => void} [onApply]  每条脚本实际改动文本时回调，供界面展示
+ * @property {(info: {script: RegexScript, before: string, after: string, spans: {at: number, len: number, out: string}[]}) => void} [onSpans]
+ *   同 onApply，另给这条脚本的每一处替换：before 里 [at, at+len) 换成了 out（按 at 从小到大）。只给划线的「选区对回原文」用（highlight.js displayMap），
+ *   不传时 regex.js 不记、结果和以前逐字相同
  */
 
 /**
@@ -595,8 +598,9 @@ export {};
 //
 // 实现过程中追加的（数据丢失复核之后）：
 //   'cardvars:<cardId>' → CardVars（酒馆助手脚本的运行时数据：脚本变量、角色卡变量；2026-11-23 第 2 期加，见 CardVars）
-//   'index:<cardId>'  → {cardId, chats: {[chatId]: {name, count, updatedAt, createdAt}}}
+//   'index:<cardId>'  → {cardId, chats: {[chatId]: {name, count, updatedAt, createdAt, hl?}}}
 //                       每张卡的存档目录，和存档写入在同一个事务里维护；缺失或对不上时自动重建
+//                       hl：这个存档有几条划线（ChatRecord.highlights，2026-11-28 加），有才写；摘抄页靠它只读有划线的存档（migrate.js indexEntry）
 //   'state.v1.bak'    → 迁移时旧数据里有认不出的内容才会写：旧 state 的完整备份，不会被自动删除
 //   StoreMeta.v1Fingerprint   已迁移过的旧 state 的指纹，用来识别「旧版本标签页又写了一次 state」
 //   CardRecord.usedAt         上次使用时间（ISO），卡片切换器排序用
@@ -787,6 +791,96 @@ export {};
  *   前端卡【读不到也改不了】它：frame-host.js 只给聊天记录和变量；酒馆助手里有没有对应接口没查，这次不做。
  *   宏 {{authorsNote}} 读的是它的正文原文（macros.js）。
  *   角色卡专属注释、默认作者注释（酒馆 settings.json 的 extension_settings.note）不做，见 author-note.js 文件头。
+ * @property {Highlight[]} [highlights]
+ *   这个存档里的划线（2026-11-28 加；纯逻辑 src/highlight.js，存取 ui/state.js「划线」一节；界面是第二段）。见下面「划线」。
+ *   【默认不写】：一条都没有时没有这个键（删光了也删键）——不用这个功能的人存储形状不变。
+ *   为什么挂在存档记录上、不挂在消息上：消息对象的形状不变，于是发给模型的内容、推给脚本沙箱 / 前端卡的聊天副本（getChatMessages、
+ *     getContextSnapshot、script-host.js 的同步副本都只读消息）、.jsonl 导出天然都不带它；删存档时跟着没；跟着存档进整体备份。
+ *   运行时：当前存档的在 persist.chatMeta.highlights（state 的形状不变；同作者注释，chatMeta 变了就重写这条存档记录，不更新 updatedAt）。
+ *   读入容错（highlight.js normalizeHighlights，读档 state.js applyCardChat、恢复备份 backup.js planBackupImport 都走）：按这个存档的消息核对，
+ *     楼号越界、候选号不存在、offset 超出那段原文、同一楼两端候选不同、长度为 0 的丢掉；from 在 to 之后的对调；id 缺 / 重复的补确定的 'hl-<下标>'。
+ *   它算存档的【内容】（进备份、恢复时取并集、本机的不删不改），但【不参与存档判重】（backup.js chatSig 不看它，2026-11-28 用户定的）：
+ *     恢复整体备份时，备份里的存档和本机某个存档除划线外完全相同 → 不新增存档，备份里的划线并进本机那个（highlight.js mergeHighlights）：
+ *     - 备份里的先按那个存档的消息清洗（normalizeHighlights），坏的丢掉；
+ *     - 位置相同（from / to 的楼、候选、offset 都相同，whole 也相同）算同一条，保留本机的（id、at、note）；本机那条没有 note 而备份的有 → 补上备份的 note；
+ *     - 本机已有的一条不删、位置不改、顺序不变，新的接在后面；id 和已有的撞了换确定的 '<原 id>-<n>'；
+ *     - 没有新东西可并 → 不写（不重写存档记录、不动 updatedAt），所以同一份备份导两遍第二遍全是跳过、零写入；
+ *     - 被并入的存档只换 highlights：消息、变量、作者注释、名字、updatedAt 一律不变，目录条目的 hl 跟着重算；
+ *       写入和恢复的其它记录在同一个事务里，读回不一致时整条换回写之前的（ui/backup.js doImport）；被并入的是当前存档时内存跟着换（state.js adoptRestoredHighlights）；
+ *     - 备份里两个除划线外相同、都不在本机的存档：只进来第一个，后面的划线并进它；
+ *     - 恢复到空浏览器：存档连同（清洗过的）划线原样进来。
+ *   不发给模型；前端卡和脚本读不到也改不了；不进 .jsonl、不进酒馆 zip。
+ */
+
+// ───────────────────────────── 划线（src/highlight.js） ─────────────────────────────
+//
+// 在聊天记录里选中一段字划线（以后手机聊天的「收藏消息」、读书的划线也用同一套形状和函数）。只记位置、不存文字：
+// 位置按【原文】（ChatMessage.content，或别的候选 swipes[k]）数，不按渲染后看到的字数——开关显示正则不影响位置。
+// 选区怎么从渲染后的文字对回原文：highlight.js 文件后半「选区对回原文」（mapFloor / rangeFromSelection / rawToVisible）。
+
+/**
+ * 划线的一个端点。
+ * @typedef {Object} HighlightPoint
+ * @property {number} floor   第几楼（ChatRecord.messages 的下标，0 起）。楼没有稳定的 id，但删楼只有「删这一楼及之后」（和前端卡的任意单删），
+ *                            删的时候划线跟着清理 / 挪楼号（highlight.js afterTruncate / afterDeleteFloors），所以下标是可靠的
+ * @property {number} swipe   那一楼的第几个候选（= chatfile.js readSwipes(msg)?.id ?? 0）。没有候选的楼（用户输入、旁白、老消息）是 0——
+ *                            和「没有 swipes 时等同于 [content]」一致，以后这楼有了候选，0 号就是原来那段字；老存档候选还在 st 里的也照 readSwipes 读
+ * @property {number} offset  原文里的位置：UTF-16 下标（JS 字符串下标，0..length）。不用码点：浏览器选区、slice、比较新旧原文数的都是 UTF-16，
+ *                            用码点就得处处换算。对照函数保证两端不切开 emoji（代理对）
+ */
+
+/**
+ * 一条划线。区间左闭右开 [from, to)：同一楼时 from.offset < to.offset、两端候选相同；跨楼时 from.floor < to.floor，
+ * from 那一楼从 from.offset 到楼尾、中间的楼整楼、to 那一楼从楼头到 to.offset（中间的楼按【现在显示的】候选算）。
+ * @typedef {Object} Highlight
+ * @property {string} id       我们生成的 id（读入时缺 / 重复的补 'hl-<下标>'）。只在这个存档内唯一
+ * @property {HighlightPoint} from
+ * @property {HighlightPoint} to
+ * @property {true} [whole]    整楼（「收藏整条消息」用）：from / to 是同一楼同一候选、offset 都写 0（不看）；覆盖这一楼这个候选的全部原文，
+ *                             编辑后【不删不移】（普通划线和改动段交叠就删掉）。只在是整楼时写 true
+ * @property {string} [note]   备注（去首尾空白、最长 5000 字）；空 = 不写这个键
+ * @property {number} at       建立时间（毫秒时间戳；读入时不是数字的当 0）
+ * 不认识的字段原样保留（以后的版本加的），只挡 __proto__ / constructor / prototype。
+ *
+ * 规则（highlight.js 文件头逐条写着）：
+ *   编辑后：新旧原文求公共前缀 + 公共后缀，中间是改动段；这条划线在这一楼上覆盖的部分全在改动段之前 → 不动；全在之后 → 平移；交叠 → 删掉。
+ *     只看这一楼当时那个候选上的端点。入口：ui/chat.js applyMessageEdit（编辑、拼装页就地改）、ui/frame-host.js setChatMessages（含换开场白）
+ *     → state.js highlightsAfterEdit。
+ *   删楼：任一端在被删的楼里 → 删掉；其余的挪楼号。入口：chat.js deleteFrom（截断）、generateReply 失败时删占位、frame-host.js deleteChatMessages。
+ *   换候选 / 重新生成：不动，按 swipe 号决定显示哪些（visibleHighlights：两端的候选都正好是现在显示的才显示）。
+ *   原地换开场白（startChat）：当前存档的划线清空；开场白上划过线的存档不再算「没动过」（archive.js untouched），会新开存档。
+ *   摘抄页删除 / 改备注（2026-11-28，可以跨存档、跨卡）：唯一入口 archive.js editHighlightsAcross(edits)，edits = [{cardId, chatId, remove?: id[], notes?: {id: 备注}}]
+ *     （纯逻辑 highlight.js editHighlights）。当前存档改内存（state.js editChatHighlights）再落盘；非当前存档走 state.js writeStoredHighlights：
+ *     【一个事务】里现读记录、按消息清洗后改、只换 highlights（一条不剩删键）、同一事务里重算目录条目——消息、记忆摘要、变量、作者注释、名字、updatedAt 一律不动。
+ *     只涉及非当前存档的：不走存档层的 op，排在写入链（state.js writing）后面，【生成中也能做】。有当前存档的：在 op 里做；全成或全不成（当前存档那部分在事务失败时换回去）。
+ *     拒绝（archive.js highlightEditBlocked）：只读标签页、停止保存之后、正在恢复备份、正在切换 / 上一个存档操作没做完——全拒；
+ *       正在生成：里面有当前存档的划线就整批拒绝（「里面有当前存档的划线，等这次回复生成完」），只涉及别的存档的照做。
+ *     生成中改别的存档为什么不会和别的写入互相盖（2026-11-28 分析）：
+ *       - 生成只改 state（当前存档）：流式结束、失败删占位都是改 state.chat 后 save()，buildWrites 只写当前存档那一条记录、当前卡的目录、卡记录等，
+ *         从不写别的存档的记录。别的存档的记录只有这几个写入者：这里、迟到的记忆摘要（state.js patchStoredChat）、改名、删存档、恢复备份。
+ *       - 这里、patchStoredChat、改名（renameChat）都是「一个 IndexedDB readwrite 事务里先读再写」，范围重叠的事务由浏览器串行执行，
+ *         后执行的读到的是先执行的结果，所以各自的字段（highlights / 消息上的 memory 和 updatedAt / name）都留得住；前两者还排在同一条写入链上。
+ *       - 删存档、恢复备份走 op，op 先 flushNow = 等写入链，排在这次之后；存档删了之后这里读到 undefined 就跳过、不复活；恢复备份期间这里被拒。
+ *       - 唯一被整份覆盖的是当前卡的目录（persist.index 每次保存整份写回）：拼得早、执行得晚的一次保存可能把这次改的 hl 计数盖回旧值，
+ *         所以写完后更新内存里的目录条目并 save() 一次，最终是对的；中间那一下 hl 偏大只会让摘抄页多读一次记录，不会漏；划线本身在存档记录里，不受影响。
+ */
+
+/**
+ * 「一组有序的文本」：位置运算只认它，不知道是不是 RP 存档（chatDoc(messages) 是存档的包装，textsDoc(texts) 是纯文本的包装）。
+ * @typedef {Object} HighlightDoc
+ * @property {number} count                                 有几段（楼）
+ * @property {(floor: number, swipe: number) => string|null} text   这一段这个版本（候选）的原文；没有这个版本 = null
+ * @property {(floor: number) => number} current            这一段现在显示的是哪个版本
+ */
+
+/**
+ * 一楼的对照表（highlight.js mapFloor 的结果）：渲染后可见文字 ↔ 原文。
+ * @typedef {Object} FloorMap
+ * @property {string} raw        原文
+ * @property {string} visible    可见文字（界面给的：.mes_text 里的文字节点按顺序连起来，跳过 <style> / <script> / 前端卡 .smalltalk-frontend）
+ * @property {Int32Array} map    visible 的每个位置 → 原文位置；-1 = 对不上（正则替换出来的、markdown 生成的、多出来的空白）。单调递增
+ * @property {Uint8Array} seen   原文的每个位置有没有被某个可见字对上（markdown 符号、标签这些就是 0）
+ * @property {boolean} exact     差分在上限内算完了（false = 退回了贪心匹配，个别字可能认错）
  */
 
 /**

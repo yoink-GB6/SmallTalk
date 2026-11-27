@@ -19,7 +19,7 @@ import { setHidden } from '../memory-fold.js';
 import { $, toast, uid, download } from './dom.js';
 import {
     state, ui, card, persist, save, flushNow, applyGlobal, applyCardChat, applyIndex, markMetaSaved, ensureCardRecord,
-    newChatRecord, queueDelete, STOPPED_TEXT, globalWriteOp,
+    newChatRecord, queueDelete, STOPPED_TEXT, globalWriteOp, editChatHighlights, restoreChatHighlights, writeStoredHighlights,
 } from './state.js';
 import { unbindCardFromBooks } from '../books.js';
 import { startChat, scrollChatToEnd } from './chat.js';
@@ -73,8 +73,9 @@ export async function cardChats(cardId) {
 export function liveChats() {
     const items = indexList(persist.index).filter(c => c.id !== persist.chatId);
     if (persist.chatId) {
+        const hl = persist.chatMeta?.highlights?.length ?? 0;   // 划线条数（同 migrate.js indexEntry：有才写）
         items.push({ id: persist.chatId, name: persist.chatMeta?.name ?? '新对话', count: state.chat.length,
-            updatedAt: persist.chatMeta?.updatedAt ?? '', createdAt: persist.chatMeta?.createdAt ?? '' });
+            updatedAt: persist.chatMeta?.updatedAt ?? '', createdAt: persist.chatMeta?.createdAt ?? '', ...(hl ? { hl } : {}) });
     }
     return items.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
 }
@@ -473,6 +474,8 @@ function untouched() {
     const m = state.chat[0];
     if ((m?.content ?? '') !== g.text || (!m && g.text !== '')) return false;
     if (m && (m.memory !== undefined || m.memoryError !== undefined || m.memoryMerged !== undefined || m.memoryIn !== undefined || m.role !== 'assistant')) return false;
+    // 在开场白上划过线：算动过（划线是用户攒的内容，原地换开场白会把它们一起清掉），新开一个存档、旧的留着
+    if (persist.chatMeta.highlights?.length) return false;
     return JSON.stringify(state.variables.local ?? {}) === g.vars;
 }
 
@@ -536,6 +539,80 @@ export async function renameChat(cardId = persist.cardId, chatId = persist.chatI
     if (!wrote) return toast('这个存档已经不在了', 'error');
     // 这张卡正是当前卡：内存里还有一份目录，也要改，不然下次保存会用旧名字把存储里的目录盖回去
     if (cardId === persist.cardId && persist.index?.chats?.[chatId]) { persist.index.chats[chatId].name = name; save(); }
+}
+
+/**
+ * 现在能不能改这些划线（摘抄页的删除 / 改备注 / 批量删除用，界面也拿它决定禁不禁用）：能 = null，不能 = 给人看的原因。
+ * edits 不给 = 问「一般能不能改」（不看生成中）；给了 = 问这一批能不能改。
+ * 规矩（2026-11-28 用户定）：
+ *   - 只读标签页、停止保存之后、正在恢复备份、正在切换 / 上一个存档操作没做完：一律不能。
+ *   - 正在生成：只涉及【别的存档】的能改（生成写的是当前存档，和它们无关；为什么不会互相盖见 state.js writeStoredHighlights、types.js「划线」）；
+ *     里面有【当前存档】的划线就整批拒绝（当前存档的划线生成中本来就不能改，同 chat.js chatWriteBlocked），不悄悄只做一半。
+ */
+export function highlightEditBlocked(edits) {
+    if (persist.readOnly) return '这个标签页是只读的（见页面顶上的说明），不能改划线';
+    if (persist.stopped) return STOPPED_TEXT;
+    if (restoreActive()) return '正在恢复，请稍等';
+    if (ui.switching || working) return '上一个操作还没做完';
+    if (edits && ui.busy && edits.some(isCurrentChat)) {
+        return edits.length > 1 ? '里面有当前存档的划线，等这次回复生成完再删' : '正在生成回复，等这次结束再改当前存档的划线';
+    }
+    return null;
+}
+
+const isCurrentChat = e => e.cardId === persist.cardId && e.chatId === persist.chatId;
+
+/**
+ * 改划线，可以一次跨多个存档、多张卡（摘抄页的删除、改备注、批量删除都走这里；types.js「划线」写着契约）。
+ * edits：[{cardId, chatId, remove?: 划线 id[], notes?: {划线 id: 新备注}}]，一个存档一项。
+ * - 只涉及别的存档：直接交给 state.js writeStoredHighlights（一个事务里现读、只换 highlights、重算目录 hl；排在写入链后面），
+ *   不走存档层的 op，所以生成中也能做。
+ * - 里面有当前存档（生成中被 highlightEditBlocked 整批拒绝）：在 op 里做（落盘、加锁）。当前存档走内存（state.js editChatHighlights → 落盘），
+ *   和聊天里点高亮删除是同一条路，不另外直接写它的存储记录（免得两边各写一遍互相盖）；别的存档同上一个事务。
+ *   全成或全不成：当前存档落盘失败 → 换回原来的列表、什么都不写；别的存档的事务失败（IndexedDB 整体回滚）→ 当前存档也换回去并落盘。
+ *   只有「事务失败之后换回当前存档时又落盘失败」这种双重失败会留下当前存档已改、别的没改。
+ * 成功返回 {removed, noted, gone}（gone：已经不在、跳过了的存档数）；被拒 / 失败返回 null（已经提示过）。
+ */
+export async function editHighlightsAcross(edits) {
+    const why = highlightEditBlocked(edits);
+    if (why) { toast(why, 'error'); return null; }
+    const curEdit = edits.find(isCurrentChat);
+    const others = edits.filter(e => !isCurrentChat(e));
+    const failText = e => `改划线没能写进存储（${e?.message ?? e}），什么都没有改`;
+    if (!curEdit) {
+        try { return await writeStoredHighlights(others); } catch (e) {
+            console.error('改划线失败', e?.message ?? e);
+            toast(failText(e), 'error');
+            return null;
+        }
+    }
+    let result = null;
+    await op(async () => {
+        // op 里不会换存档，但进 op 之前那一下可能换过：按现在的当前存档重新分
+        const cur = edits.find(isCurrentChat);
+        const rest = edits.filter(e => !isCurrentChat(e));
+        let removed = 0, noted = 0, gone = 0;
+        let curDone = null;
+        if (cur) {
+            curDone = editChatHighlights(cur);
+            if (curDone.changed && !await flushNow()) {
+                restoreChatHighlights(curDone.before);
+                throw new Error('当前存档的改动没能保存，什么都没有改');
+            }
+            removed += curDone.removed; noted += curDone.noted;
+        }
+        if (rest.length) {
+            let r;
+            try { r = await writeStoredHighlights(rest); } catch (e) {
+                // 事务整个没写进去：当前存档那部分也换回去
+                if (curDone?.changed) { restoreChatHighlights(curDone.before); await flushNow(); }
+                throw new Error(failText(e));
+            }
+            removed += r.removed; noted += r.noted; gone += r.gone;
+        }
+        result = { removed, noted, gone };
+    });
+    return result;
 }
 
 /**

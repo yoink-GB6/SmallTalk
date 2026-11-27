@@ -11,6 +11,7 @@ import { renderPresetTab } from './tab-preset.js';
 import { renderRegexTab } from './tab-regex.js';
 import { renderScriptsTab } from './tab-scripts.js';
 import { renderMemoryTab } from './memory.js';
+import { renderExcerptsTab } from './tab-excerpts.js';
 import { renderMiscTab } from './tab-misc.js';
 import { renderPersonaTab } from './tab-persona.js';
 import { renderProviderTab, refreshHealth, paintChatWarn } from './tab-provider.js';
@@ -65,7 +66,7 @@ export function renderInspector(force = false) {
         return;
     }
     ({ prompt: renderPromptTab, world: renderWorldTab, persona: renderPersonaTab, archive: renderArchiveTab, preset: renderPresetTab, regex: f => { renderRegexTab(f); renderScriptsTab(f); },   // 脚本区并在「正则」页下面（各画各的容器）
-         memory: renderMemoryTab, provider: renderProviderTab, misc: renderMiscTab })[active](force === true);
+         memory: renderMemoryTab, excerpts: renderExcerptsTab, provider: renderProviderTab, misc: renderMiscTab })[active](force === true);
 }
 
 export function renderAll() {

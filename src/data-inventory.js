@@ -204,7 +204,7 @@ export const STORE_KEYS = {
             + '不发给模型；只有这张卡的前端卡和脚本读写得到（frame-host.js 的变量作用域）',
     },
     chat: {
-        key: 'chat:<cardId>:<chatId>', what: '存档（ChatRecord：消息、局部变量、名字、作者注释 authorNote（默认值时不写）……）',
+        key: 'chat:<cardId>:<chatId>', what: '存档（ChatRecord：消息、局部变量、名字、作者注释 authorNote（默认值时不写）、划线 highlights（没有时不写）……）',
         kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「存档」页：存档的导出 / 导入（酒馆 .jsonl；作者注释在头的 chat_metadata.note_*）；「杂项」页「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（chats/<卡文件名>/）',
         how: '恢复时换新 id；名字 + 消息 + 变量 + 作者注释相同（chatSig）的跳过——作者注释只在不是默认值时才参与比较，所以没有作者注释的存档（含旧备份）判重和以前一样；'
             + '新加进来的存档的作者注释先规范化（坏值回默认）。'
@@ -216,12 +216,23 @@ export const STORE_KEYS = {
             + '会发给模型（记忆块）；前端卡读不到（getChatMessages / getContextSnapshot 不给 memory 一类字段）。读档时 normalizeMerged 清掉坏段和孤儿标记'
             + '（按旧规矩存下的、成员跳过隐藏回复的已换上的段先升级再判断）。隐藏标记（hidden）不碰记忆：隐藏的楼已有的摘要照旧发。'
             + '楼层变量（ChatMessage.variables，酒馆助手的 message 作用域，2026-11-23 第 2 期加）挂在消息上：跟着存档进备份、参与 chatSig、'
-            + '跟着 .jsonl 的 variables 往返；不发给模型，前端卡和脚本读写得到',
+            + '跟着 .jsonl 的 variables 往返；不发给模型，前端卡和脚本读写得到。'
+            + '划线（ChatRecord.highlights，2026-11-28 加；types.js「划线」、src/highlight.js）：【内容】，挂在存档记录上、不挂在消息上（消息对象的形状不变），'
+            + '一条都没有时不写这个键。只记位置（第几楼、第几个候选、原文的第几个字）不存文字。跟着存档进整体备份；'
+            + '恢复时【判重不看划线】（chatSig 和划线功能出现之前逐字相同，2026-11-28 用户定的）：备份里的存档和本机的除划线外完全相同 → 不新增存档，'
+            + '备份里的划线并进本机那个（backup.js planBackupImport 的 highlightMerges → ui/backup.js doImport 的写入事务里现读那条记录、mergeChatHighlights 只换 highlights，'
+            + '消息 / 变量 / 作者注释 / 名字 / updatedAt 不动，目录 hl 跟着重算；读回不一致时整条换回写之前的）。并集：位置相同（两端楼 / 候选 / offset、整楼标记）算同一条、保留本机的，'
+            + '本机没备注而备份有就补上；本机的一条不删不挪；撞 id 换确定的新 id（highlight.js mergeHighlights）。没有新东西可并就不写，所以同一份备份导两遍第二遍全是跳过、零写入。'
+            + '备份里两个除划线外相同的存档（都不在本机）：进来第一个，划线取并集。当前存档被并入时 state.js adoptRestoredHighlights 让内存跟上。'
+            + '新加进来的存档的划线按它的消息清洗（越界 / 坏的丢掉）；并进来的同样先清洗。读档时（state.js applyCardChat）同样清洗。'
+            + '【不发给模型】（拼装只读消息）；【前端卡和脚本读不到】（getChatMessages / getContextSnapshot / 推给脚本沙箱的副本都只有消息）；'
+            + '【不进 .jsonl】（serializeChatFile 不读它；酒馆没有对应的东西），所以「导出存档 → 再导入」会丢掉划线；酒馆 zip 导入导出同样不带。'
+            + '单独的导出（摘抄导出）以后再做',
     },
     index: {
-        key: 'index:<cardId>', what: '每张卡的存档目录（名字、楼数、时间），切换时只读它',
+        key: 'index:<cardId>', what: '每张卡的存档目录（名字、楼数、时间、划线条数 hl——有划线才写），切换时只读它',
         kind: 'pointer', backup: 'no', restore: 'none', fresh: 'remap', export: null,
-        how: '能从存档重建，不进备份；恢复时为新卡新建、为并进的卡补条目（buildIndex / mergeIndex）',
+        how: '能从存档重建，不进备份；恢复时为新卡新建、为并进的卡补条目（buildIndex / mergeIndex）。hl 给摘抄页挑出有划线的存档用（migrate.js indexEntry），重建时跟着重算',
     },
     preset: {
         key: 'preset:<presetId>', what: '保存下来的预设（PresetRecord）',

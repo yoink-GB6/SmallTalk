@@ -22,6 +22,9 @@ import { sanitizePreset } from '../preset-sanitize.js';
 import { storedAuthorNote } from '../author-note.js';
 import { normalizeMerged } from '../memory-fold.js';
 import { cardVarsKey, normalizeCardVars } from '../cardvars.js';
+import {
+    chatDoc, storedHighlights, newHighlight, addHighlight, removeHighlight, setHighlightNote, editHighlights, shiftAfterEdit, afterDeleteFloors, afterTruncate,
+} from '../highlight.js';
 
 // ───────────────────────────── 状态 ─────────────────────────────
 
@@ -103,7 +106,7 @@ export const persist = {
     cardId: null,       // null = 没卡状态（还没有任何卡记录对应当前聊天）
     chatId: null,
     cardMeta: null,     // CardRecord 去掉 card / avatar：{id, createdAt, activeChatId, usedAt}
-    chatMeta: null,     // ChatRecord 去掉 messages / variables：{id, cardId, name, createdAt, updatedAt, stHeader?, greeting?, authorNote?}
+    chatMeta: null,     // ChatRecord 去掉 messages / variables：{id, cardId, name, createdAt, updatedAt, stHeader?, greeting?, authorNote?, highlights?}
     index: null,        // 当前卡的存档目录 'index:<cardId>'：{cardId, chats: {chatId: {name, count, updatedAt, createdAt}}}
     meta: { version: SCHEMA_VERSION, activeCardId: null },
     epoch: 0,           // 每换一次「state 指向的存档」就 +1。异步回来的操作拿它判断「还是不是当初那个存档」
@@ -375,6 +378,12 @@ export function applyCardChat(cardRec, chatRec, { freshCard = false, freshChat =
         // 外置记忆的合并段（memory-fold.js 文件头「合并段」）：读入容错。坏的段、孤儿标记去掉（被去掉标记的轮回到待压缩）。
         // 和作者注释一样，快照按规范化之后的记，只是读一下不会引起一次重写
         normalizeMerged(state.chat);
+        // 划线（types.js ChatRecord.highlights）：读入容错，按这个存档的消息核对（楼号越界、候选不存在、超出原文长度的丢掉）。
+        // 一条都不剩就去掉这个键。同作者注释：快照按清洗之后的记，只是读一下不会引起一次重写
+        if ('highlights' in meta) {
+            const hl = storedHighlights(meta.highlights, chatDoc(state.chat));
+            if (hl) meta.highlights = hl; else delete meta.highlights;
+        }
         state.variables = { local: isObj(variables) ? variables : {}, global: state.variables.global };
         persist.chatId = chatRec.id;
         persist.chatMeta = meta;
@@ -410,6 +419,126 @@ export function setAuthorNote(patch) {
     if (next) persist.chatMeta.authorNote = next; else delete persist.chatMeta.authorNote;
     if (JSON.stringify(persist.chatMeta.authorNote ?? null) === before) return false;
     save();
+    return true;
+}
+
+// ───────────────────────────── 划线（types.js ChatRecord.highlights，纯逻辑 src/highlight.js） ─────────────────────────────
+// 运行时挂在 persist.chatMeta.highlights（state 的形状不变；和作者注释同一条路：chatMeta 变了 buildWrites 就重写这条存档记录，不更新 updatedAt）。
+// 读入时（applyCardChat）已按消息清洗过，所以这里拿到的都是合法的。
+// 两类入口：
+//   - 用户操作（第二段的界面调）：addChatHighlight / removeChatHighlight / setChatHighlightNote —— 自己 save()。
+//     拦截（只读、生成中、恢复中、停止保存、正在切换）由调用方先判断（chat.js chatWriteBlocked），同 setAuthorNote。
+//   - 原文变了 / 删了楼的钩子：highlightsAfterEdit / highlightsAfterDelete / highlightsAfterTruncate / clearChatHighlights ——
+//     【不】save()，调用方改完聊天自己会存（它们和 invalidateTurnAt 挂在同一批入口上：chat.js、frame-host.js）。
+
+/** 当前存档的划线（没有 = []）。不要原地改返回的数组 */
+export const currentHighlights = () => persist.chatMeta?.highlights ?? [];
+
+/** 换成新列表（空 = 删掉这个键）。返回有没有变 */
+function putHighlights(list) {
+    if (!persist.chatMeta) return false;
+    const before = persist.chatMeta.highlights;
+    if (Array.isArray(list) && list.length) persist.chatMeta.highlights = list;
+    else delete persist.chatMeta.highlights;
+    return before !== persist.chatMeta.highlights;
+}
+
+/**
+ * 给当前存档加一条划线。spec = {from, to, whole?, note?}（端点见 types.js HighlightPoint；一般来自 highlight.js rangeFromSelection）。
+ * 不合法（越界、长度为 0、同一楼两端候选不同……）或和已有的一条位置完全相同 → 不加，返回 null；加了返回新的那条。
+ */
+export function addChatHighlight(spec) {
+    if (!persist.chatMeta) return null;
+    const h = newHighlight(spec, chatDoc(state.chat), { newId: uid });
+    if (!h) return null;
+    const cur = currentHighlights();
+    const next = addHighlight(cur, h);
+    if (next === cur) return null;
+    putHighlights(next);
+    save();
+    return h;
+}
+
+/** 删一条。返回有没有删 */
+export function removeChatHighlight(id) {
+    if (!putHighlights(removeHighlight(currentHighlights(), id))) return false;
+    save();
+    return true;
+}
+
+/** 改备注（空 = 去掉备注）。返回有没有改 */
+export function setChatHighlightNote(id, note) {
+    const cur = currentHighlights();
+    const next = setHighlightNote(cur, id, note);
+    if (JSON.stringify(next) === JSON.stringify(cur)) return false;
+    putHighlights(next);
+    save();
+    return true;
+}
+
+/**
+ * 钩子：第 i 楼（当前显示的候选）的原文从 before 改成了 after（编辑、拼装页就地改、前端卡 / 脚本 setChatMessages、换开场白）。
+ * 改动段之前的划线不动、之后的平移、交叠的删掉（highlight.js shiftAfterEdit）。不 save()。返回删掉的 id
+ */
+export function highlightsAfterEdit(i, before, after) {
+    const cur = currentHighlights();
+    if (!cur.length || before === after) return [];
+    const r = shiftAfterEdit(cur, { floor: i, swipe: chatDoc(state.chat).current(i), before, after });
+    if (r.changed) putHighlights(r.list);
+    return r.removed;
+}
+
+/** 钩子：删掉了这些楼（删之前的楼号；前端卡的 deleteChatMessages 是任意单删）。要在 state.chat 真的删之前或之后调都行。不 save() */
+export function highlightsAfterDelete(floors) {
+    const r = afterDeleteFloors(currentHighlights(), floors);
+    if (r.changed) putHighlights(r.list);
+    return r.removed;
+}
+
+/** 钩子：「删这一楼及之后」，截到 n 楼。不 save() */
+export function highlightsAfterTruncate(n) {
+    const r = afterTruncate(currentHighlights(), n);
+    if (r.changed) putHighlights(r.list);
+    return r.removed;
+}
+
+/**
+ * 摘抄页改当前存档的划线（删一批 / 改备注，highlight.js editHighlights）。只改内存（persist.chatMeta.highlights），然后 save()——
+ * 和聊天里点高亮删除 / 改备注是同一条路。调用方（archive.js editHighlightsAcross）先查拒绝条件。
+ * 返回 {changed, removed, noted, before}：before 是改之前的列表，后面的存储写入失败时用 restoreChatHighlights 换回去
+ */
+export function editChatHighlights(edit) {
+    const before = persist.chatMeta?.highlights;
+    const r = editHighlights(currentHighlights(), edit);
+    if (!r.changed) return { ...r, before };
+    putHighlights(r.list);
+    save();
+    return { ...r, before };
+}
+
+/** editChatHighlights 的撤回：把列表换回 before（undefined = 原来就没有这个键）并保存 */
+export function restoreChatHighlights(before) {
+    putHighlights(Array.isArray(before) ? before : []);
+    save();
+}
+
+/** 钩子：当前存档的聊天整个重来了（startChat 原地换开场白）。不 save() */
+export function clearChatHighlights() {
+    putHighlights([]);
+}
+
+/**
+ * 恢复整体备份把备份里的划线并进了存储里的【当前存档】（ui/backup.js doImport：写入事务和读回校验都成功之后调）：内存跟上存储。
+ * stored = 写进存储的那条记录的 highlights。按消息清洗后装进 persist.chatMeta（和读档 applyCardChat 同一个规矩）。
+ * 快照原来和内存一致（doImport 进来前落过盘、之后暂停保存）就跟着换成新的，于是不会多一次重写；
+ * 不更新内存的话，下一次保存会拿内存里的旧列表把并进来的划线盖掉。不是当前存档 → 什么都不做，返回 false
+ */
+export function adoptRestoredHighlights(cardId, chatId, stored) {
+    if (!persist.chatMeta || persist.cardId !== cardId || persist.chatId !== chatId) return false;
+    const synced = snap.chatMeta === JSON.stringify(persist.chatMeta);
+    const hl = storedHighlights(stored, chatDoc(state.chat));
+    if (hl) persist.chatMeta.highlights = hl; else delete persist.chatMeta.highlights;
+    if (synced) snap.chatMeta = JSON.stringify(persist.chatMeta);
     return true;
 }
 
@@ -601,6 +730,59 @@ export function patchStoredChat(cardId, chatId, mutate) {
         return wrote;
     });
     // 链上保留之前那次写入的成败（这次补丁失败不算「保存失败」，调用方自己看返回值）
+    writing = p.then(() => prev, () => prev);
+    return p;
+}
+
+/**
+ * 改【非当前】存档的划线（摘抄页的删除 / 改备注；入口是 archive.js editHighlightsAcross，契约和交叠分析见 types.js「划线」）。
+ * edits：[{cardId, chatId, remove?: id[], notes?: {id: 备注}}]，都不能是当前存档（有就整批 reject）。
+ * 【一个事务】里现读这些存档记录和它们所在卡的目录 → 按消息清洗后改（highlight.js editHighlights）→ 只换 highlights（一条不剩删键）写回，
+ * 同一事务里用 indexEntry 重算目录条目。消息、记忆摘要、变量、作者注释、名字、updatedAt 都是事务里读到的原样。存档不在了就跳过（不复活）。
+ * 和 patchStoredChat 一样【排在写入链后面】：之前已经排进去的保存先写完；之后的切换 / 删存档（op 先 flushNow = 等这条链）要等它写完才动存档。
+ * 所以它不需要存档层的锁，生成中也能做（2026-11-28 用户定的：生成写的是当前存档，和别的存档无关）。
+ * 当前卡的目录在内存里也有一份（persist.index，每次保存整份写回）：写完后跟着换，并 save() 一次——万一有一次保存在这之前就拼好了
+ * （拼的时候用的是旧条目）、排在这次事务后面执行，把 hl 盖回了旧值，这次保存会再写一遍对的。
+ * @returns {Promise<{removed: number, noted: number, gone: number, touched: {cardId, chatId}[]}>}  事务失败 → reject（IndexedDB 整体回滚，什么都没写）
+ */
+export function writeStoredHighlights(edits) {
+    if (persist.readOnly || persist.stopped) return Promise.reject(new Error(persist.stopped ? STOPPED_TEXT : '这个标签页是只读的'));
+    if (edits.some(e => e.cardId === persist.cardId && e.chatId === persist.chatId)) return Promise.reject(new Error('当前存档的划线要走内存'));
+    const ck = edits.map(e => chatKey(e.cardId, e.chatId));
+    const cards = [...new Set(edits.map(e => e.cardId))];
+    const ik = cards.map(indexKey);
+    const touched = [];
+    let gone = 0;
+    const prev = writing;
+    const p = prev.then(() => store.transact([...ck, ...ik], values => {
+        touched.length = 0; gone = 0;   // 回调重跑时从头算
+        const ops = [];
+        const idx = new Map();
+        edits.forEach((e, i) => {
+            const rec = values[i];
+            if (!rec || typeof rec !== 'object') { gone++; return; }
+            const clean = storedHighlights(rec.highlights, chatDoc(rec.messages)) ?? [];
+            const r = editHighlights(clean, e);
+            if (!r.changed) return;
+            const { highlights: _old, ...rest } = rec;
+            const next = r.list.length ? { ...rest, highlights: r.list } : rest;
+            ops.push({ set: ck[i], value: next });
+            touched.push({ cardId: e.cardId, chatId: e.chatId, entry: indexEntry(next), removed: r.removed, noted: r.noted });
+            const old = idx.get(e.cardId) ?? values[ck.length + cards.indexOf(e.cardId)];
+            if (old?.chats?.[e.chatId]) idx.set(e.cardId, { ...old, chats: { ...old.chats, [e.chatId]: indexEntry(next) } });
+        });
+        for (const [cardId, v] of idx) ops.push({ set: indexKey(cardId), value: v });
+        return ops;
+    })).then(() => {
+        let mine = false;
+        for (const t of touched) {
+            if (t.cardId === persist.cardId && persist.index?.cardId === t.cardId && persist.index.chats[t.chatId]) { persist.index.chats[t.chatId] = t.entry; mine = true; }
+        }
+        if (mine) save();
+        return { removed: touched.reduce((n, t) => n + t.removed, 0), noted: touched.reduce((n, t) => n + t.noted, 0), gone,
+            touched: touched.map(t => ({ cardId: t.cardId, chatId: t.chatId })) };
+    });
+    // 链上保留之前那次写入的成败（这次失败不算「保存失败」，调用方自己看返回值）
     writing = p.then(() => prev, () => prev);
     return p;
 }
