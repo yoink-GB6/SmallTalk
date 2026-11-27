@@ -118,7 +118,7 @@
 .ph-lock-clock { margin-top: 14%; }
 .ph-lock-time { font-size: 84px; line-height: 1; font-weight: 300; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .ph-lock-date { margin-top: 12px; font-size: 15px; color: color-mix(in srgb, var(--ph-ink) 78%, transparent); }
-.ph-lock-foot { margin-top: auto; padding-bottom: 8%; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.ph-lock-foot { margin-top: auto; padding-bottom: 10%; display: flex; flex-direction: column; align-items: center; }
 .ph-finger {
   position: relative; width: 68px; height: 68px; display: grid; place-items: center; border-radius: 50%;
   background: color-mix(in srgb, var(--panel) 62%, transparent); color: var(--ph-ink);
@@ -128,7 +128,6 @@
 .ph-finger-ring { position: absolute; inset: -4px; border: 2px solid var(--accent); border-radius: inherit; opacity: 0; pointer-events: none; }
 .ph-scanning .ph-finger-ring { animation: ph-scan .45s ease-out; }
 @keyframes ph-scan { 0% { opacity: .95; transform: scale(.82); } 100% { opacity: 0; transform: scale(1.4); } }
-.ph-lock-hint { font-size: 12px; color: var(--dim); }
 
 /* 桌面：按清单自动排的格子 */
 .ph-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px 6px; align-content: start; padding: 26px 18px 0; }
@@ -226,16 +225,15 @@
 :root[data-theme="princesse"] .ph-tile-name { font-size: 10.5px; font-weight: 400; text-transform: uppercase; letter-spacing: .16em; margin-right: -.16em; }
 :root[data-theme="princesse"] .ph-lock-time { font-weight: 300; letter-spacing: .04em; font-family: var(--pr-font-heading); }
 :root[data-theme="princesse"] .ph-lock-date { letter-spacing: .14em; }
-:root[data-theme="princesse"] .ph-lock-hint { letter-spacing: .12em; }
 :root[data-theme="princesse"] .ph-app-title { font-weight: 400; text-transform: uppercase; letter-spacing: .24em; margin-right: -.24em; font-size: 14px; }
 :root[data-theme="princesse"] .ph-homebar-line { border-radius: 0; height: 2px; width: 96px; }
 :root[data-theme="princesse"] .ph-wall {
   background: linear-gradient(170deg, var(--panel-2), var(--bg));
 }
 :root[data-theme="princesse"] .ph-wall::before {   /* 山茶花：墨线素材当遮罩，颜色取 --text，只露很淡的一层（浅色同 --pr-deco-opacity 的量级） */
-  inset: auto; width: 128%; height: 82%; left: -28%; bottom: -16%; aspect-ratio: auto; border: 0; border-radius: 0;
-  background: var(--text); opacity: .075;
-  -webkit-mask: var(--pr-deco-image) center / contain no-repeat; mask: var(--pr-deco-image) center / contain no-repeat;
+  inset: auto; height: 33%; width: 70%; left: 6px; bottom: 36px; aspect-ratio: auto; border: 0; border-radius: 0;   /* 左下角、高约屏幕的三分之一；bottom 留出 home 条（28px）的位置 */
+  background: var(--text); opacity: .09;
+  -webkit-mask: var(--pr-deco-image) left bottom / contain no-repeat; mask: var(--pr-deco-image) left bottom / contain no-repeat;
 }
 :root[data-theme="princesse"] .ph-wall::after { display: none; }
 @media (prefers-color-scheme: dark) {

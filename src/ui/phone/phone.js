@@ -168,7 +168,7 @@ function buildLock(extra) {
     extra.lockDate = h('div', { class: 'ph-lock-date' });
     return h('section', { class: 'ph-view ph-lock', 'data-view': 'lock' },
         h('div', { class: 'ph-lock-clock' }, extra.lockTime, extra.lockDate),
-        h('div', { class: 'ph-lock-foot' }, finger, h('div', { class: 'ph-lock-hint' }, '按一下指纹解锁')));
+        h('div', { class: 'ph-lock-foot' }, finger));   // 不写提示文字，只留指纹图标（aria-label 给读屏用）
 }
 
 function buildHome() {
