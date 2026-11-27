@@ -30,6 +30,9 @@ let installMsg = '';        // 点「安装」之后就地显示的结果
 let timer = null;           // 弹着时每秒看一次让路条件（只读 / 恢复备份中不发 pwa 事件）
 let closing = false;        // 两步都完成了，正在显示"好了"
 
+/** iPhone / iPad 的提醒（按 iOS 的一般行为写的，没在真机上验证）。弹窗的「注：」和「杂项」页的安装说明共用这一句 */
+export const IPHONE_FIRST_NOTE = 'iPhone / iPad 请先添加到主屏幕再开始用：主屏幕上的应用和 Safari 里的网页是两份互不相通的数据，先在 Safari 里用了再装，就得用整体备份手动搬一遍。';
+
 const guideOff = () => { try { return localStorage.getItem(GUIDE_OFF_KEY) === '1'; } catch { return false; } };
 
 /**
@@ -80,7 +83,7 @@ function paint() {
         h('div', { class: 'fr-title' }, done ? '好了，数据更稳了' : '以防聊天丢失'),
         done ? null : installRow,
         done ? null : persistRow,
-        done ? null : h('div', { class: 'dim fr-note' }, '注：数据只存在这台设备的浏览器里。浏览器可能在空间不够或很久没打开时自动清掉（iPhone 的 Safari 是 7 天没打开就清），清掉就找不回来。也请定期做整体备份。'),
+        done ? null : h('div', { class: 'dim fr-note' }, '注：数据只存在这台设备的浏览器里。浏览器可能在空间不够或很久没打开时自动清掉（iPhone 的 Safari 是 7 天没打开就清），清掉就找不回来。' + IPHONE_FIRST_NOTE + '也请定期做整体备份。'),
         done ? null : h('div', { class: 'fr-foot' },
             h('button', { type: 'button', 'data-fk': 'guide-later', onclick: later }, '以后再说'),
             h('button', { type: 'button', 'data-fk': 'guide-never', onclick: onNever }, '不再提示'))));

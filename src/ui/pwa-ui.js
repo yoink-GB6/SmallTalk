@@ -16,7 +16,7 @@
 
 import { $, h, toast } from './dom.js';
 import { ui, persist, flushNow } from './state.js';
-import { installHelpNodes, initFirstRunGuide } from './first-run-guide.js';
+import { installHelpNodes, IPHONE_FIRST_NOTE, initFirstRunGuide } from './first-run-guide.js';
 import { pwaEvents, getPwaState, initPwa, setBeforeReload, applyUpdate, promptInstall, requestPersist } from '../pwa.js';
 
 const DRAFT_KEY = 'smalltalk-update-draft';   // sessionStorage 里暂存输入框内容的键
@@ -100,7 +100,7 @@ function paintSection(box, s) {
     ];
     if (!installed && !s.installable) {
         lines.push(h('div', { class: 'dim pwa-desc', 'data-fk': 'pwa-install-help' },
-            ...installHelpNodes()));   // 说明文字和首次指引弹窗共用一份（first-run-guide.js）
+            ...installHelpNodes(), h('div', null, IPHONE_FIRST_NOTE)));   // 说明文字和首次指引弹窗共用一份（first-run-guide.js）
     }
     lines.push(h('div', { class: 'dim pwa-desc' }, '为什么值得装：iPhone 的 Safari 会清掉 7 天没访问过的网站的数据，装到主屏幕的不受影响；装好后断网也能打开。'));
 
