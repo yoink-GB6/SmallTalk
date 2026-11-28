@@ -325,9 +325,18 @@ function canSwitch() {
     return true;
 }
 
+const beforeOpHooks = [];
+/**
+ * 登记一个「任何存档 / 卡的操作（切换、新建、删除、导入、恢复……）真正开始之前」要先跑的函数（同步）。
+ * 写卡页用它：聊过的存档里攒着没写的开场白改动，要在切走之前写进【还没离开的】那个存档（切换一开始 ui.switching 就为真，
+ * 那之后改聊天记录会被拒）。只在 canSwitch 通过之后才跑——这次操作被拒绝时什么也不会发生，改动继续攒着等失焦。
+ */
+export const onBeforeOp = fn => { if (!beforeOpHooks.includes(fn)) beforeOpHooks.push(fn); };
+
 /** 包一层：检查、加锁、先落盘；落盘失败就放弃（宁可不切换也不丢数据） */
 async function op(fn) {
     if (!canSwitch()) return false;
+    for (const hook of beforeOpHooks) { try { hook(); } catch (e) { console.error(e); } }
     working = true;
     ui.switching = true;   // 切换期间：发送、重新生成、删楼、编辑、手动回复、前端卡调用一律不生效（见 chat.js / frame-host.js）
     try {

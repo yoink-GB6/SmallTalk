@@ -172,6 +172,8 @@
           <span class="cm-lead">使用</span>
           <span id="chat-model" class="model-picker" data-sentence="1" title="聊天用的接口和模型"></span>
         </div>
+        <!-- 聊天用的那条通道不可用时，tab-provider.js 的 refreshHealth 在这里写原因（红点点进来后看得出哪里不对） -->
+        <div id="chat-channel-note" class="dim" data-fk="chat-channel-note" hidden></div>
         <div id="provider-panel"></div>
       </section>
       <!-- 「预设」页：原来右侧面板的 #tab-preset 整个搬到这里；内容由 tab-preset.js 的 renderPresetTab 画 -->

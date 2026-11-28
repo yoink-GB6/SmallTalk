@@ -245,13 +245,15 @@ function placeLabel(path) {
 
 /**
  * 备份对象里第一个带着敏感字段（酒馆的连接信息，清单见 preset-sanitize.js）的预设：{name, categories}；没有返回 null。
- * 只看预设本体的顶层：presets[].preset，以及旧形状 global 里的 global.preset。只返回名字和类别，不返回字段的值。
+ * 只看预设本体的顶层：presets[].preset，旧形状 global 里的 global.preset，以及手机的 phone.presets[]。只返回名字和类别，不返回字段的值。
  * 自检拦下 'preset-sensitive' 之后，界面用它说清楚是哪个预设、哪一类东西。
  */
 export function presetSensitivePlace(backup) {
     if (!isObj(backup)) return null;
     const bodies = [...(Array.isArray(backup.presets) ? backup.presets : []).map(p => [p?.name, p?.preset]),
-        ...(isObj(backup.global) && isObj(backup.global.preset) ? [[backup.global.presetName, backup.global.preset]] : [])];
+        ...(isObj(backup.global) && isObj(backup.global.preset) ? [[backup.global.presetName, backup.global.preset]] : []),
+        // 手机的聊天预设（phone.presets[]）本身就是预设本体，没有外面那层 .preset
+        ...(isObj(backup.phone) && Array.isArray(backup.phone.presets) ? backup.phone.presets.map(p => [p?.name, p]) : [])];
     for (const [name, body] of bodies) {
         if (!isObj(body)) continue;
         const names = Object.keys(body).filter(isSensitivePresetField);

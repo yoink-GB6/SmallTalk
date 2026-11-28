@@ -22,6 +22,7 @@ import {
 import { importFiles, importBlockedReason } from './importer.js';   // 循环依赖（importer 导入 archive）：只在函数体里调用
 import { importChatFiles } from './import-chats.js';   // 同上：只在函数体里调用
 import { openImportMenu } from './import-menu.js';
+import { sessionsUsingCard } from './phone/phone-store.js';   // 只在函数体里调用（和 archive.js 同样的循环依赖顾虑）
 import { openSearch } from './chat-search.js';   // 「搜索聊天记录」按钮用（只在函数体里调用）
 import { closePhone, isMeetupShown } from './phone/phone.js';   // 这一页现在住在手机的 Meetup 里；进入 RP = 收起手机（规则见 enterRp）
 import { writerOwnsTab, drawWriter, openWriter, editCard } from './card-writer.js';   // 循环依赖：只在函数体里调用
@@ -309,7 +310,11 @@ async function batchDelete(cards) {
     const list = cards.filter(c => picked.has(c.id));
     if (!list.length || batchBusy) return;
     const chats = list.reduce((n, c) => n + (c.chatCount ?? 0), 0);
-    if (!confirm(`删除选中的 ${list.length} 张角色卡，连同它们共 ${chats} 个存档？删掉就找不回来了。`)) return;
+    // 手机里用到这些卡的会话（和单张删卡 archive.js deleteCard 同一句话）：不删，留着只能看。按卡数了再加起来；数不出来就不说，不挡删卡
+    let phoneN = 0;
+    try { for (const c of list) phoneN += await sessionsUsingCard(c.id); } catch (e) { console.warn('数手机会话失败', e?.message ?? e); phoneN = 0; }
+    if (!confirm(`删除选中的 ${list.length} 张角色卡，连同它们共 ${chats} 个存档？删掉就找不回来了。`
+        + (phoneN ? `\n有 ${phoneN} 个手机会话用到它们：会话会留着、能看，但不能再聊。` : ''))) return;
     batchBusy = true; draw();
     let done = 0, stoppedAt = null;
     try {

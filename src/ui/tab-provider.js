@@ -25,8 +25,18 @@ export const chatEndpointType = () => endpointById(state.chatModel?.endpoint)?.t
  * 函数名沿用 paintChatWarn：renderTopbar 和 refreshHealth 都已经在适当的时机调它。
  */
 export function paintChatWarn() {
-    setSettingsBadge('provider', !!refProblem(state.chatModel));
+    setSettingsBadge('provider', !!refProblem(state.chatModel) || channelDown);
 }
+
+/**
+ * 聊天用的那条通道（健康灯 #health 的 bad）现在是不是用不了：refreshHealth 查完后记下，红点和 refProblem 是「或」的关系。
+ * 只在聊天模型【指向的接口存在】时才可能为 true，所以聊天用的是别的接口、Claude Code 那条通道坏了，和用户无关，不亮；
+ * 网页版没有命令行类的接口，也不会亮。接口还没读回来 / 接口不存在这类情况灯虽然也是 bad，但那是 refProblem 的活
+ * （它处理了「还没读回来」不误报），这里不重复。每次 refreshHealth 一开始先清成 false（还没查出结果 = 不报），查完再画。
+ * 目前 refProblem 看不到、只有健康灯看得到的情况：读不到接口列表的旧服务，退路里的 Claude Code 显示就绪，但 /api/health 说它不可用。
+ */
+let channelDown = false;
+let healthSeq = 0;   // 连着调两次时，先发的那次晚回来不能盖掉后发的结果
 
 /** 重读接口列表（启动时调一次），更新所有选择器和健康灯 */
 export async function refreshEndpoints() {
@@ -36,11 +46,21 @@ export async function refreshEndpoints() {
 
 /** 健康灯跟着「聊天模型的接口」走：就绪 = 绿；否则红，提示缺什么 */
 export async function refreshHealth() {
+    const seq = ++healthSeq;
+    channelDown = false;
+    { const n = $('#chat-channel-note'); if (n) n.hidden = true; }
     paintChatWarn();   // 同步先画（后面有 await）；refreshHealth 本来就是「聊天模型或接口列表变了」时必调的那个入口
     const el = $('#health');
     const ref = state.chatModel;
     const ep = endpointById(ref?.endpoint);
-    const set = (ok, title) => { el.className = `health ${ok ? 'ok' : 'bad'}`; el.title = title; };
+    const set = (ok, title) => {
+        if (seq !== healthSeq) return;   // 已经有更新的一次在查了
+        el.className = `health ${ok ? 'ok' : 'bad'}`; el.title = title;
+        channelDown = !ok && !!ep;   // 接口不存在的 bad 归 refProblem 管（见 channelDown 的说明）
+        const note = $('#chat-channel-note');
+        if (note) { note.hidden = !channelDown; note.textContent = channelDown ? '聊天通道现在用不了：' + title : ''; }
+        paintChatWarn();
+    };
     if (!ep && refUnpicked(ref)) return set(false, '还没选聊天用的接口（到手机 Settings 的「接口」页添加一个接口，再在页面顶部选它）');
     if (!ep) return set(false, '聊天模型指向的接口已被删除（到手机 Settings 的「接口」页检查，再在「接口」页顶部重新选择聊天模型）');
     if (ep.type === 'codex-cli') return set(ep.ready, ep.ready ? `Codex：${ep.detail}（只检查了可执行文件，没有检查登录状态）` : `Codex 不可用：${ep.detail}`);

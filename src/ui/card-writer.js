@@ -31,7 +31,7 @@ import {
     applyCardFields, greetingList, setGreetings, filteredIndex, slotOfFiltered, followSlot, applyListOp, fitWithin, AVATAR_MAX_SIDE,
 } from '../card-writer.js';
 import { parseCardScripts, flattenScripts } from '../scripts.js';
-import { openBlankCard, switchCard, newChat, refreshGreetingInPlace, chatUntouched, listCards } from './archive.js';   // 循环依赖：只在函数体里调用
+import { onBeforeOp, openBlankCard, switchCard, newChat, refreshGreetingInPlace, chatUntouched, listCards } from './archive.js';   // 循环依赖：只在函数体里调用
 import { closePhoneIfNarrow } from './phone/phone.js';
 import { renderArchiveTab } from './tab-archive.js';                     // 同上
 import { chatWriteBlocked, editMessageText } from './chat.js';           // 同上
@@ -46,6 +46,7 @@ const view = { mode: /** @type {null|'write'|'pick'|'compare'} */ (null), compar
 export const writerOwnsTab = () => view.mode !== null;
 
 function go(mode, compareId = null) {
+    commitFloor0();   // 离开写卡页（返回、去挑对比的卡……）之前，把攒着的开场白改动写进当前存档
     view.mode = mode;
     view.compareId = compareId;
     renderArchiveTab(true);
@@ -168,6 +169,8 @@ function buildPage(cardId) {
     const newChatBtn = h('button', { 'data-fk': 'cw-new-chat', type: 'button', title: '给这张卡新开一个存档，用勾着「当前」的那个开场白（没有勾着的就用第一个非空的），从头再聊',
         onclick: startNewChat }, '新对话');
     const greetNote = h('div', { class: 'dim cw-note', 'data-fk': 'cw-greet-note' });
+    // 聊过的存档里改了开场白、还没写进第 0 楼时的小提示（写进去就消失，见 updatePage）
+    const greetPending = h('div', { class: 'dim cw-note', 'data-fk': 'cw-greet-pending', hidden: true }, '有改动还没写进当前存档的第 0 楼：点别处后才会改（聊天区暂时不变）。');
     const worldBtn = h('button', { 'data-fk': 'cw-world', type: 'button', onclick: () => { closePhoneIfNarrow(); $('#tabs button[data-tab="world"]')?.click(); } }, '编辑世界书');
     const regexBtn = h('button', { 'data-fk': 'cw-regex', type: 'button', onclick: () => { closePhoneIfNarrow(); $('#tabs button[data-tab="regex"]')?.click(); } }, '编辑美化（正则）');
 
@@ -177,9 +180,9 @@ function buildPage(cardId) {
         field('名字', HINTS.name, name, nameWarn),
         field('头像', HINTS.avatar, h('div', { class: 'row cw-avatar-row' }, img, noImg, pickBtn, dropBtn)),
         field('人设（描述）', HINTS.description, desc),
-        field('开场白', null, greetBox, h('div', { class: 'row' }, addGreet, newChatBtn), greetNote),
+        field('开场白', null, greetBox, h('div', { class: 'row' }, addGreet, newChatBtn), greetNote, greetPending),
         field('世界书和美化', HINTS.extras, h('div', { class: 'row' }, worldBtn, regexBtn)));
-    return { root, cardId, greetRows: [], els: { compare, why, name, nameWarn, img, noImg, pickBtn, dropBtn, desc, greetBox, addGreet, newChatBtn, greetNote, worldBtn, regexBtn } };
+    return { root, cardId, greetRows: [], els: { compare, why, name, nameWarn, img, noImg, pickBtn, dropBtn, desc, greetBox, addGreet, newChatBtn, greetNote, greetPending, worldBtn, regexBtn } };
 }
 
 /**
@@ -237,6 +240,7 @@ function updatePage() {
     e.noImg.hidden = !!state.avatar;
     if (state.avatar && e.img.getAttribute('src') !== state.avatar) e.img.src = state.avatar;
     e.greetNote.textContent = greetingNote;
+    e.greetPending.hidden = !pendingFloor0;   // 有攒着没写的开场白改动才显示
 }
 
 /** 有不能改的原因就提示并返回 false */
@@ -278,21 +282,24 @@ function onGreeting(i, el) {
     if (!setGreetings(state.card, list)) return;
     save();
     if (chatUntouched()) { schedulePreview(true); return; }
-    // 聊过的存档：不每个字改一次第 0 楼（每次改原文都会让这一轮的外置记忆作废、开着记忆时会发一次压缩请求，花额度），
-    // 记下「这次编辑前」的开场白，失焦（onblur）或停手 1.5 秒时 commitFloor0 写一次
+    // 聊过的存档：不每个字、也不「停手一会儿」就改一次第 0 楼——每次改原文都会让这一轮的外置记忆作废，开着记忆时就会发一次压缩请求，
+    // 一边打字一边停顿会一直花额度（实测过）。所以只记下「这次编辑前」的开场白，等输入框失焦（onblur）、
+    // 离开写卡页（go）、或切卡 / 切存档之前（archive.js 的 onBeforeOp 钩子）才由 commitFloor0 写一次。
     if (pendingFloor0 && pendingFloor0.slot !== i) commitFloor0();
-    if (!pendingFloor0) pendingFloor0 = { slot: i, base: before, cardId: persist.cardId, epoch: persist.epoch };
-    clearTimeout(floor0Timer);
-    floor0Timer = setTimeout(commitFloor0, 1500);
+    if (!pendingFloor0) {
+        pendingFloor0 = { slot: i, base: before, cardId: persist.cardId, epoch: persist.epoch };
+        if (!hooked) { hooked = true; onBeforeOp(commitFloor0); }   // 顶层不能调兄弟 ui 模块的函数，所以第一次需要时才挂
+    }
+    if (page) page.els.greetPending.hidden = false;
     schedulePreview(false);   // 顶栏、开场白下拉框、拼装预览
 }
 
 /**
  * 聊过的存档里改开场白：攒着的一次编辑（{slot, base: 这次编辑前的开场白原文, cardId, epoch}）。
- * 失焦或停手 1.5 秒时 commitFloor0 处理，处理完清空。
+ * 失焦、离开写卡页、切卡 / 切存档之前由 commitFloor0 处理，处理完清空。
  */
 let pendingFloor0 = null;
-let floor0Timer = null;
+let hooked = false;   // commitFloor0 是否已经挂到 archive.js 的 onBeforeOp 上
 
 /**
  * 开场白原文 → 进第 0 楼时存下的样子：照 chat.js startChat 建第 0 楼的做法——先宏替换（macroContext([], 变量)），再跑永久生效的正则
@@ -315,12 +322,15 @@ function renderGreeting(text) {
  * 写进去的是新开场白宏替换之后的文字（和 startChat 一样，第 0 楼里不留 {{user}} 这种宏）。
  */
 function commitFloor0() {
-    clearTimeout(floor0Timer);
     const p = pendingFloor0;
     pendingFloor0 = null;
+    commitFloor0Inner(p);
+    if (page) updatePage();   // 提示条（有改动还没写）跟着消失；各处的状态文字也在这里统一刷新
+}
+function commitFloor0Inner(p) {
     if (!p || p.cardId !== persist.cardId || p.epoch !== persist.epoch || !state.card) return;
     if (chatUntouched()) return;   // 这期间存档变成了没聊过的（不会发生，防御）：实时预览那条路已经管了
-    if (blocked(true) !== null) { greetingNote = '现在不能改聊天记录，这个存档的第 0 楼没有跟着改。'; if (page) updatePage(); return; }
+    if (blocked(true) !== null) { greetingNote = '现在不能改聊天记录，这个存档的第 0 楼没有跟着改。'; return; }
     const list = greetingList(state.card);
     const now = list[p.slot] ?? '';
     if (now === p.base) return;
@@ -333,7 +343,6 @@ function commitFloor0() {
         editMessageText(0, renderGreeting(now).sub);
         greetingNote = '已经改到这个存档的第 0 楼（后面的楼没动）。';
     }
-    if (page) updatePage();
 }
 
 /**

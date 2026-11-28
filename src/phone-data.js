@@ -12,6 +12,7 @@ import { textsDoc, storedHighlights, newHighlight, addHighlight, removeHighlight
 import { pickParams } from './openai-shared.js';
 import { makeUniqueNamer } from './migrate.js';
 import { alignPersonas } from './personas.js';
+import { isSensitivePresetField } from './preset-sanitize.js';
 
 const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStr = v => typeof v === 'string';
@@ -124,7 +125,11 @@ export function normalizeChatPreset(p) {
         // params 缺了 = 默认那份；给了就以给的为准（用户删掉温度 = 让接口用它自己的默认，这是允许的）
         params: isObj(p.params) ? pickParams(p.params) : { ...d.params },
     };
-    return keepUnknown(out, p, PRESET_KNOWN);
+    // 不认识的字段原样保留，但酒馆的连接信息（反代地址 / 密码、凭据类字段名，清单见 preset-sanitize.js）一律不留：
+    // 手改的 / 别人给的备份里带着它们，存下来再随导出带走就泄露了（和 RP 预设同一条规矩，复用同一份清单）
+    const kept = keepUnknown({}, p, PRESET_KNOWN);
+    for (const k of Object.keys(kept)) if (!isSensitivePresetField(k)) out[k] = kept[k];
+    return out;
 }
 
 /**
