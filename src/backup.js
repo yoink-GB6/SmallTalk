@@ -508,14 +508,14 @@ export function endpointHost(baseUrl) {
  *        hosts：新建成功的接口各指向哪个主机（endpointHost 的结果）、带没带 key；renamed：其中因为重名改了名字的个数
  */
 export function endpointSummaryText({ added = 0, addedNoKey = 0, filled = 0, skipped = 0, failed = 0, modelsFailed = 0, hosts = [], renamed = 0 }) {
-    const bits = [`接口：新建了 ${added} 个${addedNoKey ? `（其中 ${addedNoKey} 个没有 key，需要到「接口」页填 API key）` : ''}`];
+    const bits = [`接口：新建了 ${added} 个${addedNoKey ? `（其中 ${addedNoKey} 个没有 key，需要到手机 Settings 的「接口」页填 API key）` : ''}`];
     // 逐个列出新建的接口指向哪里：恢复的是别人给的文件时，用户能一眼看出 key 会被发到哪个服务器
     if (hosts.length) bits.push(`新建的接口指向：${hosts.map(x => `${x.host}${x.hasKey ? '（带 key）' : ''}`).join('、')}`);
     if (renamed) bits.push(`${renamed} 个和本机已有的接口重名，名字后面加了「${FROM_BACKUP}」`);
     if (filled) bits.push(`给 ${filled} 个本机已有的接口补上了 key`);
     if (skipped) bits.push(`${skipped} 个本机已有相同地址，跳过（本机的名字、模型名单和 key 都没动）`);
     if (failed) bits.push(`${failed} 个失败`);
-    if (modelsFailed) bits.push(`${modelsFailed} 个接口的模型名单没能写入，可以到「接口」页重新获取`);
+    if (modelsFailed) bits.push(`${modelsFailed} 个接口的模型名单没能写入，可以到手机 Settings 的「接口」页重新获取`);
     return bits.join('，');
 }
 

@@ -7,15 +7,14 @@ import { renderChat } from './chat.js';
 import { renderPromptTab } from './tab-prompt.js';
 import { renderWorldTab } from './tab-world.js';
 import { renderArchiveTab } from './tab-archive.js';
-import { renderPresetTab } from './tab-preset.js';
 import { renderRegexTab } from './tab-regex.js';
 import { renderScriptsTab } from './tab-scripts.js';
 import { renderMemoryTab } from './memory.js';
 import { renderExcerptsTab } from './tab-excerpts.js';
 import { renderMiscTab } from './tab-misc.js';
-import { isSettingsShown } from './phone/phone.js';
+import { isSettingsShown, currentSettingsPage } from './phone/phone.js';
 import { renderPersonaTab } from './tab-persona.js';
-import { renderProviderTab, refreshHealth, paintChatWarn } from './tab-provider.js';
+import { refreshHealth, paintChatWarn } from './tab-provider.js';
 import { renderModelPicker } from './model-picker.js';
 import { reconcileScripts } from './script-host.js';
 
@@ -33,7 +32,7 @@ export function renderTopbar() {
     if (document.activeElement !== nameInput) nameInput.value = state.persona.name;
     $('#manual-mode').checked = state.manual;
     paintManualBadge();
-    // 聊天用的「接口 + 模型」选择器现在在「接口」页顶部（#chat-model 仍是同一个元素，常驻 DOM）。
+    // 聊天用的「接口 + 模型」选择器现在在手机 Settings 的「接口」页顶部（#chat-model 仍是同一个元素，常驻 DOM）。
     // value 没变时重复调用什么也不做，不会打断正在输入的模型名
     renderModelPicker($('#chat-model'), { value: state.chatModel,
         onChange: ref => {
@@ -55,11 +54,18 @@ export function paintManualBadge() {
     $('#manual-badge').hidden = !state.manual;
 }
 
-/** @param {boolean} [force]  只对「接口」页有意义：它平时不跟着后台重画走（见 tab-provider.js），force 才重建 */
+/** @param {boolean} [force]  只对手机 Settings 的「接口」页有意义：它平时不跟着后台重画走（见 tab-provider.js），force 才重建 */
 export function renderInspector(force = false) {
-    // 手机里的 Settings（原来的「杂项」页）：开着才重画（不可见时白画没意义；打开时 phone.js 的 onPhoneView 会补一次，不会读到旧内容）。
-    // 它的内容不是文本框（备份的密码框在页内弹框里），但变量框等会被后台状态变化刷新，所以和别的页一样每次都画
-    if (isSettingsShown()) renderMiscTab();
+    // 手机里的 Settings（原来的「杂项」「预设」「接口」页）：开着才重画，而且只画当前开着的那一页（菜单页没有动态内容；
+    // 不可见时白画没意义，进某一页时 phone.js 的 onSettingsPage 会补一次，不会读到旧内容）。
+    // 正在这一页的文本框里打字时不重画（「预设」页的条目编辑框、「接口」页的输入框：重画会换掉文本框、光标就丢了），
+    // 焦点离开后 app.js 的 #tab-misc focusout 会补一次
+    const sp = isSettingsShown() ? currentSettingsPage() : null;
+    if (sp) {
+        const f = document.activeElement;
+        const typing = f?.matches?.('textarea, input:not([type]), input[type="text"]') && $('#tab-misc')?.contains(f);
+        if (!typing) renderMiscTab(sp, force === true);
+    }
     const active = $('#tabs button.active')?.dataset.tab ?? 'archive';
     // 正在这一页的文本框里打字时不要整页重画：重画会把文本框换成新的，光标就丢了。
     // 只更新变量显示；等焦点离开文本框后（见 bind 里的 focusout）再补一次完整重画。
@@ -69,8 +75,8 @@ export function renderInspector(force = false) {
         if (vars) vars.textContent = JSON.stringify(ui.preview?.variables ?? state.variables, null, 2);
         return;
     }
-    ({ prompt: renderPromptTab, world: renderWorldTab, persona: renderPersonaTab, archive: renderArchiveTab, preset: renderPresetTab, regex: f => { renderRegexTab(f); renderScriptsTab(f); },   // 脚本区并在「正则」页下面（各画各的容器）
-         memory: renderMemoryTab, excerpts: renderExcerptsTab, provider: renderProviderTab })[active](force === true);
+    ({ prompt: renderPromptTab, world: renderWorldTab, persona: renderPersonaTab, archive: renderArchiveTab, regex: f => { renderRegexTab(f); renderScriptsTab(f); },   // 脚本区并在「正则」页下面（各画各的容器）
+         memory: renderMemoryTab, excerpts: renderExcerptsTab })[active](force === true);
 }
 
 export function renderAll() {

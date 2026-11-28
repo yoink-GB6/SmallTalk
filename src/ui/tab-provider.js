@@ -1,9 +1,10 @@
-// 检查器「接口」页：接口列表面板（provider-panel.js），以及「聊天模型指向的接口现在能不能用」的健康灯。
+// 手机 Settings 的「接口」页（原来右侧检查器的「接口」页）：接口列表面板（provider-panel.js），以及「聊天模型指向的接口现在能不能用」的健康灯和红点。
 // 接口列表的共享缓存（ui.endpoints）和选择器在 model-picker.js。
 
 import { checkHealth, setWriteGuard } from '../llm.js';
 import { renderProviderPanel } from './provider-panel.js';
 import { $ } from './dom.js';
+import { setSettingsBadge } from './phone/phone.js';
 import { state, persist, save, STOPPED_TEXT } from './state.js';
 import { renderInspector, renderTopbar } from './shell.js';   // 与 shell.js 循环依赖：只在函数体里用，顶层不调用
 import { loadEndpoints, setEndpoints, endpointById, endpointsUnavailable, refProblem, refUnpicked } from './model-picker.js';
@@ -18,18 +19,13 @@ setWriteGuard(() => persist.readOnly ? '这个标签页是只读的（见页面�
 export const chatEndpointType = () => endpointById(state.chatModel?.endpoint)?.type ?? null;
 
 /**
- * 顶栏上的小告警：聊天用的模型有问题（没选模型 / 接口没就绪 / 接口被删）时才出现，点它去「接口」页；没问题就整个隐藏。
- * 判断用的是和模型选择器同一个 refProblem，所以两处的说法一致。
+ * 聊天用的模型有问题（没选模型 / 接口没就绪 / 接口被删）时，在手机上挂红点：顶栏手机图标 → 桌面 Settings 图标 → Settings 菜单里的「接口」一项，
+ * 三处一路红到那一页；没问题（或接口列表还没读回来）就三处一起灭。以前这里是顶栏上的一条文字告警（#chat-warn），已经去掉了。
+ * 判断用的是和模型选择器同一个 refProblem（它处理了「接口列表还没读回来」时不误报），所以和「接口」页里选择器上标红的是同一个条件。
+ * 函数名沿用 paintChatWarn：renderTopbar 和 refreshHealth 都已经在适当的时机调它。
  */
 export function paintChatWarn() {
-    const btn = $('#chat-warn');
-    if (!btn) return;
-    const problem = refProblem(state.chatModel);
-    btn.hidden = !problem;
-    if (!problem) return;
-    // 接口名可能很长，顶栏上只写「接口未就绪」；完整的原因放在 title 里
-    btn.textContent = /未就绪$/.test(problem) ? '⚠ 接口未就绪' : `⚠ ${problem}`;
-    btn.title = `${problem}：点这里去「接口」页处理`;
+    setSettingsBadge('provider', !!refProblem(state.chatModel));
 }
 
 /** 重读接口列表（启动时调一次），更新所有选择器和健康灯 */
@@ -45,8 +41,8 @@ export async function refreshHealth() {
     const ref = state.chatModel;
     const ep = endpointById(ref?.endpoint);
     const set = (ok, title) => { el.className = `health ${ok ? 'ok' : 'bad'}`; el.title = title; };
-    if (!ep && refUnpicked(ref)) return set(false, '还没选聊天用的接口（到「接口」页添加一个接口，再在页面顶部选它）');
-    if (!ep) return set(false, '聊天模型指向的接口已被删除（到「接口」页检查，再在「接口」页顶部重新选择聊天模型）');
+    if (!ep && refUnpicked(ref)) return set(false, '还没选聊天用的接口（到手机 Settings 的「接口」页添加一个接口，再在页面顶部选它）');
+    if (!ep) return set(false, '聊天模型指向的接口已被删除（到手机 Settings 的「接口」页检查，再在「接口」页顶部重新选择聊天模型）');
     if (ep.type === 'codex-cli') return set(ep.ready, ep.ready ? `Codex：${ep.detail}（只检查了可执行文件，没有检查登录状态）` : `Codex 不可用：${ep.detail}`);
     if (ep.type === 'claude-code') {
         if (endpointsUnavailable()) { // 读不到接口列表（旧服务）：照老办法问 /api/health
@@ -55,8 +51,8 @@ export async function refreshHealth() {
         }
         return set(ep.ready, ep.ready ? `模型桥正常：${ep.detail}` : `模型桥不可用：${ep.detail}（可以用手动模式）`);
     }
-    if (!ep.ready) return set(false, `接口「${ep.name}」还缺：${(ep.detail || '').replace(/^缺少/, '')}（在「接口」页补全）`);
-    if (!ref.model) return set(false, `接口「${ep.name}」已就绪，但还没选模型（在「接口」页顶部选择）`);
+    if (!ep.ready) return set(false, `接口「${ep.name}」还缺：${(ep.detail || '').replace(/^缺少/, '')}（在手机 Settings 的「接口」页补全）`);
+    if (!ref.model) return set(false, `接口「${ep.name}」已就绪，但还没选模型（在手机 Settings 的「接口」页顶部选择）`);
     set(true, `接口「${ep.name}」已配置：${ref.model}（只检查配置，没有联网测试）`);
 }
 

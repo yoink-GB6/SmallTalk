@@ -60,7 +60,7 @@ export const GLOBAL_FIELDS = {
     },
     preset: {
         what: '旧形状（多预设之前）的 global 里的预设本体。新形状的 global 里没有它（toGlobalV2 去掉），运行时 state.preset 指向当前预设',
-        kind: 'legacy', backup: 'yes', restore: 'none', fresh: 'remap', export: '「预设」页：导出（酒馆预设 JSON）/ 导入预设',
+        kind: 'legacy', backup: 'yes', restore: 'none', fresh: 'remap', export: '手机 Settings「预设」页：导出（酒馆预设 JSON）/ 导入预设',
         how: '只有旧形状的备份里才有：planBackupImport 把它当成备份里的又一个预设导入（legacyPreset），global 里不再保留。它是内容（一个预设），不是「当前选择」',
     },
     presetName: {
@@ -236,7 +236,7 @@ export const STORE_KEYS = {
     },
     preset: {
         key: 'preset:<presetId>', what: '保存下来的预设（PresetRecord）',
-        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「预设」页：导出（酒馆预设 JSON）/ 导入预设；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（OpenAI Settings/）',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '手机 Settings「预设」页：导出（酒馆预设 JSON）/ 导入预设；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（OpenAI Settings/）',
         how: '恢复时换新 id；本体一字不差的跳过，同名不同内容的加「 (2)」。'
             + '酒馆写进预设的连接信息（反代地址 / 密码、附加请求头……）在所有入口去掉、打开页面时从存储里删掉、所有导出出口再去一遍（types.js PresetRecord「预设本体的清洗」）',
     },

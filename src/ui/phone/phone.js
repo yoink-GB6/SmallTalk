@@ -27,11 +27,15 @@
 //
 // 拖动（只在宽屏，> 900px）：抓状态栏拖，位置限制在视口里；位置只在内存里，刷新回到默认（右上角、顶栏下面）。窄屏没有拖动。
 //
-// Settings（原来右侧面板的「杂项」页，整页搬进来了；见 apps.js）：
-//   · 进入 Settings 视图时通过 onPhoneView 通知 app.js 重画它（renderMiscTab），所以收起再打开、从别处跳进来，看到的都是最新的；
-//   · Settings 开着时状态变了（切存档、恢复备份……）由 shell.js 的 renderInspector 用 isSettingsShown() 判断要不要重画，不可见时不白画；
+// Settings（两级菜单；原来右侧面板的「杂项」页拆成了几个下一页，见 apps.js 的 SETTINGS_PAGES 和 index.html 的 #tab-misc）：
+//   · settingsPage 是当前在哪一页：null = 菜单页，否则是页的 id（'rp'、'data'……）。菜单点一项 → setSettingsPage(id)；标题栏返回在下一页里回菜单，在菜单页回桌面。
+//   · 顶栏图标 / home 条在下一页里点：直接回桌面；离开 Settings 时 settingsPage 清回 null，所以下次进来永远是菜单页（简单可预期）。
+//   · 进入某一页时通过 onSettingsPage 通知 app.js 重画那一页的内容（renderMiscTab(页)），所以菜单 → 下一页 → 返回 → 再进，看到的都是最新的；
+//   · Settings 开着时状态变了（切存档、恢复备份……）由 shell.js 的 renderInspector 用 isSettingsShown() 判断要不要重画（只画当前那一页，菜单页没有动态内容），不可见时不白画；
 //   · openSettings(选择器?)：给「点顶栏的"手动"徽标」这类跳转用——手机收着就打开，没解过锁直接当作解锁（不为一个跳转再点一次指纹），
-//     进 Settings 并滚到那一节。
+//     进 Settings、自动进到包含那个元素的下一页并滚到它；不带选择器就停在菜单页。
+//   · 红点：setSettingsBadge(菜单项 id, 是否有)。某一项有红点时，那一项、桌面上的 Settings 图标、顶栏的手机图标三处各显示一个小红点
+//     （没有任何一项有红点时全部消失）。第一版没有接任何真实条件，以后哪里发现"有事要用户处理"就调它。
 //
 // 层级：z-index 19，高于窄屏抽屉（16），低于拖放提示（20）、页内弹框（25，含恢复备份的遮罩和各种确认框）、提示条（30）。
 //
@@ -41,7 +45,7 @@ import { h } from '../dom.js';
 import { closeDrawer } from '../drawer.js';
 import { icon } from './icons.js';
 import { createStatusBar } from './statusbar.js';
-import { APPS, buildAppView } from './apps.js';
+import { APPS, SETTINGS_PAGES, buildAppView } from './apps.js';
 
 const NARROW = '(max-width: 900px)';   // 必须和 style.css / drawer.js 里抽屉的断点一致
 const REDUCED = '(prefers-reduced-motion: reduce)';
@@ -53,6 +57,8 @@ let view = 'lock';
 let unlocking = false;
 let pos = null;                        // 电脑上的位置 {left, top}（px），只在内存里
 let toggleBtn = null;
+let settingsPage = null;               // Settings 当前在哪一页：null = 菜单页
+const badgePages = new Set();          // 有红点的菜单项 id
 
 /** 当前是不是窄屏（手机上铺满全屏的形态） */
 const isNarrow = () => matchMedia(NARROW).matches;
@@ -62,11 +68,22 @@ export const phoneView = () => view;
 /** Settings 现在正显示在屏幕上（手机开着且在 Settings 视图）：shell.js 靠它决定要不要重画那一页 */
 export const isSettingsShown = () => open && view === 'settings';
 
+/** Settings 当前在哪一页（null = 菜单页）：shell.js 用它只重画开着的那一页 */
+export const currentSettingsPage = () => settingsPage;
+
 let viewListener = null;
-/** 登记「切到某个视图」的回调（app.js 用它在进入 Settings 时重画；phone.js 不导入 tab-misc，免得绕圈） */
+/** 登记「切到某个视图」的回调（phone.js 不导入 tab-misc，免得绕圈） */
 export function onPhoneView(fn) { viewListener = fn; }
 
+let pageListener = null;
+/**
+ * 登记「Settings 进入某一页」的回调（app.js 用它去重画那一页的动态内容；phone.js 不导入 tab-misc，免得绕圈）。
+ * 回调收到页的 id；'all' 是个特例：要找某个选择器、但内容还没画出来时，让调用方把所有页都画一遍
+ */
+export function onSettingsPage(fn) { pageListener = fn; }
+
 function showView(next) {
+    if (next !== 'settings' && settingsPage !== null) setSettingsPage(null);   // 离开 Settings：下次进来是菜单页
     view = next;
     root.dataset.view = next;
     for (const v of root.querySelectorAll('.ph-view')) v.hidden = v.dataset.view !== next;
@@ -75,8 +92,74 @@ function showView(next) {
 }
 
 /**
- * 打开手机、进 Settings、（可选）滚到某一节。手机收着就打开；没解过锁就直接解锁。
- * @param {string} [sectionSelector] Settings 里某一节的 CSS 选择器，比如 '#misc-manual'；找不到就停在最上面
+ * Settings 切到某一页（null = 菜单页）：显示那一页、藏其它页和菜单、改标题和返回按钮的说明、滚回顶部、通知 app.js 重画那一页。
+ * 只改显示，不碰各页里面的节点（它们由 tab-misc.js 画、index.html 写）。
+ */
+function setSettingsPage(id) {
+    settingsPage = id;
+    const sv = root.querySelector('.ph-view[data-view="settings"]');
+    sv.dataset.page = id ?? 'menu';
+    const misc = sv.querySelector('#tab-misc');
+    sv.querySelector('.ph-menu').hidden = id !== null;
+    if (misc) {
+        misc.hidden = id === null;
+        for (const p of misc.querySelectorAll(':scope > .ph-set-page')) p.hidden = p.dataset.page !== id;
+    }
+    const name = id ? SETTINGS_PAGES.find(p => p.id === id)?.name : null;
+    sv.querySelector('.ph-app-title').textContent = name ?? 'Settings';
+    const back = sv.querySelector('.ph-back');
+    back.title = id ? '返回设置菜单' : '返回桌面';
+    back.setAttribute('aria-label', back.title);
+    sv.querySelector('.ph-app-body').scrollTop = 0;
+    if (id) pageListener?.(id);
+}
+
+/** Settings 标题栏的返回：在下一页里回菜单，在菜单页回桌面 */
+function settingsBack() {
+    if (settingsPage !== null) setSettingsPage(null);
+    else showView('home');
+}
+
+// ── 红点 ──
+/** 红点都画在一个个 .ph-dot 小圆点里（apps.js 的菜单行、桌面图标的底板、顶栏图标各有一个，默认 hidden），这里只管显示 / 隐藏 */
+function syncBadges() {
+    const any = badgePages.size > 0;
+    for (const d of root.querySelectorAll('.ph-tile[data-app="settings"] .ph-dot')) d.hidden = !any;
+    if (toggleBtn) {
+        const d = toggleBtn.querySelector('.ph-dot');
+        if (d) d.hidden = !any;
+        toggleBtn.dataset.badge = any ? '1' : '0';
+    }
+    for (const row of root.querySelectorAll('.ph-menu-row')) {
+        const on = badgePages.has(row.dataset.page);
+        row.querySelector('.ph-dot').hidden = !on;
+        const name = SETTINGS_PAGES.find(p => p.id === row.dataset.page)?.name ?? '';
+        row.setAttribute('aria-label', on ? name + '（有需要处理的事）' : name);
+    }
+    syncChrome();
+}
+
+/**
+ * 给 Settings 的某个菜单项挂上 / 去掉红点（表示"这一项下面有需要用户处理的事"）。
+ * 三处联动：那一项的菜单行、桌面上的 Settings 图标、顶栏的手机图标；只要还有一项有红点，上面两层就还亮着。
+ * @param {string} pageId SETTINGS_PAGES 里的 id；不认识的 id 忽略
+ * @param {boolean} [on=true]
+ */
+export function setSettingsBadge(pageId, on = true) {
+    if (!SETTINGS_PAGES.some(p => p.id === pageId)) return;
+    if (on) badgePages.add(pageId); else badgePages.delete(pageId);
+    if (root) syncBadges();
+}
+
+/** 显示 / 隐藏 Settings 的某个菜单项（只有网页版才有「安装到主屏幕」：pwa-ui.js 探测完后端种类再调它） */
+export function setSettingsItemHidden(pageId, hidden) {
+    const row = root?.querySelector(`.ph-menu-row[data-page="${pageId}"]`);
+    if (row) row.hidden = !!hidden;
+}
+
+/**
+ * 打开手机、进 Settings、（可选）进到包含某个元素的下一页并滚到它。手机收着就打开；没解过锁就直接解锁。
+ * @param {string} [sectionSelector] Settings 里某个元素的 CSS 选择器，比如 '#misc-manual'；不带或找不到就停在菜单页
  */
 export function openSettings(sectionSelector) {
     if (!root) return;
@@ -85,11 +168,20 @@ export function openSettings(sectionSelector) {
     unlocking = false;                    // 正在播解锁动效时跳进来：动效的收尾发现已经不用做了（finish 里 wasOpen 为假）
     showView('settings');
     const body = root.querySelector('.ph-view[data-view="settings"] .ph-app-body');
-    const target = sectionSelector ? body?.querySelector(sectionSelector) : null;
-    if (body) {
-        body.scrollTop = 0;
+    const misc = body?.querySelector('#tab-misc');
+    // 先弄清目标在哪一页。动态内容（备份、变量……）平时只在进了那一页才画，所以找不到时让 app.js 把各页都画一遍再找；
+    // 对应菜单项被藏起来的页（本地版的「安装到主屏幕」）当作没有这一页，停在菜单
+    const pageOf = () => {
+        const id = (sectionSelector && misc?.querySelector(sectionSelector))?.closest('.ph-set-page')?.dataset.page ?? null;
+        return id && !root.querySelector(`.ph-menu-row[data-page="${id}"]`)?.hidden ? id : null;
+    };
+    let page = sectionSelector ? pageOf() : null;
+    if (sectionSelector && !page) { pageListener?.('all'); page = pageOf(); }
+    setSettingsPage(page);   // 进这一页会重画它：画完再找目标（上面找到的节点可能已被换掉）
+    const target = page ? misc.querySelector(sectionSelector) : null;
+    if (body && target) {
         // 手动算偏移而不是 scrollIntoView：后者可能连手机外面的页面一起滚
-        if (target) body.scrollTop = target.getBoundingClientRect().top - body.getBoundingClientRect().top - 8;
+        body.scrollTop = target.getBoundingClientRect().top - body.getBoundingClientRect().top - 8;
     }
     // 不把焦点挪到返回按钮：程序设的焦点会让它画出一圈键盘焦点框，鼠标用户看着像出了问题（点击跳转时没有地方需要焦点）
 }
@@ -104,7 +196,7 @@ function syncChrome() {
     bar.title = homeLabel;
     if (toggleBtn) {
         toggleBtn.setAttribute('aria-expanded', String(open));
-        const t = !open ? '打开手机' : (atTop ? '收起手机' : '回到手机桌面');
+        const t = (!open ? '打开手机' : (atTop ? '收起手机' : '回到手机桌面')) + (badgePages.size ? '（Settings 里有需要处理的事）' : '');
         toggleBtn.title = t;
         toggleBtn.setAttribute('aria-label', t);
     }
@@ -208,7 +300,8 @@ function buildHome() {
     const tiles = APPS.map(app => h('button', {
         class: 'ph-tile', type: 'button', 'data-app': app.id, 'aria-label': app.name,
         onclick: () => (app.kind === 'exit' ? closePhone() : showView(app.id)),
-    }, h('span', { class: 'ph-tile-plate' }, icon(app.icon)), h('span', { class: 'ph-tile-name' }, app.name)));
+    }, h('span', { class: 'ph-tile-plate' }, icon(app.icon), h('span', { class: 'ph-dot', hidden: true, 'aria-hidden': 'true' })),   // 红点见 setSettingsBadge
+        h('span', { class: 'ph-tile-name' }, app.name)));
     return h('section', { class: 'ph-view ph-home', 'data-view': 'home', hidden: true }, h('div', { class: 'ph-grid' }, tiles));
 }
 
@@ -218,7 +311,9 @@ export function initPhone() {
     const extra = {};
     const lock = buildLock(extra);
     const status = createStatusBar(extra);
-    const appViews = APPS.filter(a => a.kind === 'view').map(a => buildAppView(a, () => showView('home')));
+    const appViews = APPS.filter(a => a.kind === 'view').map(a => buildAppView(a, a.id === 'settings'
+        ? { back: settingsBack, openPage: setSettingsPage }
+        : { back: () => showView('home'), openPage: () => {} }));
     root = h('div', { id: 'phone', 'data-open': '0', 'data-view': 'lock', role: 'dialog', 'aria-label': '手机' },
         h('div', { class: 'ph-frame' },
             h('div', { class: 'ph-screen' },
@@ -229,7 +324,8 @@ export function initPhone() {
                 h('div', { class: 'ph-persist', 'aria-hidden': 'true' }))));   // ★ 常驻层：见文件头
     document.body.append(root);
     bindDrag(status);
-    syncChrome();
+    toggleBtn?.append(h('span', { class: 'ph-dot', hidden: true, 'aria-hidden': 'true' }));   // 顶栏图标上的红点
+    syncBadges();    // 里面会调 syncChrome
     toggleBtn?.addEventListener('click', togglePhone);
     addEventListener('resize', () => { if (open && !isNarrow()) clampPos(); });
     // Esc 收起。让路：焦点在输入框 / 下拉框里（Esc 是它们自己的）、有页内弹框或模型下拉开着（它们先处理 Esc）

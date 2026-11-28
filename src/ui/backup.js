@@ -281,7 +281,7 @@ function askExport({ n, hasKeys, server, epError, canEncrypt, readOnly, run }) {
             `这个备份里有 ${n.keys} 个接口的 API key，所以必须设密码：整个文件（卡、聊天、预设、设置、接口和 key）都会用这个密码加密。密码至少 ${MIN_PW_WITH_KEYS} 位。`));
     } else if (server) {
         body.push(h('p', { class: 'bkx-note', 'data-fk': 'bkx-server-note' },
-            '这个版本（本地服务版）的 API key 保存在本机程序里，不会进备份；换设备后需要到「接口」页重新填。备份里的接口只有名字、地址和模型名单。'));
+            '这个版本（本地服务版）的 API key 保存在本机程序里，不会进备份；换设备后需要到手机 Settings 的「接口」页重新填。备份里的接口只有名字、地址和模型名单。'));
     } else if (n.endpoints) {
         body.push(h('p', { class: 'dim imp-note' }, '这些接口都没有填 API key，备份里只有名字、地址和模型名单。'));
     }
@@ -352,7 +352,7 @@ const SETTING_TEXT = { memory: '外置记忆设置', contextLimit: '上下文上
  */
 function askSettings(backup, keys) {
     const n = countBackup(backup);
-    const sum = `这次将导入：${n.cards} 张卡、${n.chats} 个存档、${n.presets} 个预设${n.endpoints ? `、${n.endpoints} 个接口${n.keys ? `（其中 ${n.keys} 个带 API key）` : '（没有 key，需要之后到「接口」页填）'}` : ''}，以及备份里的人设、世界书、正则、便签、全局变量。`;
+    const sum = `这次将导入：${n.cards} 张卡、${n.chats} 个存档、${n.presets} 个预设${n.endpoints ? `、${n.endpoints} 个接口${n.keys ? `（其中 ${n.keys} 个带 API key）` : '（没有 key，需要之后到手机 Settings 的「接口」页填）'}` : ''}，以及备份里的人设、世界书、正则、便签、全局变量。`;
     const what = keys.map(k => SETTING_TEXT[k]).join('、');
     return askDialog({
         label: '是否应用备份中的设置', fk: 'imp-settings-dialog',

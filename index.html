@@ -43,11 +43,11 @@
   <div id="drawer-toggle" class="brand">SmallTalk</div>
   <button id="card-chip" class="chip-card" type="button" title="当前角色卡：点这里打开「存档」页，切换 / 管理角色卡和存档"></button>
   <span class="spacer"></span>
-  <!-- 只在聊天用的模型有问题时出现（见 tab-provider.js 的 paintChatWarn），点它去「接口」页 -->
-  <button id="chat-warn" class="mp-warn" type="button" hidden></button>
   <!-- 手动模式开着时的提醒（点它去手机里的 Settings 关掉）；没开就不显示 -->
   <button id="manual-badge" class="manual-badge" type="button" hidden title="手动模式已开：发送时不调用模型，prompt 拼好后由你自己去用、再把回复贴回来。点这里去手机里的 Settings 关闭">手动</button>
-  <span id="health" class="health" title="模型桥状态">●</span>
+  <!-- 不显示了（hidden）：聊天用的模型没配好时，改成手机图标上的红点一路红到 Settings 的「接口」（tab-provider.js 的 paintChatWarn → phone.js 的 setSettingsBadge）。
+       元素和它的 class（ok / bad）、title 仍由 refreshHealth 维护：测试靠它判断启动完成，鼠标悬停说明也留着 -->
+  <span id="health" class="health" title="模型桥状态" hidden>●</span>
   <!-- 手机壳的入口（src/ui/phone/phone.js 接上点击；图标是内联 SVG，线条画，颜色跟文字色） -->
   <button id="phone-toggle" class="phone-btn" type="button" title="打开手机" aria-label="打开手机" aria-expanded="false" aria-controls="phone"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M10.6 18.6h2.8"/></svg></button>
 </header>
@@ -110,9 +110,7 @@
       <button data-tab="excerpts">摘抄</button>
       <button data-tab="persona">人设</button>
       <button data-tab="world">世界书</button>
-      <button data-tab="preset">预设</button>
       <button data-tab="regex">正则</button>
-      <button data-tab="provider">接口</button>
       <button data-tab="prompt">拼装</button>
     </nav>
     <div id="tab-archive" class="tab active"></div>
@@ -138,7 +136,6 @@
       <div id="an-slot" class="an-slot"></div>
     </div>
     <div id="tab-world" class="tab"></div>
-    <div id="tab-preset" class="tab"></div>
     <!-- 「正则」页：上面是正则（tab-regex.js 画进 #regex-body），下面接着是当前卡的酒馆助手脚本（tab-scripts.js 画进 #tab-scripts）。
          2026-11-23 用户要求把单独的「脚本」页签并进来（都是当前卡带的东西）。两块各自重画，互不打断 -->
     <div id="tab-regex" class="tab">
@@ -146,28 +143,54 @@
       <div class="section-title scripts-title">脚本</div>
       <div id="tab-scripts"></div>
     </div>
-    <div id="tab-provider" class="tab">
-      <div id="chat-model-section">
-        <span class="cm-lead">使用</span>
-        <span id="chat-model" class="model-picker" data-sentence="1" title="聊天用的接口和模型"></span>
-      </div>
-      <div id="provider-panel"></div>
-    </div>
     <div id="tab-prompt" class="tab"></div>
     <!-- 原来的「杂项」页，现在是手机里的 Settings：这个节点在启动时被 src/ui/phone/apps.js 整个挪进手机的 Settings 画面
-         （同时去掉 class="tab"，不再是右侧面板的页签）。内容和 id 都没变，只是换了个住处。
-         静态写在这里而不是 JS 里建：手动模式勾选框等常驻控件的事件、各测试脚本都认这些 id -->
+         （同时去掉 class="tab"，不再是右侧面板的页签）。
+         Settings 是两级菜单：先是一页菜单（apps.js 建），点一项进下面这些 .ph-set-page 里的一页（接口、预设两页是从右侧面板搬来的，id 仍是 #tab-provider / #tab-preset）（一次只显示一页，phone.js 控制 hidden）。
+         各页的内容和 id / data-fk 都没变，只是被分到了不同的页里；静态写在这里而不是 JS 里建：
+         手动模式勾选框等常驻控件的事件、各测试脚本都认这些 id。.misc-rest 是 tab-misc.js 每次进入该页时重画的动态部分。
+         data-page 的值要和 apps.js 的 SETTINGS_PAGES 一一对应 -->
     <div id="tab-misc" class="tab">
-      <!-- 主题（src/ui/theme.js 用 src/themes.js 的清单填选项；选了立即生效并记进 localStorage，不进存储 / 备份） -->
-      <div class="row theme-row">
-        <label class="inline" for="theme-select">主题 <select id="theme-select" title="界面主题"></select></label>
-      </div>
-      <div class="section-title" id="misc-manual">手动模式</div>
-      <label class="inline" title="不调用模型：拼好的 prompt 自己拿去用，再把回复贴回来">
-        <input type="checkbox" id="manual-mode"> 手动模式
-      </label>
-      <div class="dim misc-note">开着时，点发送不会调用模型：prompt 在「拼装」页拼好，你自己拿去用，再把模型的回复贴回聊天区。</div>
-      <div id="misc-rest"></div>
+      <section class="ph-set-page" data-page="lock" hidden>
+        <div class="dim ph-set-todo">以后在这里换锁屏壁纸。</div>
+      </section>
+      <section class="ph-set-page" data-page="desktop" hidden>
+        <div class="dim ph-set-todo">以后在这里换桌面壁纸。</div>
+      </section>
+      <section class="ph-set-page" data-page="style" hidden>
+        <!-- 主题（src/ui/theme.js 用 src/themes.js 的清单填选项；选了立即生效并记进 localStorage，不进存储 / 备份） -->
+        <div class="row theme-row">
+          <label class="inline" for="theme-select">主题 <select id="theme-select" title="界面主题"></select></label>
+        </div>
+      </section>
+      <section class="ph-set-page" data-page="install" hidden>
+        <div id="misc-rest-install" class="misc-rest"></div>
+      </section>
+      <!-- 「接口」页：原来右侧面板的 #tab-provider 整个搬到这里（id 和里面的 #chat-model / #provider-panel 都没变；
+           去掉了 class="tab"，现在是 Settings 的一个下一页）。内容由 tab-provider.js 的 renderProviderTab 画 -->
+      <section id="tab-provider" class="ph-set-page" data-page="provider" hidden>
+        <div id="chat-model-section">
+          <span class="cm-lead">使用</span>
+          <span id="chat-model" class="model-picker" data-sentence="1" title="聊天用的接口和模型"></span>
+        </div>
+        <div id="provider-panel"></div>
+      </section>
+      <!-- 「预设」页：原来右侧面板的 #tab-preset 整个搬到这里；内容由 tab-preset.js 的 renderPresetTab 画 -->
+      <section id="tab-preset" class="ph-set-page" data-page="preset" hidden></section>
+      <section class="ph-set-page" data-page="backup" hidden>
+        <div id="misc-rest-backup" class="misc-rest"></div>
+      </section>
+      <section class="ph-set-page" data-page="misc" hidden>
+        <div class="section-title" id="misc-manual">手动模式</div>
+        <label class="inline" title="不调用模型：拼好的 prompt 自己拿去用，再把回复贴回来">
+          <input type="checkbox" id="manual-mode"> 手动模式
+        </label>
+        <div class="dim misc-note">开着时，点发送不会调用模型：prompt 在「拼装」页拼好，你自己拿去用，再把模型的回复贴回聊天区。</div>
+        <div id="misc-rest-misc" class="misc-rest"></div>
+      </section>
+      <section class="ph-set-page" data-page="reset" hidden>
+        <div id="misc-rest-reset" class="misc-rest"></div>
+      </section>
     </div>
   </section>
 </main>
