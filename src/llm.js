@@ -110,9 +110,12 @@ export function serializeMessages(messages) {
  *        params 只对 openai 类接口生效（见 samplerParamsFromPreset）
  * @type {import('./types.js').Generate}
  */
-export function generate(messages, { onDelta, onUsage, signal, endpoint, model, params, promptCache } = {}) {
-  // 只有「聊天生成」（generate）报用量，记忆压缩（complete）不报：上次请求的缓存命中说的是聊天那一次
-  const both = (u) => { try { usageListener(u); } catch {} if (onUsage) onUsage(u); };
+export function generate(messages, { onDelta, onUsage, signal, endpoint, model, params, promptCache, usageLog } = {}) {
+  // 只有「聊天生成」（generate）报用量，记忆压缩（complete）不报：上次请求的缓存命中说的是聊天那一次。
+  // usageLog === false：这次请求【不】报给 setUsageListener 登记的监听（手机聊天用：「拼装」页的「上次请求」说的是 RP，
+  // 手机的请求不能把它顶掉）。调用方自己的 onUsage 照常调；两样都没有时连用量都不去取（不带 usageId）。usageLog 本身不进请求体
+  const quiet = usageLog === false;
+  const both = quiet ? onUsage : (u) => { try { usageListener(u); } catch {} if (onUsage) onUsage(u); };
   // promptCache === false：「拼装」页关掉了「经 OpenRouter 用 Claude 时自动缓存开头」。只有关掉时才带这个字段（没带 = 开），
   // 真正加不加标记由后端按接口地址和模型名判断（openai-shared.js applyPromptCache）
   const body = { messages, endpoint, model, params };

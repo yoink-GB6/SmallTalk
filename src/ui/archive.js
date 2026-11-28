@@ -31,6 +31,7 @@ import { enabledScripts } from '../regex-move.js';
 import { restoreActive } from './backup.js';   // 循环依赖（backup.js 导入本文件）：只在函数体里调用
 import { cardVarsKey } from '../cardvars.js';
 import { blankCard, uniqueCardName, isPristineBlank, BLANK_CARD_NAME } from '../card-writer.js';
+import { sessionsUsingCard } from './phone/phone-store.js';   // 循环依赖（phone-store.js 经 backup.js 间接导入本文件）：只在函数体里调用
 
 // ───────────────────────────── 读列表 ─────────────────────────────
 
@@ -775,7 +776,11 @@ export const deleteCard = (cardId, { confirmed = false } = {}) => op(async () =>
     if (!info) return;
     const enabled = enabledScripts((await store.get(cardKey(cardId)))?.card?.regexScripts);
     let moved = null;
-    const what = `删除角色卡「${info.name}」以及它的 ${info.chatCount} 个存档？删掉就找不回来了。`;
+    // 手机里用到这张卡的会话（用户定的）：不删，留着只能看——确认框里说一句。数不出来（读手机目录失败）就不说，不挡删卡
+    let phoneN = 0;
+    try { phoneN = await sessionsUsingCard(cardId); } catch (e) { console.warn('数手机会话失败', e?.message ?? e); }
+    const what = `删除角色卡「${info.name}」以及它的 ${info.chatCount} 个存档？删掉就找不回来了。`
+        + (phoneN ? `\n有 ${phoneN} 个手机会话用到它：会话会留着、能看，但不能再聊。` : '');
     if (enabled.length) {
         const fate = await askRegexFate({ kind: 'card', title: what, scripts: enabled });
         if (!fate) return;
