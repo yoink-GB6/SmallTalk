@@ -1075,7 +1075,7 @@ export function scriptStubMain(BOOT, LIB) {
 const LATER = 'SmallTalk 暂不支持（以后的版本可能会做）';
 const NOT_NOW = 'SmallTalk 暂不支持（这一类功能先不做：脚本改世界书 / 预设、往发送内容里插东西、注册新的宏）';
 const NEVER_SERVER = '不支持：它要用酒馆的服务器 / 酒馆主页面，SmallTalk 没有';
-const NEVER_KEY = '不支持：它要用别的接口地址和 key，SmallTalk 只用你在「接口」页选的接口';
+const NEVER_KEY = '不支持：它要用别的接口地址和 key，SmallTalk 只用你在手机 Settings 的「接口」页选的接口';
 export const SCRIPT_UNIMPLEMENTED = Object.freeze({
     ...Object.fromEntries(['audioEnable', 'audioImport', 'audioMode', 'audioPlay', 'audioSelect', 'playAudio', 'pauseAudio', 'getAudioList', 'replaceAudioList',
         'appendAudioList', 'getAudioSettings', 'setAudioSettings', 'getCurrentAudio', 'rotateChatMessages', 'formatAsDisplayedMessage', 'refreshOneMessage',

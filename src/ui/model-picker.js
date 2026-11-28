@@ -15,6 +15,7 @@ import { listEndpoints } from '../llm.js';
 import { isBuiltinId, CLI_TYPES } from '../openai-shared.js';
 import { h } from './dom.js';
 import { ui } from './state.js';
+import { openSettings } from './phone/phone.js';   // 警告按钮跳去手机 Settings 的「接口」页（phone.js 不导入本模块，没有循环）
 
 export const CLAUDE_ID = 'claude-code';
 const CLAUDE_MODELS = ['', 'fable', 'opus', 'sonnet', 'haiku'];
@@ -239,9 +240,9 @@ export function renderModelPicker(container, { value, onChange, compact = false 
         modelCtl = btn;
     }
 
-    const warn = problem && h('button', { type: 'button', class: 'mp-warn', title: `${problem}：点这里去「接口」页处理`,
-        onclick: () => document.querySelector('#tabs button[data-tab="provider"]')?.click() },
-        compact ? `⚠ ${problem}` : `⚠ ${problem}，请到「接口」页处理`);
+    const warn = problem && h('button', { type: 'button', class: 'mp-warn', title: `${problem}：点这里去手机 Settings 的「接口」页处理`,
+        onclick: () => openSettings('#chat-model-section') },   // 「接口」页已经搬进手机的 Settings：打开手机、进那一页
+        compact ? `⚠ ${problem}` : `⚠ ${problem}，请到手机 Settings 的「接口」页处理`);
     container.classList.toggle('compact', compact);
     container.classList.toggle('bad', !!problem);
     // 「接口」页顶上那个（#chat-model，带 data-sentence）嵌在一句话里：「使用 [接口] 的 [模型]」，所以两个控件之间补一个「的」

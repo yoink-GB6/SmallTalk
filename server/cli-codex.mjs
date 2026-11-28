@@ -222,7 +222,7 @@ export function explainCodexError(raw) {
   if (/401|unauthori[sz]ed|not logged in|log ?in|missing bearer|authentication/i.test(r))
     return say('Codex 还没有登录，或者登录已过期：请在终端（命令提示符）运行 codex login 登录 ChatGPT 账号，然后重试');
   if (/context.?(length|window)|maximum context|too long/i.test(r))
-    return say('发送的内容超过了这个模型能接受的长度：可以开「记忆」压缩聊天记录，或在「预设」页关掉一些条目');
+    return say('发送的内容超过了这个模型能接受的长度：可以开「记忆」压缩聊天记录，或在手机 Settings 的「预设」页关掉一些条目');
   if (/usage limit|rate.?limit|quota|429|too many requests|exceeded/i.test(r))
     return say('Codex 的订阅额度用完了，或者请求太频繁：等一会儿再试，或换一个接口');
   if (/model .*not (supported|found|available)|unknown model|model_not_found|does not exist/i.test(r))

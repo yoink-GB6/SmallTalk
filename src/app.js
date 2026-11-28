@@ -15,7 +15,7 @@ import { refreshEndpoints } from './ui/tab-provider.js';
 import { initArchive, bindArchive, newChat } from './ui/archive.js';
 import { initDrawer } from './ui/drawer.js';
 import { initTheme } from './ui/theme.js';
-import { initPhone, openSettings, onPhoneView } from './ui/phone/phone.js';
+import { initPhone, openSettings, onSettingsPage } from './ui/phone/phone.js';
 import { renderMiscTab } from './ui/tab-misc.js';
 import { bindPersonaTab } from './ui/tab-persona.js';
 import { initPwaUi } from './ui/pwa-ui.js';
@@ -60,7 +60,7 @@ function bind() {
     // 几个「点一下去某一页」的小入口（窄屏下 drawer.js 会顺带把抽屉打开）
     const gotoTab = name => () => document.querySelector(`#tabs button[data-tab="${name}"]`).click();
     $('#manual-badge').addEventListener('click', () => openSettings('#misc-manual'));   // 手动模式开关在手机的 Settings 里：打开手机、滚到「手动模式」那一节
-    $('#chat-warn').addEventListener('click', gotoTab('provider'));
+    // （顶栏原来有个「⚠ 接口 / 模型没配好」的文字告警，点它去「接口」页；现在改成手机图标上的红点，见 tab-provider.js 的 paintChatWarn）
     $('#chat-empty-archive').addEventListener('click', gotoTab('archive'));
 
     $('#manual-ok').addEventListener('click', () => {
@@ -92,13 +92,17 @@ function bind() {
     $('#inspector').addEventListener('focusout', e => {
         if (e.target.matches?.('textarea, input:not([type]), input[type="text"]')) setTimeout(renderInspector, 0);
     });
+    // 手机 Settings 里的「预设」「接口」页也有文本框：同样，打字期间 renderInspector 跳过了它的重画，焦点离开后补上
+    $('#tab-misc').addEventListener('focusout', e => {
+        if (e.target.matches?.('textarea, input:not([type]), input[type="text"]')) setTimeout(renderInspector, 0);
+    });
 
     $('#tabs').addEventListener('click', e => {
         const btn = e.target.closest('button[data-tab]');
         if (!btn) return;
         const wasActive = btn.classList.contains('active');
         for (const b of $('#tabs').children) b.classList.toggle('active', b === btn);
-        const reopened = !wasActive;   // 从别的页切进来：「接口」页重画一次（重读服务端配置）；点已经打开的这页不动
+        const reopened = !wasActive;   // 从别的页切进来：右侧面板的页重画一次；点已经打开的这页不动
         for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.id === `tab-${btn.dataset.tab}`);
         renderInspector(reopened);
     });
@@ -108,7 +112,7 @@ await initArchive();
 bind();
 initDrawer();
 initPhone();          // 手机壳（顶栏的手机图标接在这里；Settings 应用里装着原来的「杂项」页）
-onPhoneView(v => { if (v === 'settings') renderMiscTab(); });   // 每次进入 Settings 都重画一遍，保证不是旧内容
+onSettingsPage(page => renderMiscTab(page, true));   // 每次进入 Settings 的某一页都重画那一页（'all' = 全画，见 phone.js），保证不是旧内容；true：「接口」页进来时重读一遍配置
 initTheme();          // Settings 里的主题下拉框（<html data-theme> 的首屏设置在 index.html 的内联脚本里）
 bindArchive();
 bindChatSearch();     // 聊天区工具栏的「搜索」
@@ -116,4 +120,4 @@ bindHighlights();      // 划线：选中文字出按钮、画高亮、点高亮
 renderAll();
 scrollChatToEnd();
 initPwaUi();          // 网页版：注册离线缓存、盯着有没有新版本（不 await，不挡启动；本地版什么都不做）
-refreshEndpoints();   // 读接口列表 → 「接口」页顶部 / 记忆页的模型选择器、顶栏的告警和健康灯
+refreshEndpoints();   // 读接口列表 → 「接口」页顶部 / 记忆页的模型选择器、手机图标上的红点和健康灯

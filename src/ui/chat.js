@@ -390,7 +390,7 @@ export function showGenError(message) {
     $('#gen-error-text').textContent = text;
     // 网页版专属的几条放最前面（网页版的报错和建议里都不提 Claude Code / Codex：网页版根本没有它们）
     $('#gen-error-hint').textContent = /还没选聊天用的接口|还没选接口/.test(text)
-        ? '到右侧「接口」页添加一个 OpenAI 兼容接口，再在页面顶部的「聊天用的模型」里选它。'
+        ? '到手机 Settings 的「接口」页添加一个 OpenAI 兼容接口，再在页面顶部的「聊天用的模型」里选它。'
         : /不允许网页直接访问/.test(text)
             ? '这个接口可能不允许网页直连；可以换一个接口，或改用压缩包版。'
         // Codex 没登录（报错文字来自 server/cli-codex.mjs 的 explainCodexError）
@@ -399,13 +399,13 @@ export function showGenError(message) {
         : /找不到 codex|SMALLTALK_CODEX/.test(text)
             ? '没找到 Codex：先安装 OpenAI 的 Codex CLI 并运行 codex login，然后重启本地服务；或者先换一个接口 / 用「手动模式」。'
             : /HTTP 404/.test(text) && /model/i.test(text)
-                ? '这个模型在该接口上不可用，到「接口」页顶部换一个模型。'
+                ? '这个模型在该接口上不可用，到手机 Settings 的「接口」页顶部换一个模型。'
         : /safeguards flagged|usage policy|legal\/aup/i.test(text)
-        ? '这是模型一侧拒绝了这次请求的内容，不是程序出错。常见原因是预设里的条目；可以在「预设」页关掉部分条目后重试，或换一个预设。'
+        ? '这是模型一侧拒绝了这次请求的内容，不是程序出错。常见原因是预设里的条目；可以在手机 Settings 的「预设」页关掉部分条目后重试，或换一个预设。'
         : /找不到 claude|SMALLTALK_CLAUDE/.test(text)
             ? '模型桥没找到 claude 可执行文件。可以先开手机 Settings 里的「手动模式」。'
             : /找不到这个接口|还没配置好|没有选择模型/.test(text)
-                ? '到右侧「接口」页检查这个接口（地址 / API Key 是否填全、接口是否还在），再在「接口」页顶部的「聊天用的模型」里重新选一个模型，然后点「重新生成」。'
+                ? '到手机 Settings 的「接口」页检查这个接口（地址 / API Key 是否填全、接口是否还在），再在「接口」页顶部的「聊天用的模型」里重新选一个模型，然后点「重新生成」。'
             : '可以点「重新生成」再试一次；拼好的内容在右侧「拼装」页，也可以用「手动模式」。';
     $('#gen-error').hidden = false;
 }

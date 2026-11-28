@@ -157,18 +157,36 @@
 .ph-empty { height: 80%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--dim); text-align: center; }
 .ph-empty .ph-ico svg { width: 40px; height: 40px; }
 .ph-empty p { margin: 6px 0 0; font-size: var(--font-size-md); }
-.ph-set-list { background: var(--panel); border: var(--border-width) solid var(--line); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
-.ph-set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; font-size: var(--font-size-base); }
-.ph-set-row + .ph-set-row { border-top: var(--border-width) solid var(--line); }
-.ph-set-row select { max-width: 60%; }
-.ph-set-todo .dim { font-size: var(--font-size-md); }
+
+/* Settings 的菜单页：一行一项，右边一个小箭头（点一项进下一页，见 phone.js 的 setSettingsPage）。
+   写成 #phone button.ph-menu-row：要压过上面「#phone button」抹掉按钮样子的那条（同一档，后写的赢） */
+.ph-menu { background: var(--panel); border: var(--border-width) solid var(--line); border-radius: var(--radius-card); box-shadow: var(--shadow-card); overflow: hidden; }
+#phone button.ph-menu-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; box-sizing: border-box; min-height: 52px; padding: 0 14px;   /* 52px 高：手指好点 */
+  color: var(--ph-ink); font-size: var(--font-size-base); text-align: left;
+}
+#phone button.ph-menu-row[hidden] { display: none; }
+#phone button.ph-menu-row:not([hidden]) ~ .ph-menu-row:not([hidden]) { border-top: var(--border-width) solid var(--line); }   /* 可见的行之间画分隔线（本地版少一行时不会多出线） */
+#phone button.ph-menu-row:hover, #phone button.ph-menu-row:active { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.ph-menu-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ph-menu-row .ph-ico { color: var(--dim); }
+.ph-menu-row .ph-ico svg { width: 16px; height: 16px; }
+
+/* 红点：菜单行里、桌面 Settings 图标上、顶栏手机图标上各一个（phone.js 的 setSettingsBadge 控制 hidden）。颜色是主题的 --bad */
+.ph-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--bad); }
+.ph-dot[hidden] { display: none; }
+.ph-tile-plate .ph-dot { position: absolute; z-index: 2; top: -3px; right: -3px; box-shadow: 0 0 0 2px var(--bg); }
+#top-bar #phone-toggle { position: relative; }
+#top-bar #phone-toggle .ph-dot { position: absolute; top: 3px; right: 6px; box-shadow: 0 0 0 2px var(--panel); }
+
+/* 下一页里的占位说明（锁屏 / 桌面 / 手机设置，以后换成真内容时整段删掉） */
+.ph-set-todo { padding: 24px 8px; text-align: center; font-size: var(--font-size-md); }
 
 /* Settings 里装着原来「杂项」页的内容（节点是 index.html 的 #tab-misc，见 apps.js）：
    按手机屏幕（电脑上约 310px 宽、手机全屏 390px）排：长说明换行、按钮行折行、宽内容（变量 / 日志）在自己的框里滚，整页不横向溢出。 */
 .ph-settings { min-width: 0; font-size: var(--font-size-md); }
-.ph-settings .section-title { margin-top: 18px; font-size: var(--font-size-base); }   /* 各节标题（备份 / 酒馆互通 / 安装是嵌在 #misc-rest 里的，不是直接子元素）之间留出空隙 */
-.ph-settings > .theme-row + .ph-wall-row { margin-top: 8px; }
-.ph-settings .ph-wall-row { margin: 8px 0 0; }
+.ph-settings .section-title { margin-top: 18px; font-size: var(--font-size-base); }   /* 各节标题（备份 / 酒馆互通 / 安装是嵌在 .misc-rest 里的，不是直接子元素）之间留出空隙 */
+.ph-settings .ph-set-page .section-title:first-child { margin-top: 0; }                 /* 每一页第一节顶上不留空（页标题已经在标题栏里了） */
 .ph-settings .row, .ph-settings .pwa-section .row { flex-wrap: wrap; }
 .ph-settings .row > span { min-width: 0; overflow-wrap: anywhere; }
 .ph-settings .dim, .ph-settings .bkx-desc, .ph-settings .pwa-desc { overflow-wrap: anywhere; }
@@ -239,6 +257,11 @@
 :root[data-theme="princesse"] .ph-lock-time { font-weight: 300; letter-spacing: .04em; font-family: var(--pr-font-heading); }
 :root[data-theme="princesse"] .ph-lock-date { letter-spacing: .14em; }
 :root[data-theme="princesse"] .ph-app-title { font-weight: 400; text-transform: uppercase; letter-spacing: .24em; margin-right: -.24em; font-size: 14px; }
+/* 菜单：不要卡片，只留上下两道细线；行里字小一点、拉开字距 */
+:root[data-theme="princesse"] .ph-menu { background: transparent; border-width: var(--border-width) 0; border-radius: 0; box-shadow: none; }
+:root[data-theme="princesse"] #phone button.ph-menu-row { font-size: 13px; letter-spacing: .1em; }
+:root[data-theme="princesse"] #phone button.ph-menu-row:hover, :root[data-theme="princesse"] #phone button.ph-menu-row:active { background: transparent; color: var(--pr-gold); }
+:root[data-theme="princesse"] .ph-menu-row .ph-ico svg { width: 14px; height: 14px; }
 :root[data-theme="princesse"] .ph-homebar-line { border-radius: 0; height: 2px; width: 96px; }
 :root[data-theme="princesse"] .ph-wall {
   background: linear-gradient(170deg, var(--panel-2), var(--bg));

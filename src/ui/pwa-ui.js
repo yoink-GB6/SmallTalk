@@ -17,6 +17,7 @@
 import { $, h, toast } from './dom.js';
 import { ui, persist, flushNow } from './state.js';
 import { installHelpNodes, IPHONE_FIRST_NOTE, initFirstRunGuide } from './first-run-guide.js';
+import { setSettingsItemHidden } from './phone/phone.js';
 import { pwaEvents, getPwaState, initPwa, setBeforeReload, applyUpdate, promptInstall, requestPersist } from '../pwa.js';
 
 const DRAFT_KEY = 'smalltalk-update-draft';   // sessionStorage 里暂存输入框内容的键
@@ -147,6 +148,7 @@ function repaint() {
     paintBanner(s);
     const box = document.querySelector('[data-fk="pwa-section"]');
     if (box) paintSection(box, s);
+    setSettingsItemHidden('install', s.backend !== 'direct');   // Settings 菜单里「安装到主屏幕」这一项只有网页版才有（探测完前先藏着）
 }
 
 // ───────────────────────────── 启动 ─────────────────────────────
