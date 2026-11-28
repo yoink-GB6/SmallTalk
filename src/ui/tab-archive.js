@@ -17,11 +17,13 @@ import { detectJsonKind } from '../card.js';
 import { exportCardFile } from './export-st.js';
 import {
     listCards, cardChats, liveChats, openChat, switchCard, newChat, renameChat, deleteChat, exportChat,
-    importChatFile, deleteCard,
+    deleteCard,
 } from './archive.js';
 import { importFiles, importBlockedReason } from './importer.js';   // 循环依赖（importer 导入 archive）：只在函数体里调用
+import { importChatFiles } from './import-chats.js';   // 同上：只在函数体里调用
+import { openImportMenu } from './import-menu.js';
 import { openSearch } from './chat-search.js';   // 「搜索聊天记录」按钮用（只在函数体里调用）
-import { closeDrawer } from './drawer.js';
+import { closePhone, isMeetupShown } from './phone/phone.js';   // 这一页现在住在手机的 Meetup 里；进入 RP = 收起手机（规则见 enterRp）
 import { writerOwnsTab, drawWriter, openWriter, editCard } from './card-writer.js';   // 循环依赖：只在函数体里调用
 
 // ───────────────────────────── 运行期界面状态（不持久化，刷新页面就没了） ─────────────────────────────
@@ -53,11 +55,13 @@ let batchBusy = false;        // 批量导出 / 删除正在跑：别重复点
 let batchFmt = 'auto';        // 批量导出的格式：'auto' = 和单张导出一样（有头像 PNG，没有 JSON）；'json' = 全部 JSON
 
 /**
- * 「导入」按钮的文件选择框：只收角色卡（PNG / JSON）和聊天记录（.jsonl，进当前卡的新存档），可多选。
- * 世界书、正则、预设、人设的文件请到各自的页导入。拖文件进页面的总入口（importer.js importFiles）认所有类型，不受这里限制；
- * 这里先按类型挑出合格的，再原样交给 importFiles（阻挡条件、同名卡的询问、提示都在它里面）。
+ * 「导入」按钮点开的菜单有两项，各有一个文件选择框：
+ *   导入角色 → importPicker：只收角色卡（PNG / JSON），可多选。世界书、正则、预设、人设的文件请到各自的页导入。
+ *     拖文件进页面的总入口（importer.js importFiles）认所有类型，不受这里限制；这里先按类型挑出合格的，
+ *     再原样交给 importFiles（阻挡条件、同名卡的询问、提示都在它里面）。
+ *   导入聊天记录 → chatPicker：只收 .jsonl，可多选；每个文件按角色名自动对到卡（import-chats.js）。
  */
-const importPicker = h('input', { type: 'file', id: 'archive-import-input', accept: '.png,.json,.jsonl', multiple: true, hidden: true });
+const importPicker = h('input', { type: 'file', id: 'archive-import-input', accept: '.png,.json', multiple: true, hidden: true });
 importPicker.addEventListener('change', async () => {
     const files = [...importPicker.files];
     importPicker.value = '';
@@ -76,17 +80,26 @@ importPicker.addEventListener('change', async () => {
     if (good.length) await act(() => importFiles(good));
 });
 
-/** 给 .jsonl 导入用的文件选择框（只有一个，点哪张卡的「导入」就把目标卡 id 记在上面） */
-const picker = h('input', { type: 'file', id: 'archive-file-input', accept: '.jsonl', hidden: true });
-picker.addEventListener('change', () => {
-    const file = picker.files[0], cardId = picker.dataset.card;
-    picker.value = '';
-    if (file) act(() => importChatFile(file, cardId));
+const chatPicker = h('input', { type: 'file', id: 'archive-file-input', accept: '.jsonl', multiple: true, hidden: true });
+chatPicker.addEventListener('change', () => {
+    const files = [...chatPicker.files];
+    chatPicker.value = '';
+    if (files.length) act(() => importChatFiles(files));   // 能不能导（只读 / 生成中…）由 importChatFiles 查并提示
 });
 
 // ───────────────────────────── 读和画 ─────────────────────────────
 
-const tabIsActive = () => $('#tabs button.active')?.dataset.tab === 'archive';
+/** 这一页现在是不是正显示在屏幕上（手机开着且在 Meetup 视图）。不显示时不白画，打开时 app.js 的 onPhoneView 会补一次 */
+const tabIsActive = () => isMeetupShown();
+
+/**
+ * 「进入 RP」：收起手机，露出后面的聊天画面。规则：
+ *   会换存档的操作成功之后收起——点卡、点存档（点的就是当前卡 / 当前存档也一样）、「新对话」；导入聊天记录切到新存档那一支在 import-chats.js 里收；
+ *   做不成（生成中、只读……：op 返回 false，原因已经弹过）不收；
+ *   导入角色、改名、删除、导出、批量、写卡都留在 Meetup 里。批量模式下点行是勾选，根本不会走到这里。
+ * @param {unknown} ok 切换函数的返回值（archive.js op：true = 做完了）
+ */
+const enterRp = ok => { if (ok) closePhone(); };
 
 /** 存储里的卡 / 存档变了（任何存档操作之后、消息写完之后）：下次画之前重新读；这一页正开着就马上读 */
 export function invalidateArchiveTab() {
@@ -127,7 +140,11 @@ export function renderArchiveTab(force = false) {
         if (tab) { parkGreeting(); drawWriter(tab); }
         return;
     }
-    if (dirty || !model) load().catch(e => { console.error(e); $('#tab-archive').replaceChildren(h('div', { class: 'empty' }, `读取存档列表失败：${e.message}`)); });
+    // 重读存储期间页面上还是上一次画的旧内容（旧节点的按钮点了会作用到旧的卡）：标 aria-busy，画完（draw）才去掉；读失败也去掉
+    if (dirty || !model) {
+        $('#tab-archive')?.setAttribute('aria-busy', 'true');
+        load().catch(e => { console.error(e); const t = $('#tab-archive'); t?.removeAttribute('aria-busy'); t?.replaceChildren(h('div', { class: 'empty' }, `读取存档列表失败：${e.message}`)); });
+    }
     else draw();
 }
 
@@ -157,6 +174,7 @@ function parkGreeting() {
 function draw() {
     const tab = $('#tab-archive');
     if (!tab || !model) return;
+    tab.removeAttribute('aria-busy');
     if (writerOwnsTab()) { parkGreeting(); drawWriter(tab); return; }   // 慢的 load() 回来时已经进了写卡页
     if (persist.cardId !== lastActive) {
         // 换了当前卡：新的当前卡默认展开；上一张是自动展开的就收回去（手动展开的留着）
@@ -186,11 +204,14 @@ function draw() {
     // 重画会把按钮换成新的：原来焦点在这一页的哪个按钮上，画完放回去（焦点在别处就不碰）
     const fk = tab.contains(document.activeElement) ? document.activeElement.dataset?.fk : null;
 
-    const importCard = h('button', { class: 'primary', 'data-fk': 'import-card', disabled: ro, title: ro ? RO_TIP : '导入角色卡（PNG / JSON，作为新卡添加）或聊天记录（.jsonl，进当前卡的新存档），可一次选多个。世界书、正则、预设、人设请到各自的页导入；也可以直接把文件拖进页面',
-        onclick: () => importPicker.click() }, '导入');
+    const importCard = h('button', { class: 'primary', 'data-fk': 'import-card', disabled: ro, 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+        title: ro ? RO_TIP : '导入角色（PNG / JSON，作为新卡添加）或聊天记录（.jsonl，按角色名自动放进对应角色卡的新存档），可一次选多个。世界书、正则、预设、人设请到各自的页导入；也可以直接把文件拖进页面',
+        onclick: e => openImportMenu(e.currentTarget, [
+            { label: '导入角色', fk: 'import-menu-card', title: '角色卡（PNG / JSON），作为新卡添加；同名卡会问是否更新', onSelect: () => importPicker.click() },
+            { label: '导入聊天记录', fk: 'import-menu-chat', title: '酒馆的聊天记录（.jsonl），按角色名自动放进对应角色卡的新存档', onSelect: () => chatPicker.click() }]) }, '导入');
     // 聊天内搜索的入口（原来在手机 Settings）：排在这一行最后。窄屏下检查器是盖住聊天区的抽屉，先收起才看得到搜索栏
     const searchBtn = h('button', { id: 'misc-search-btn', 'data-fk': 'misc-search', type: 'button', title: '在当前存档里搜索',
-        onclick: () => { closeDrawer(); openSearch(); } }, '搜索聊天记录');
+        onclick: () => { closePhone(); openSearch(); } }, '搜索聊天记录');   // 搜的是当前聊天：先收起手机让聊天区和搜索条露出来
     // 「写卡」（card-writer.js）：排在这一行最前面。新建一张空白卡（已经有一张没动过的空白卡就打开它）并进写卡页；改已有的卡用每行的「编辑」。
     // 只读标签页里禁用（写卡页里全是写操作），和这一页别的操作按钮一样
     const writeBtn = h('button', { 'data-fk': 'card-writer', type: 'button', disabled: ro,
@@ -223,7 +244,7 @@ function draw() {
             h('span', { class: 'dim' }, `${cards.length} 张卡 · ${total} 个存档`)));
         kids.push(...cards.map(c => cardBlock(c, ro)));
     }
-    kids.push(picker, importPicker);
+    kids.push(chatPicker, importPicker);
     // 开场白下拉框 #greeting-select 是全页唯一的常驻元素（别处直接读它的值）：重画前先挪回 index.html 里的停放处，
     // 免得被 replaceChildren 一起丢掉；cardBlock 给当前卡那一行画好后再把它挪进去（做法同人设页的 #persona-fields）
     const sel = $('#greeting-select'), home = $('#greeting-home');
@@ -324,15 +345,14 @@ function cardBlock(c, ro) {
         h('button', { class: 'ghost arch-toggle', 'data-fk': `toggle:${c.id}`, 'aria-expanded': String(isOpen), title: isOpen ? '收起' : '展开', onclick: () => toggle(c.id) }, isOpen ? '▾' : '▸'),
         h('button', { class: 'arch-main', 'data-fk': `card:${c.id}`, disabled: ro && !c.active,
             title: c.active ? `当前角色卡：${c.name}` : (ro ? RO_TIP : `切换到「${c.name}」（回到它上次停留的存档）`),
-            onclick: () => act(() => switchCard(c.id)) },   // 点的就是当前卡时 switchCard 什么都不做
+            onclick: () => { if (c.id === persist.cardId) closePhone(); else act(() => switchCard(c.id)).then(enterRp); } },   // 点的就是当前卡：什么都不用切，直接收起手机（只读标签页里也能收）。按点击那一刻的 persist 判断，不用画的时候记下的 c.active（画面可能已经旧了）
         avatarOf(c),
         h('span', { class: 'arch-text' }, h('b', { class: 'arch-name' }, c.name), h('span', { class: 'dim arch-sub' }, sub))),
         // 以前这里有个「当前」小标记：当前卡已经有 .current 的高亮边框（Princesse 主题是左侧一条线），用户定的去掉；
         // 读屏的信息留在 aria-current 和卡名按钮的 title（「当前角色卡：…」）上
-        actionBtn('新对话', `给「${c.name}」新开一个存档并切过去`, `new:${c.id}`, ro, () => act(() => newChat(c.active ? (Number($('#greeting-select').value) || 0) : 0, c.id))),
+        actionBtn('新对话', `给「${c.name}」新开一个存档并切过去`, `new:${c.id}`, ro, () => act(() => newChat(c.active ? (Number($('#greeting-select').value) || 0) : 0, c.id)).then(enterRp)),
         // 当前卡这一行的开场白下拉框落脚处（draw 里把 #greeting-select 挪进来；只有一个开场白时它自己是 hidden 的）
         c.active ? h('span', { class: 'arch-greeting-slot' }) : null,
-        actionBtn('导入', `导入酒馆的聊天记录（.jsonl），作为「${c.name}」的新存档并切过去`, `import:${c.id}`, ro, () => { picker.dataset.card = c.id; picker.click(); }),
         // 写卡页改这张卡（card-writer.js editCard：不是当前卡先切过去，聊天区当预览；切换被拒就留在这一页）
         actionBtn('编辑', `在写卡页改「${c.name}」的名字、头像、人设、开场白${c.active ? '' : '（会先切到这张卡）'}`, `edit:${c.id}`, ro, () => act(() => editCard(c.id))),
         // 每卡的导出 / 删除按钮收进了顶上的「批量」。这个位置显示这张卡最后聊天的日期（没有存档记录就不显示）
@@ -366,7 +386,7 @@ function chatRow(c, x, ro) {
         h('header', null,
             h('button', { class: 'arch-main', 'data-fk': `chat:${x.id}`, disabled: ro && !active,
                 title: active ? `当前存档：${x.name}` : (ro ? RO_TIP : `切换到存档「${x.name}」${c.active ? '' : `（角色卡「${c.name}」）`}`),
-                onclick: () => act(() => openChat(c.id, x.id)) },   // 点的就是当前存档时 switchChat 什么都不做
+                onclick: () => { if (c.id === persist.cardId && x.id === persist.chatId) closePhone(); else act(() => openChat(c.id, x.id)).then(enterRp); } },   // 点的就是当前存档：直接收起手机
             // 时间放进悬停提示；楼数拿出来显示在改名按钮左边（当前存档的数字取 state.chat.length，见 archive.js liveChats）
             h('span', { class: 'arch-text' }, h('span', { class: 'arch-name', title: timeText(x.updatedAt) }, x.name))),
             // 「当前」小标记去掉了（同卡那一行）：靠 .current 的边框、aria-current 和 title（「当前存档：…」）认

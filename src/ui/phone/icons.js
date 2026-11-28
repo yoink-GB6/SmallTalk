@@ -7,12 +7,14 @@ const wrap = (body, extra = '') => `<svg viewBox="0 0 24 24" width="24" height="
 const ICONS = {
     // 顶栏的手机图标
     phone: wrap('<rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M10.6 18.6h2.8"/>'),
-    // 五个应用：Settings 三根滑杆、Chat 对话气泡、Music 音符、Reading 翻开的书、Meetup 两个并排的人
+    // 六个应用（Clippings 在下面单独一项）：Settings 三根滑杆、Chat 对话气泡、Music 音符、Reading 翻开的书、Meetup 两个并排的人
     settings: wrap('<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>'),
     chat: wrap('<path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4 3.2v-3.2H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z"/><path d="M8 10h8M8 13h5"/>'),
     music: wrap('<path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>'),
     reading: wrap('<path d="M12 6.5C10 5 7 4.5 4 5v13c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5V5c-3-.5-6 0-8 1.5Z"/><path d="M12 6.5v13"/>'),
     meetup: wrap('<circle cx="9" cy="8.5" r="3"/><path d="M3.5 19c.4-3 2.6-5 5.5-5s5.1 2 5.5 5"/><circle cx="17" cy="9.5" r="2.4"/><path d="M16.5 14.2c2.4 0 3.8 1.7 4 4.3"/>'),
+    // Clippings：一支荧光笔压在一道划线上
+    clippings: wrap('<path d="M14.5 4.5l5 5-8 8H6.5v-5z"/><path d="M12.5 6.5l5 5"/><path d="M4 21h16"/>'),
     // 锁屏的假指纹：几圈不闭合的弧
     fingerprint: wrap('<path d="M6.5 9.5a6 6 0 0 1 11 0"/><path d="M5 13a7 7 0 0 1 .3-2.2M19 13c0 3-.6 5.2-1.6 7"/><path d="M8.5 20c.6-1.3 1-3 1-5a2.5 2.5 0 0 1 5 0c0 2.4-.4 4.4-1.2 6"/><path d="M12 13v.5c0 2-.3 3.6-.9 5.2"/><path d="M8.5 11.5A4 4 0 0 1 15.5 11"/>'),
     back: wrap('<path d="M15 5l-7 7 7 7"/>'),

@@ -20,7 +20,9 @@
 // 导航（view 是当前显示哪一个子视图）：
 //   顶栏的手机图标 = togglePhone()：收起时 → 打开（没解过锁看锁屏，解过锁看桌面）；开着且在某个应用里 → 回桌面；开着且在桌面 / 锁屏 → 收起。
 //   底部的 home 指示条做同一件事（窄屏上手机铺满全屏、盖住了顶栏，所以手机里要有个等价的出口）。
-//   Meetup（桌面上）= 收起手机，露出后面原来的 RP 画面。Esc = 收起（不抢输入框和别的弹框的 Esc）。
+//   Esc = 收起（不抢输入框和别的弹框的 Esc）。
+//   Meetup 现在是个应用（原来「存档」页整页搬进来）：点了进它的页；在里面选卡 / 存档才收起手机进 RP（规则见 tab-archive.js enterRp）。
+//   Clippings 是原来的「摘抄」页，同样整页搬进来；单击跳转后收起手机（tab-excerpts.js jump）。
 //
 // 锁屏：按一下假指纹解锁（点一下就行，不用按住——按住半秒在鼠标上不顺手，也不便于键盘 / 读屏用户）；有一段描圈 + 上滑的动效，
 //   prefers-reduced-motion 时直接切换。"解过锁"只记在这个模块的变量里，刷新页面就没了（回到锁屏）；不写 localStorage / IndexedDB。
@@ -67,6 +69,9 @@ export const isPhoneOpen = () => open;
 export const phoneView = () => view;
 /** Settings 现在正显示在屏幕上（手机开着且在 Settings 视图）：shell.js 靠它决定要不要重画那一页 */
 export const isSettingsShown = () => open && view === 'settings';
+/** Meetup（存档树）/ Clippings（摘抄）现在正显示在屏幕上：shell.js、tab-archive.js、tab-excerpts.js 靠它们决定要不要重画，不可见时不白画 */
+export const isMeetupShown = () => open && view === 'meetup';
+export const isClippingsShown = () => open && view === 'clippings';
 
 /** Settings 当前在哪一页（null = 菜单页）：shell.js 用它只重画开着的那一页 */
 export const currentSettingsPage = () => settingsPage;
@@ -185,6 +190,22 @@ export function openSettings(sectionSelector) {
     }
     // 不把焦点挪到返回按钮：程序设的焦点会让它画出一圈键盘焦点框，鼠标用户看着像出了问题（点击跳转时没有地方需要焦点）
 }
+
+/** 打开手机并进某个应用的视图（和 openSettings 一样：手机收着就打开，没解过锁直接当作解锁，不为一个跳转再点一次指纹） */
+function openAppView(id) {
+    if (!root) return;
+    unlocked = true;
+    if (!open) openPhone();
+    unlocking = false;
+    showView(id);
+    const body = root.querySelector(`.ph-view[data-view="${id}"] .ph-app-body`);
+    if (body) body.scrollTop = 0;
+}
+/** 顶栏的当前卡片名、聊天区空状态里的链接：打开手机直接进 Meetup（存档树） */
+export const openMeetup = () => openAppView('meetup');
+export const openClippings = () => openAppView('clippings');
+/** 窄屏上手机是铺满全屏的：从手机里跳去右侧面板的某一页（抽屉）之前要先收起它，不然抽屉开在手机后面看不到。宽屏手机是浮着的，不用收 */
+export function closePhoneIfNarrow() { if (isNarrow()) closePhone(); }
 
 /** 顶栏图标 / home 条的提示文字、aria 状态跟着当前情形走 */
 function syncChrome() {

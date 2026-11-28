@@ -12,7 +12,7 @@ import { renderScriptsTab } from './tab-scripts.js';
 import { renderMemoryTab } from './memory.js';
 import { renderExcerptsTab } from './tab-excerpts.js';
 import { renderMiscTab } from './tab-misc.js';
-import { isSettingsShown, currentSettingsPage } from './phone/phone.js';
+import { isSettingsShown, currentSettingsPage, isMeetupShown, isClippingsShown } from './phone/phone.js';
 import { renderPersonaTab } from './tab-persona.js';
 import { refreshHealth, paintChatWarn } from './tab-provider.js';
 import { renderModelPicker } from './model-picker.js';
@@ -22,10 +22,6 @@ import { reconcileScripts } from './script-host.js';
 
 export function renderTopbar() {
     const c = card();
-    // 卡名放进单独的 span：顶栏窄的时候只截断名字，头像和小三角（::after）不受影响
-    $('#card-chip').replaceChildren(
-        ...[state.avatar ? h('img', { src: state.avatar, alt: '' }) : null,
-            h('span', { class: state.card ? 'chip-name' : 'chip-name dim' }, state.card ? c.name : '未导入角色卡')].filter(Boolean));
     // 「我叫」输入框在「人设」页、「手动模式」勾选框在手机的 Settings 里（index.html 里都是常驻的，不随页签重画）；这里只负责把值同步进去。
     // 正在输入时不覆盖：后台触发的 renderAll 会把用户打到一半的名字冲掉
     const nameInput = $('#persona-name');
@@ -60,23 +56,24 @@ export function renderInspector(force = false) {
     // 不可见时白画没意义，进某一页时 phone.js 的 onSettingsPage 会补一次，不会读到旧内容）。
     // 正在这一页的文本框里打字时不重画（「预设」页的条目编辑框、「接口」页的输入框：重画会换掉文本框、光标就丢了），
     // 焦点离开后 app.js 的 #tab-misc focusout 会补一次
+    const focused = document.activeElement;
+    const typing = !!focused?.matches?.('textarea, input:not([type]), input[type="text"]');
     const sp = isSettingsShown() ? currentSettingsPage() : null;
-    if (sp) {
-        const f = document.activeElement;
-        const typing = f?.matches?.('textarea, input:not([type]), input[type="text"]') && $('#tab-misc')?.contains(f);
-        if (!typing) renderMiscTab(sp, force === true);
-    }
-    const active = $('#tabs button.active')?.dataset.tab ?? 'archive';
+    if (sp && !(typing && $('#tab-misc')?.contains(focused))) renderMiscTab(sp, force === true);
+    // 手机里的 Meetup（原「存档」页，含写卡页）和 Clippings（原「摘抄」页）：和 Settings 一样，开着才画（不可见时不白画；
+    // 打开时 phone.js 的 onPhoneView 会补一次，所以进去时内容是最新的）；各自的文本框里正在打字就跳过
+    if (isMeetupShown() && !(typing && $('#tab-archive')?.contains(focused))) renderArchiveTab(force === true);
+    if (isClippingsShown() && !(typing && $('#tab-excerpts')?.contains(focused))) renderExcerptsTab(force === true);
+    const active = $('#tabs button.active')?.dataset.tab ?? 'memory';
     // 正在这一页的文本框里打字时不要整页重画：重画会把文本框换成新的，光标就丢了。
     // 只更新变量显示；等焦点离开文本框后（见 bind 里的 focusout）再补一次完整重画。
-    const focused = document.activeElement;
-    if (focused?.matches?.('textarea, input:not([type]), input[type="text"]') && $(`#tab-${active}`)?.contains(focused)) {
+    if (typing && $(`#tab-${active}`)?.contains(focused)) {
         const vars = $('#vars-view');
         if (vars) vars.textContent = JSON.stringify(ui.preview?.variables ?? state.variables, null, 2);
         return;
     }
-    ({ prompt: renderPromptTab, world: renderWorldTab, persona: renderPersonaTab, archive: renderArchiveTab, regex: f => { renderRegexTab(f); renderScriptsTab(f); },   // 脚本区并在「正则」页下面（各画各的容器）
-         memory: renderMemoryTab, excerpts: renderExcerptsTab })[active](force === true);
+    ({ prompt: renderPromptTab, world: renderWorldTab, persona: renderPersonaTab, regex: f => { renderRegexTab(f); renderScriptsTab(f); },   // 脚本区并在「正则」页下面（各画各的容器）
+         memory: renderMemoryTab })[active]?.(force === true);
 }
 
 export function renderAll() {

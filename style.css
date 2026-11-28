@@ -383,7 +383,7 @@
 /* ── Princesse：按钮 ── */
 /* 次要按钮：共用规则 + 上面的 --control-* 变量已经是"透明底 + 一条底线"；悬停时线加粗（用内阴影，不改盒子尺寸） */
 /* （整行可点的那几种按钮——页签、存档页的卡 / 存档名、折叠条、顶栏卡片名、文字链接——本来就没有线，不加） */
-:root[data-theme="princesse"] button:hover:not(:disabled, .primary, #tabs button, .arch-main, .usage-head, .wbook-toggle, .chip-card, .linkbtn) { box-shadow: inset 0 -1px 0 var(--text); }
+:root[data-theme="princesse"] button:hover:not(:disabled, .primary, #tabs button, .arch-main, .usage-head, .wbook-toggle, .linkbtn) { box-shadow: inset 0 -1px 0 var(--text); }
 /* .ghost 本来就没边框：给一条更淡的发丝底线，悬停时变黑 */
 :root[data-theme="princesse"] button.ghost { border-bottom-color: var(--line); }
 :root[data-theme="princesse"] button.ghost:hover:not(:disabled) { border-bottom-color: var(--text); }
@@ -396,7 +396,7 @@
 :root[data-theme="princesse"] button.primary:hover:not(:disabled) { box-shadow: none; background: color-mix(in srgb, var(--accent) 82%, var(--panel)); }
 /* 禁用：不用整体半透明（字会掉到对比度以下），改成灰字 + 虚线底线；主按钮换成浅灰底 */
 :root[data-theme="princesse"] button:disabled { opacity: 1; color: var(--pr-disabled); }
-:root[data-theme="princesse"] button:disabled:not(.primary, #tabs button, .arch-main, .usage-head, .wbook-toggle, .chip-card, .linkbtn) { border-bottom-style: dashed; border-bottom-color: var(--pr-disabled); }
+:root[data-theme="princesse"] button:disabled:not(.primary, #tabs button, .arch-main, .usage-head, .wbook-toggle, .linkbtn) { border-bottom-style: dashed; border-bottom-color: var(--pr-disabled); }
 :root[data-theme="princesse"] button.primary:disabled { background: var(--pr-disabled-bg); border-color: var(--pr-disabled-bg); }
 :root[data-theme="princesse"] :is(select, input, textarea):disabled { color: var(--pr-disabled); border-bottom-style: dashed; }
 
@@ -449,7 +449,7 @@
 /* 被停用 / 未启用的条目：原来是 .5 / .55 的透明度，字会掉到 4.5:1 以下，这里提到 .62 */
 :root[data-theme="princesse"] :is(.pitem.disabled > header, table.grid tr.off, .wbook.inactive .wbook-table, .wbook.inactive .wbook-toggle, .wbook.inactive .wbook-meta) { opacity: .62; }
 /* 头像、小圆点：方正 */
-:root[data-theme="princesse"] :is(.chip-card img, .arch-avatar, .dot) { border-radius: 0; }
+:root[data-theme="princesse"] :is(.arch-avatar, .dot) { border-radius: 0; }
 :root[data-theme="princesse"] :is(.usage-bar, .budget-meter) { border-radius: 0; }
 /* 聊天区顶上的提示条落在花的上面时也要读得清：给不透明底 */
 :root[data-theme="princesse"] #chat-info { background: var(--panel); }
@@ -560,8 +560,6 @@ textarea { width: 100%; resize: vertical; }
   padding: 8px 14px; background: var(--panel); border-bottom: var(--border-width) solid var(--line);
 }
 .brand { font-weight: 700; letter-spacing: .02em; }
-.chip-card { display: flex; align-items: center; gap: 6px; font-weight: 600; }
-.chip-card img { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; }
 label.inline { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); }
 .health { color: var(--dim); }
 .health.ok { color: var(--ok); visibility: hidden; } /* 正常时不显示，只在有问题时亮红点（和接口页"只标异常"一致）；占位留着，顶栏不跳 */
@@ -708,10 +706,6 @@ table.grid input.mem:hover, table.grid input.mem:focus { border-color: var(--lin
 .empty { color: var(--dim); padding: 24px 8px; text-align: center; }
 
 /* ── 多卡多存档 ── */
-button.chip-card { border-color: transparent; background: transparent; padding: 2px 8px; }
-button.chip-card:hover { border-color: var(--line); }
-/* 小三角用伪元素画：不进 innerText，卡名读出来还是干净的 */
-button.chip-card::after { content: '▾'; color: var(--dim); font-weight: 400; }
 #store-error { padding: 8px 14px; background: color-mix(in srgb, var(--bad) 14%, var(--panel)); border-bottom: var(--border-width) solid var(--bad); }
 
 /* ── 接口 / 模型选择器 ── */
@@ -878,11 +872,11 @@ button.chip-card::after { content: '▾'; color: var(--dim); font-weight: 400; }
 .imp-opt input { margin-top: 3px; }
 
 /* ── 顶栏精简 ── */
-/* 顶栏只剩：标题（窄屏下兼作抽屉按钮）、卡片名、告警 / 状态灯。一律单行不换行；放不下时只截断卡片名。 */
+/* 顶栏只剩：☰（兼作抽屉按钮）、告警 / 状态灯、手机图标。一律单行不换行。 */
 #top-bar { flex-wrap: nowrap; min-width: 0; }
 .brand { flex: none; white-space: nowrap; user-select: none; display: flex; align-items: center; cursor: pointer; }
 /* 标题兼开合按钮（窄屏开合抽屉、宽屏收起 / 展开右侧面板）：前面带 ☰，整块可点；伪元素不进 textContent */
-.brand::before { content: '☰'; margin-right: 6px; }
+.brand::before { content: '☰'; }
 .brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-control); }
 
 /* ── 宽屏：右侧面板与页面等高，页签栏和顶栏连成一条导航栏 ── */
@@ -902,9 +896,6 @@ button.chip-card::after { content: '▾'; color: var(--dim); font-weight: 400; }
   body.panel-collapsed #inspector { display: none; }
   body.panel-collapsed #sheld { border-right: 0; }
 }
-.chip-card { flex: 0 1 auto; min-width: 0; }
-.chip-card img, button.chip-card::after { flex: none; }
-.chip-name { min-width: 0; max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #chat-warn { flex: 0 1 auto; min-width: 0; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #chat-warn[hidden], .manual-badge[hidden], #chat-empty[hidden] { display: none; }
 .health { flex: none; }
@@ -1296,3 +1287,12 @@ details[open] > .scr-head::before { content: '▾'; }
 .cw-pick-list { display: flex; flex-direction: column; gap: 4px; }
 .cw-pick-item { display: flex; align-items: center; gap: 8px; min-width: 0; text-align: left; padding: 6px 8px; }
 .cw-pick-item .arch-name { min-width: 0; }
+
+/* ── 存档页「导入」点开的小菜单（src/ui/import-menu.js）和「这个聊天记录导进哪张卡」选择框（src/ui/import-chats.js），2026-11-28 追加 ── */
+.import-menu { position: fixed; z-index: 26; display: flex; flex-direction: column; min-width: 150px; max-width: calc(100vw - 16px); padding: 4px; background: var(--panel); border: var(--border-width) solid var(--line); border-radius: var(--radius-card); box-shadow: var(--shadow-dialog); }
+.import-menu-item { text-align: left; white-space: nowrap; min-height: 36px; border: 0; background: transparent; }
+.import-menu-item:hover, .import-menu-item:focus-visible { background: var(--panel-2); }
+@media (pointer: coarse) { .import-menu-item { min-height: 44px; } }
+.ic-pick-list { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.ic-pick-item { display: flex; align-items: center; gap: 8px; min-width: 0; text-align: left; padding: 6px 8px; }
+.ic-pick-item .arch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

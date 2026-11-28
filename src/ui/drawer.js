@@ -28,7 +28,8 @@ export function initDrawer() {
     const syncToggleAttrs = () => {
         toggle.setAttribute('role', 'button');
         toggle.tabIndex = 0;
-        toggle.title = mq.matches ? '打开 / 收起右侧面板（拼装、世界书、存档…）' : '展开 / 收起右侧面板（拼装、世界书、存档…）';
+        toggle.title = mq.matches ? '打开 / 收起右侧面板（拼装、世界书、正则…）' : '展开 / 收起右侧面板（拼装、世界书、正则…）';
+        toggle.setAttribute('aria-label', toggle.title);   // 顶栏上只剩一个 ☰ 图标（没有文字），读屏靠这句
         const expanded = mq.matches ? body.classList.contains('drawer-open') : !body.classList.contains('panel-collapsed');
         toggle.setAttribute('aria-expanded', String(expanded));
     };

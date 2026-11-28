@@ -82,7 +82,7 @@ export const GLOBAL_FIELDS = {
     globalRegex: {
         what: '单独导入的全局正则脚本',
         kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（settings.json 里的全局正则，合并）；导出 zip 不带',
-        how: '导入走拖文件 / 「存档」页的导入…；没有单独导出（角色卡导出时只带卡自己的正则）。'
+        how: '导入走拖文件 / Meetup 页的导入…；没有单独导出（角色卡导出时只带卡自己的正则）。'
             + '恢复时 unionRegex：去掉 id、origin（运行时的标签）、disabled（开关状态）之后内容相同的跳过，保留本机那条和它的开关；id 和本机的撞了换新 id；不是对象的丢掉',
     },
     persona: {
@@ -183,7 +183,7 @@ export const STORE_KEYS = {
     },
     card: {
         key: 'card:<cardId>', what: '角色卡（CardRecord：卡本体 + 头像 + 停在哪个存档）',
-        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「存档」页：卡的导出（酒馆 PNG / JSON）；导入走拖文件 / 导入…；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（characters/）；「脚本」页：单个脚本 / 文件夹的导出导入（酒馆助手脚本 JSON）',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: 'Meetup 页：卡的导出（酒馆 PNG / JSON）；导入走拖文件 / 导入…；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（characters/）；「脚本」页：单个脚本 / 文件夹的导出导入（酒馆助手脚本 JSON）',
         how: '恢复时换新 id；内容相同（cardSig，不看卡自带世界书的开关 card.worldDisabled）的不新建，存档并进已有的卡，本机那张的开关不动；开关跟着卡记录进备份，不进导出的酒馆卡。'
             + '酒馆助手脚本（card.scripts，2026-11-23 第 1 期加、第 2 期起运行；缺省 = 跟着 raw，见 types.js Card.scripts、src/scripts.js）是卡内容的一部分：'
             + '跟着卡记录进整体备份；判重时算内容（代码、名字、开关 enabled 都算，和卡自带正则的 disabled 一样——它们都写在卡文件里），用 cardScripts 的值比，'
@@ -205,7 +205,7 @@ export const STORE_KEYS = {
     },
     chat: {
         key: 'chat:<cardId>:<chatId>', what: '存档（ChatRecord：消息、局部变量、名字、作者注释 authorNote（默认值时不写）、划线 highlights（没有时不写）……）',
-        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '「存档」页：存档的导出 / 导入（酒馆 .jsonl；作者注释在头的 chat_metadata.note_*）；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（chats/<卡文件名>/）',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: 'Meetup 页：存档的导出 / 导入（酒馆 .jsonl；作者注释在头的 chat_metadata.note_*）；手机 Settings「和酒馆整体互通」：从酒馆整体备份 zip 导入（合并） / 导出成酒馆目录结构的 zip（chats/<卡文件名>/）',
         how: '恢复时换新 id；名字 + 消息 + 变量 + 作者注释相同（chatSig）的跳过——作者注释只在不是默认值时才参与比较，所以没有作者注释的存档（含旧备份）判重和以前一样；'
             + '新加进来的存档的作者注释先规范化（坏值回默认）。'
             + '作者注释（2026-11-22 加，types.js ChatRecord.authorNote）是存档内容的一部分：跟着存档进整体备份、跟着 .jsonl 往返；'

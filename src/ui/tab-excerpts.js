@@ -31,7 +31,7 @@ import { chatKey } from '../migrate.js';
 import { listCards, cardChats, liveChats, openChat, editHighlightsAcross, highlightEditBlocked } from './archive.js';   // 循环依赖：只在函数体里调用
 import { flashHighlight, repaintHighlights, scrollToHighlight } from './highlight-ui.js';     // 同上
 import { restoreActive } from './backup.js';                              // 同上
-import { closeDrawer } from './drawer.js';
+import { closePhone, isClippingsShown } from './phone/phone.js';   // 这一页现在是手机里的 Clippings 应用
 import { chatDoc, isShown, sliceHighlight, storedHighlights, comparePoint } from '../highlight.js';
 import { excerptName, filterGroups, itemKey, chatKeys, groupKeys, allKeys, pickState, setPicked, picksToEdits } from '../excerpts.js';
 
@@ -46,7 +46,7 @@ let seq = 0;                   // 防止慢的读取把新的结果盖掉
 let searchBox = null;          // 搜索框常驻（重画时挪回去，焦点和光标不丢）
 let clickTimer = null, clickKey = null;
 
-const isActive = () => $('#tabs button.active')?.dataset.tab === 'excerpts';
+const isActive = () => isClippingsShown();   // 正显示在屏幕上才画；打开时 app.js 的 onPhoneView 会补一次
 /** 能不能改（只读、停止保存、恢复中 → 删除按钮、批量删除禁用；生成中这类临时状态不禁用，点了再说原因） */
 const readOnlyNow = () => persist.readOnly || persist.stopped || restoreActive();
 
@@ -107,7 +107,7 @@ async function gather(force) {
 async function jump(cardId, chatId, hl) {
     const same = cardId === persist.cardId && chatId === persist.chatId;
     if (!same && !await openChat(cardId, chatId)) return;   // 被拒（只读、生成中……）openChat 里已经弹过原因
-    closeDrawer();   // 窄屏下抽屉盖着聊天区
+    closePhone();   // 手机盖着聊天区（窄屏铺满全屏，宽屏浮在聊天区上）：先收起，再滚动、闪
     const cur = currentHighlights().find(x => x.id === hl.id);
     const floor = cur?.from.floor ?? hl.from.floor;
     const row = $('#chat').children[floor];
@@ -278,6 +278,7 @@ function toolbar(ro, shownKeys) {
 function draw() {
     const tab = $('#tab-excerpts');
     if (!tab || view.editing) return;
+    tab.removeAttribute('aria-busy');
     const total = groupsNow.reduce((n, g) => n + g.chats.reduce((m, c) => m + c.items.length, 0), 0);
     if (!total) {
         view.batch = false; view.picked.clear();
@@ -322,7 +323,8 @@ export async function renderExcerptsTab(force = false) {
     }
     const mine = ++seq;
     let groups;
-    try { groups = await gather(force); } catch (e) { console.error(e); if (mine === seq) tab.replaceChildren(h('div', { class: 'log-line error' }, `读取划线失败：${e.message}`)); return; }
+    tab.setAttribute('aria-busy', 'true');   // 读存储期间页面上还是旧内容：画完（draw）才去掉，读失败也去掉
+    try { groups = await gather(force); } catch (e) { console.error(e); if (mine === seq) { tab.removeAttribute('aria-busy'); tab.replaceChildren(h('div', { class: 'log-line error' }, `读取划线失败：${e.message}`)); } return; }
     if (mine !== seq) return;   // 读的时候又触发了新的刷新：以新的为准
     groupsNow = groups;
     draw();

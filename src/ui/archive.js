@@ -24,7 +24,7 @@ import {
 import { unbindCardFromBooks } from '../books.js';
 import { startChat, scrollChatToEnd } from './chat.js';
 import { noteChatOpened, emitTavernEvent, forgetTrust } from './script-host.js';   // 循环依赖：只在函数体里调用（酒馆事件：CHAT_CHANGED / CHAT_CREATED / CHAT_DELETED，见 script-host.js syncEpoch）
-import { renderAll, renderTopbar } from './shell.js';
+import { renderAll } from './shell.js';
 import { invalidateArchiveTab } from './tab-archive.js';
 import { askRegexFate, moveAndFlush, undoMove, refreshRegexViews, moveSummary } from './regex-delete.js';
 import { enabledScripts } from '../regex-move.js';
@@ -833,11 +833,14 @@ export async function exportChat(cardId = persist.cardId, chatId = persist.chatI
  * 一个 .jsonl 变成某张卡（默认当前卡）下的一个新存档，并切过去。
  * 导进另一张卡（cardId）：同一个 op 里，文件确认能读之后才先切到那张卡（activateCard，和切换卡一样），再照常导入；
  * 文件读不出来就不切。
+ * 一次导好几个文件时（import-chats.js）：quiet = true 不弹每个文件自己的提示（由调用方汇总），结果写进 out：
+ *   成功时 out.chatId / out.count，读不出来时 out.why（人话原因）。
  */
-export const importChatFile = (file, cardId = persist.cardId) => op(async () => {
+export const importChatFile = (file, cardId = persist.cardId, { quiet = false, out = {} } = {}) => op(async () => {
     const parsed = parseChatFile(await file.text());
     if (!parsed.messages.length && !Object.keys(parsed.stHeader).length) {
-        toast(`「${file.name}」里没有读出任何消息，不像酒馆的聊天记录`, 'error');
+        out.why = `「${file.name}」里没有读出任何消息，不像酒馆的聊天记录`;
+        if (!quiet) toast(out.why, 'error');
         return;
     }
     if (cardId && cardId !== persist.cardId) {
@@ -859,6 +862,8 @@ export const importChatFile = (file, cardId = persist.cardId) => op(async () => 
     persist.cardMeta.activeChatId = rec.id;
     await flushNow();
     redraw();
+    out.chatId = rec.id; out.count = parsed.messages.length;
+    if (quiet) return;
 
     const bits = [`已导入 ${parsed.messages.length} 楼`];
     if (parsed.warnings.length) bits.push(`${parsed.warnings.length} 处问题已跳过（详见控制台）`);
@@ -874,19 +879,9 @@ export const importChatFile = (file, cardId = persist.cardId) => op(async () => 
 
 // ───────────────────────────── 界面 ─────────────────────────────
 
-/** 切到检查器的「存档」页 */
-export function openArchiveTab() {
-    $('#tabs button[data-tab="archive"]').click();
-}
-
 export function bindArchive() {
-    $('#card-chip').addEventListener('click', openArchiveTab);
     // 存档写完后：「存档」页里的楼数 / 名字跟着刷新（楼数只在写完时更新，生成中的每个 token 不重画整页）
-    // 没卡状态下第一次保存时会建出 Assistant 占位卡：顶栏的卡名也跟着更新（只在需要时重画顶栏，免得打断别处的输入）
-    persist.onFlushed = () => {
-        invalidateArchiveTab();
-        if (state.card && $('#card-chip').textContent !== state.card.name) renderTopbar();
-    };
+    persist.onFlushed = () => { invalidateArchiveTab(); };
     // 关页面前把还在防抖里的改动写下去。pagehide 里发起的 IndexedDB 写入浏览器一般会让它做完，
     // 但不是规范保证（比如进程被直接杀掉）；所以平时的防抖只有 400 ms，最多丢这么一小段。
     addEventListener('pagehide', () => { flushNow(); });
