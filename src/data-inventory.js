@@ -251,6 +251,48 @@ export const STORE_KEYS = {
         kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: null,
         how: '只有名字、地址、模型名单进备份（页面读不到服务端的 key，有意的隔离）；恢复规则同 endpoints',
     },
+    // ── 手机（2026-11-28 手机第一步；契约 types.js「手机第一步」，纯逻辑 src/phone-data.js / src/phone-backup.js，读写 src/ui/phone/phone-store.js）──
+    // 'phone' 这一条记录里三类都有，所以按「这条记录里的哪一部分」分三行登记（key 相同）
+    phone: {
+        key: 'phone', what: '手机这一层的小记录（PhoneRecord）里的【内容】：聊天预设 presets（含改过的「默认聊天预设」，id \'default\'）、表情库目录 stickers（名字、描述；图在 phoneimg:*）',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'same', export: '表情包：单独导出 / 导入一个 JSON 文件（{format: \'smalltalk-stickers\', version: 1, stickers: [{name, desc?, dataUrl}]}，导入 = 并集）；聊天预设没有单独的导出',
+        how: '第一次真写东西时才建这条记录；可选字段规范化后是空的就不写。进备份的顶层 phone 字段（phone-backup.js phoneForBackup）。'
+            + '恢复时并集（planPhoneImport）：聊天预设去掉 id / 名字 / 时间后内容相同的跳过，撞名加「 (2)」；备份里改过的默认和本机生效的默认不同 → 作为普通预设加进来（「默认聊天预设（来自备份）」），不改本机的默认；'
+            + '表情按图片（dataUrl）判重，相同的保留本机的名字和描述，撞名加「 (2)」。空浏览器：原样（备份里的 \'default\' 还是默认）。'
+            + '会发给模型的：聊天预设的文字；表情只发名字（描述不发，用户定的）。图片永远不发。前端卡和脚本读不到',
+    },
+    phoneWallpaper: {
+        key: 'phone', what: 'PhoneRecord.wallpaper：手机的两张壁纸 {lock?: 图片 id, home?: 图片 id}（锁屏、桌面各一张，各自可以没有 = 用主题自带的；可以是动图）',
+        kind: 'setting', backup: 'yes', restore: 'ask', fresh: 'same', export: null,
+        how: '备份里两张图内联成 {dataUrl, w?, h?}（动图原样）。已有数据：备份里的和本机的不同才算一样可以应用的设置，并进「是否应用备份中的……」那句问话（问话里叫「手机壁纸」），'
+            + '答「是」按位置换（备份里没有的位置不动），换下来的旧图在同一个事务里删掉。空浏览器：直接用备份的。它不在 global 里，所以不在 backup.js SETTING_KEYS 里',
+    },
+    phoneSelection: {
+        key: 'phone', what: 'PhoneRecord 里的【当前选择】：modelRef（手机聊天用的「接口 + 模型」，没有 = 跟 RP 的 chatModel）、lastPresetId（上次新建会话时选的聊天预设）',
+        kind: 'selection', backup: 'no', restore: 'never', fresh: 'default', export: null,
+        how: '导出时不带（phoneForBackup 不写）；恢复时永不从备份拿、本机的不动；空浏览器 = 没有（跟着 RP 的模型、默认预设）。只有这两样的 phone 记录不算「有数据」（hasPhoneData）',
+    },
+    phonechat: {
+        key: 'phonechat:<sessionId>', what: '一个手机会话（PhoneSession）：引用的卡 cards（数组，单聊一张）、人设 personaId（null = 跟随当前人设）、聊天预设 presetId（不写 = 默认）、'
+            + '消息（一个气泡一条，带时间、同一次生成的 gen、表情 id）、收藏 favorites（整条收藏，只记位置）、已读到哪 readAt、标题、置顶',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'remap', export: null,
+        how: '恢复时并集：判重只比「换算后的卡 + 每条消息的角色 / 原文 / 时间 / 说话人」，不看 id、标题、人设 / 预设的选择、readAt、置顶、收藏、消息 id、表情 id。'
+            + '重复的不新增，备份里的收藏并进本机那个（mergeHighlights），别的一律不动。新加的换新 id，引用换算：卡（planBackupImport 的 maps.cards；映射不到的原样留着 = 「角色卡已删除」的会话，只能看）、'
+            + '人设（maps.personas，按内容对；映射不到 = null 跟随当前人设）、预设（映射不到 = 默认）、表情（映射不到的留着，显示时退回按名字找 / 显示成文字）；恢复进来的都算已读。'
+            + '世界书不存在会话里：每次生成时按这张卡在 RP 里现在生效的现算（books.js entriesForCard，用户定的「和 RP 是通的」）；旧数据里的 worlds 字段读到就丢掉。'
+            + '删卡时不删会话（会话留着、只能看，按「卡在不在」现算，不落盘）。会发给模型：最近的消息（ChatPreset.history 条、受上下文上限约束）。收藏不发；前端卡和脚本读不到',
+    },
+    phoneimg: {
+        key: 'phoneimg:<imageId>', what: '手机里的一张图（PhoneImage：data URL + 宽高）：一个表情，或一张壁纸。静态图超尺寸会缩（表情 512、壁纸 2048），动图（GIF、动态 WebP）原样',
+        kind: 'content', backup: 'yes', restore: 'merge', fresh: 'remap', export: '表情的图跟着表情包文件导出 / 导入',
+        how: '不按键原样搬：表情的图内联进备份 phone.stickers[].dataUrl（导出框里「带上表情包」取消勾选时不带，标 stickersOmitted），壁纸的图内联进 phone.wallpaper。'
+            + '恢复时新图换新 id（所以 fresh = remap）。没被目录 / 壁纸指着的孤儿图不导出、也不自动删（phone-data.js orphanImageIds 的说明）。不发给模型',
+    },
+    phoneindex: {
+        key: 'phoneindex', what: '手机会话目录（每个会话的卡、预览、条数、未读、收藏数 fav、预设 id），会话列表和摘抄页只读它',
+        kind: 'pointer', backup: 'no', restore: 'none', fresh: 'remap', export: null,
+        how: '能从会话记录重建（对不上时 phone-store.js 读全部会话重建）；和会话写在同一个事务里；恢复时按「本机的会话 + 新会话」整份重算',
+    },
     legacyState: {
         key: 'state', what: '版本 1 的整份旧数据（迁移完成后会删掉）',
         kind: 'legacy', backup: 'no', restore: 'none', fresh: 'none', export: null,

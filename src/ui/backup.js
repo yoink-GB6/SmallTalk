@@ -48,12 +48,17 @@ import { stopScripts, reconcileScripts } from './script-host.js';   // 循环依
 import { CARDVARS_PREFIX, cardVarsKey, unionCardVars } from '../cardvars.js';
 import { invalidateArchiveTab } from './tab-archive.js';
 import { refreshEndpoints } from './tab-provider.js';   // 循环依赖：只在函数体里调用
+import { isPhoneBackupKey, hasPhoneData, phoneEntriesFrom, phoneForBackup, planPhoneImport, wallpaperChanges, countPhone, stickersBytes,
+    PHONE_KEY, PHONE_INDEX_KEY, sessionKey, imageKey } from '../phone-backup.js';
+import { reloadPhoneFromStore } from './phone/phone-store.js';   // 循环依赖：只在函数体里调用
+import { isPhoneBusy } from './phone/phone-gen.js';            // 同上
 
 let exporting = false;
 let importing = false;
 
 // cardvars:<cardId>（脚本变量、角色卡变量，cardvars.js）跟着卡进备份（buildBackup 把它挂在卡那一项的 vars 上）
-const isBackupKey = k => k === 'global' || k.startsWith('card:') || k.startsWith('chat:') || k.startsWith('preset:') || k.startsWith(CARDVARS_PREFIX);
+// 手机的数据（'phone'、'phonechat:*'、'phoneimg:*'；目录 'phoneindex' 能重建、不带）也跟着整体备份走（buildBackup 拼成顶层的 phone 字段）
+const isBackupKey = k => k === 'global' || k.startsWith('card:') || k.startsWith('chat:') || k.startsWith('preset:') || k.startsWith(CARDVARS_PREFIX) || isPhoneBackupKey(k);
 const isLegacyKey = k => k === 'state' || k.startsWith('state.v1.bak');
 const MIN_PW_WITH_KEYS = 8;
 
@@ -199,6 +204,8 @@ export async function exportAll() {
         }
         secrets = (full.endpoints ?? []).map(e => e.apiKey).filter(k => typeof k === 'string' && k);
         const n = countBackup(full);
+        // 表情包：导出框里一个勾（默认勾着，用户定的）。取消勾选时 run 里把 phone 字段换成不带表情的那份
+        const stickerInfo = { count: n.phone.stickers, bytes: stickersBytes(full.phone) };
         const hasKeys = secrets.length > 0;
         const canEncrypt = cryptoAvailable();
         if (hasKeys && !canEncrypt) {
@@ -206,7 +213,11 @@ export async function exportAll() {
             return;
         }
 
-        const result = await askExport({ n, hasKeys, server: kind === 'server', epError, canEncrypt, readOnly: persist.readOnly, run: async password => {
+        const result = await askExport({ n, hasKeys, server: kind === 'server', epError, canEncrypt, readOnly: persist.readOnly, stickers: stickerInfo, run: async (password, { withStickers = true } = {}) => {
+            if (!withStickers && stickerInfo.count) {
+                const phone = phoneForBackup(entries, { stickers: false });
+                if (phone) full.phone = phone; else delete full.phone;
+            }
             // 没设密码 = 明文文件：只有不含 key 时才允许走到这里（对话框已经拦过，这里再拦一次）
             if (!password && hasKeys) return { error: '这个备份里有 API key，必须设密码' };
             if (!password && full.endpoints) full.endpoints = full.endpoints.map(({ apiKey: _k, ...rest }) => rest);
@@ -243,8 +254,12 @@ export async function exportAll() {
         } });
         if (!result) return;   // 取消：什么都不下载
 
-        const bits = [`已备份 ${n.cards} 张卡、${n.chats} 个存档、${n.presets} 个预设${n.global ? '、全局设置' : ''}${n.endpoints ? `、${n.endpoints} 个接口${hasKeys ? `（${n.keys} 个带 API key）` : kind === 'server' ? '（不含 API key）' : ''}` : ''}`
+        const np = countPhone(full.phone);
+        const phoneBit = np.sessions || np.presets || np.stickers || np.wallpapers
+            ? `、手机里的 ${np.sessions} 个会话${np.presets ? `、${np.presets} 个聊天预设` : ''}${np.stickers ? `、${np.stickers} 个表情` : ''}${np.wallpapers ? '、壁纸' : ''}` : '';
+        const bits = [`已备份 ${n.cards} 张卡、${n.chats} 个存档、${n.presets} 个预设${n.global ? '、全局设置' : ''}${phoneBit}${n.endpoints ? `、${n.endpoints} 个接口${hasKeys ? `（${n.keys} 个带 API key）` : kind === 'server' ? '（不含 API key）' : ''}` : ''}`
             + (result.encrypted ? '，文件已用你的密码加密' : '，文件没有加密')];
+        if (np.stickersOmitted) bits.push('没有带表情包');
         if (built.legacyKeys.length) bits.push('旧版本的备份数据没有包含在内');
         if (built.orphanChats) bits.push(`${built.orphanChats} 个存档找不到所属的角色卡（界面上也看不到），没有备份`);
         if (epError) bits.push(epError);
@@ -262,16 +277,25 @@ export async function exportAll() {
 /**
  * 导出对话框。返回 run 的 value（成功下载），取消返回 null。
  * @param {{n: ReturnType<typeof countBackup>, hasKeys: boolean, server: boolean, epError: string, canEncrypt: boolean, readOnly: boolean,
- *          run: (password: string) => Promise<{error?: string, value?: any}>}} o
+ *          stickers: {count: number, bytes: number},
+ *          run: (password: string, opts: {withStickers: boolean}) => Promise<{error?: string, value?: any}>}} o
  */
-function askExport({ n, hasKeys, server, epError, canEncrypt, readOnly, run }) {
+function askExport({ n, hasKeys, server, epError, canEncrypt, readOnly, stickers, run }) {
     const { inputs: [pw1, pw2], toggle } = passwordInputs([
         { fk: 'bkx-pw1', label: '密码', autocomplete: 'new-password' },
         { fk: 'bkx-pw2', label: '再输一遍密码', autocomplete: 'new-password' },
     ]);
-    const sum = `将备份：${n.cards} 张卡、${n.chats} 个存档、${n.presets} 个预设、${n.global ? '全局设置' : '（还没有保存过全局设置）'}、${n.endpoints} 个接口${n.endpoints ? `（其中 ${n.keys} 个带 API key）` : ''}`;
+    const p = n.phone;
+    const phoneSum = p.sessions || p.presets || p.stickers || p.wallpapers
+        ? `、手机里的 ${p.sessions} 个会话${p.presets ? `、${p.presets} 个聊天预设` : ''}${p.wallpapers ? '、壁纸' : ''}` : '';
+    const sum = `将备份：${n.cards} 张卡、${n.chats} 个存档、${n.presets} 个预设、${n.global ? '全局设置' : '（还没有保存过全局设置）'}、${n.endpoints} 个接口${n.endpoints ? `（其中 ${n.keys} 个带 API key）` : ''}${phoneSum}`;
+    // 表情包的勾（默认勾着、可以取消；用户定的）。表情库是空的就不显示
+    const mb = Math.max(0.1, Math.round(stickers.bytes / 1024 / 1024 * 10) / 10);
+    const stickerBox = h('input', { type: 'checkbox', 'data-fk': 'bkx-stickers', checked: true });
+    stickerBox.checked = true;
     const body = [
         h('p', { class: 'imp-sum', 'data-fk': 'bkx-sum' }, sum),
+        stickers.count ? h('label', { class: 'bkx-show', 'data-fk': 'bkx-stickers-row' }, stickerBox, h('span', null, `带上表情包（${stickers.count} 个，约 ${mb} MB）`)) : null,
         h('p', { class: 'dim imp-note' }, '用来换设备（电脑 ↔ 手机、换浏览器、从本地版搬到网页版）。文件只保存在你自己的设备上，SmallTalk 不会上传到任何地方。'),
     ];
     if (readOnly) body.push(h('p', { class: 'dim imp-note' }, '这个标签页是只读的：备份的是存储里已经保存的内容。'));
@@ -308,7 +332,7 @@ function askExport({ n, hasKeys, server, epError, canEncrypt, readOnly, run }) {
             if (hasKeys && pwLen(a) < MIN_PW_WITH_KEYS) return `密码太短：含 API key 的备份，密码至少 ${MIN_PW_WITH_KEYS} 位`;
             return null;
         },
-        run: () => run(canEncrypt ? pw1.value : ''),
+        run: () => run(canEncrypt ? pw1.value : '', { withStickers: !stickers.count || stickerBox.checked }),
     });
 }
 
@@ -319,6 +343,8 @@ function importBlocked() {
     if (persist.stopped) return STOPPED_TEXT;
     if (persist.readOnly) return '存储处于只读状态（见页面顶上的说明），不能恢复';
     if (ui.busy) return '正在生成回复，等它结束（或点「停止」）再恢复';
+    // 手机里正在回复：它结束时要写回会话，不能和恢复的写入事务交错（RP 和手机的生成是分开的两个标记）
+    if (isPhoneBusy()) return '手机里正在回复，等它结束再恢复';
     if (ui.switching) return '正在切换存档，稍等一下';
     return presetBlocked();   // 预设存储正在升级 / 读取、上一个预设操作没做完……
 }
@@ -337,11 +363,23 @@ async function isFreshBrowser() {
     return isEmptyForRestore({
         cardKeys: keys.filter(k => k.startsWith('card:')).length, presetKeys: keys.filter(k => k.startsWith('preset:')).length,
         liveCard: !!persist.cardId, global: await store.get('global'), ...await endpointFacts(),
+        phone: hasPhoneData(keys, await store.get(PHONE_KEY)),
     });
 }
 
+/** 本机手机的壁纸（记录 + 两张图），恢复前判断「备份里的壁纸和这里的不一样吗」用。只读不写 */
+async function localWallpaper() {
+    const rec = await store.get(PHONE_KEY);
+    const entries = { [PHONE_KEY]: rec };
+    const wp = rec && typeof rec === 'object' ? rec.wallpaper : null;
+    for (const id of new Set([wp?.lock, wp?.home].filter(x => typeof x === 'string' && x))) entries[imageKey(id)] = await store.get(imageKey(id));
+    const { record, images } = phoneEntriesFrom(entries);
+    return { record, images };
+}
+
 /** 三样设置在弹框里的叫法（顺序和 backup.js SETTING_KEYS 一致） */
-const SETTING_TEXT = { memory: '外置记忆设置', contextLimit: '上下文上限', wi: '世界书扫描设置' };
+// phoneWallpaper：手机的两张壁纸（不在 global 里，在 'phone' 记录里；也是「设置」，并进同一句问话，用户 2026-11-28 定的）
+const SETTING_TEXT = { memory: '外置记忆设置', contextLimit: '上下文上限', wi: '世界书扫描设置', phoneWallpaper: '手机壁纸' };
 
 /**
  * 弹框：恢复到已有数据的浏览器、备份里有可应用的设置时，只问一句「是否应用备份中的……」。
@@ -352,11 +390,13 @@ const SETTING_TEXT = { memory: '外置记忆设置', contextLimit: '上下文上
  */
 function askSettings(backup, keys) {
     const n = countBackup(backup);
-    const sum = `这次将导入：${n.cards} 张卡、${n.chats} 个存档、${n.presets} 个预设${n.endpoints ? `、${n.endpoints} 个接口${n.keys ? `（其中 ${n.keys} 个带 API key）` : '（没有 key，需要之后到「接口」页填）'}` : ''}，以及备份里的人设、世界书、正则、便签、全局变量。`;
+    const p = n.phone;
+    const phoneSum = p.sessions || p.presets || p.stickers ? `、手机里的 ${p.sessions} 个会话${p.presets ? `、${p.presets} 个聊天预设` : ''}${p.stickers ? `、${p.stickers} 个表情` : ''}` : '';
+    const sum = `这次将导入：${n.cards} 张卡、${n.chats} 个存档、${n.presets} 个预设${n.endpoints ? `、${n.endpoints} 个接口${n.keys ? `（其中 ${n.keys} 个带 API key）` : '（没有 key，需要之后到「接口」页填）'}` : ''}${phoneSum}，以及备份里的人设、世界书、正则、便签、全局变量。`;
     const what = keys.map(k => SETTING_TEXT[k]).join('、');
     return askDialog({
         label: '是否应用备份中的设置', fk: 'imp-settings-dialog',
-        lead: '这个浏览器里已经有数据了。角色卡、存档、预设、人设、世界书、正则、便签、接口都是只加不删：备份里有而这里没有的加进来，这里原有的不删不改。'
+        lead: '这个浏览器里已经有数据了。角色卡、存档、预设、人设、世界书、正则、便签、接口，以及手机里的会话、聊天预设、表情，都是只加不删：备份里有而这里没有的加进来，这里原有的不删不改。'
             + '你当前用的预设、模型、人设不会变。',
         body: [
             h('p', { class: 'imp-sum', 'data-fk': 'imp-sum' }, sum),
@@ -480,7 +520,8 @@ export async function importBackupFile(file) {
         // 空浏览器不问（三样设置直接用备份里的）；已有数据时，备份里一样可应用的设置都没有也不问（没有可应用的）
         let applySettings = false;
         if (!fresh) {
-            const keys = settingsInBackup(backup.global);
+            // 手机的两张壁纸也是设置：备份里有、而且和这里的不一样，才算「一样可以应用的设置」
+            const keys = [...settingsInBackup(backup.global), ...(wallpaperChanges(backup.phone, await localWallpaper()).length ? ['phoneWallpaper'] : [])];
             if (keys.length) {
                 const choice = await askSettings(backup, keys);
                 if (!choice) return;
@@ -619,10 +660,20 @@ async function doImport(backup, { applySettings, fresh }) {
         // 弹框之前判定是空浏览器（所以没问就要替换全局设置）：拿到锁之后再核对一次，免得这中间有了数据被悄悄覆盖。
         // 输入和第一次判定一样（含网页版里的接口：这期间在别处加了接口，也算有了数据）
         if (fresh && !isEmptyForRestore({ cardKeys: keys.filter(k => k.startsWith('card:')).length, presetKeys: keys.filter(k => k.startsWith('preset:')).length,
-            liveCard: !!persist.cardId, global: storedGlobal ?? undefined, ...await endpointFacts() })) {
+            liveCard: !!persist.cardId, global: storedGlobal ?? undefined, ...await endpointFacts(), phone: hasPhoneData(keys, snapshot[PHONE_KEY]) })) {
             throw new Error('就在刚才，这个浏览器里有了新的数据。为了不覆盖它，没有恢复，请重新选择备份文件');
         }
         const plan = planBackupImport(backup, existing, { newId: uid, now: new Date(), fresh, applySettings });
+        // 手机：会话里的卡 / 人设引用用上面那份计划的映射换算；壁纸是设置，跟着 applySettings（空浏览器直接用备份的）。
+        // 快照里的手机数据就是本机的（恢复期间手机的写入一律被拒：patchPhone 看 persist.paused，phone-store.js 看 restoreActive）
+        const phoneLocal = phoneEntriesFrom(snapshot);
+        const pp = planPhoneImport(backup.phone, phoneLocal, { newId: uid, now: new Date(), fresh, applyWallpaper: applySettings,
+            cardIdMap: plan.maps.cards, personaIdMap: plan.maps.personas });
+        plan.summary.phone = pp.summary;
+        plan.summary.renamed.push(...pp.summary.renamed);
+        plan.summary.skipped.push(...pp.summary.skipped);
+        if (pp.wallpaperApplied.length) plan.summary.settingsApplied.push('phoneWallpaper');
+        const phoneTouched = !!(pp.record || pp.index || pp.sessions.length || pp.images.length || pp.favMerges.length || pp.dropImages.length);
 
         const sets = [
             ...plan.presets.map(p => ({ set: presetKey(p.id), value: p })),
@@ -631,12 +682,15 @@ async function doImport(backup, { applySettings, fresh }) {
             ...plan.indexes.map(i => ({ set: indexKey(i.cardId), value: i })),
             // 新建的卡带过来的脚本变量 / 角色卡变量（cardvars:<新卡 id>）
             ...plan.cardvars.map(c => ({ set: cardVarsKey(c.cardId), value: c.value })),
+            // 手机：新会话、新图（表情、换上的壁纸）——都是新 id 的键
+            ...pp.sessions.map(s => ({ set: sessionKey(s.id), value: s })),
+            ...pp.images.map(img => ({ set: imageKey(img.id), value: img })),
         ];
         // 新 id 都是刚生成的随机 uuid，理论上不会和已有的键撞；真撞了宁可不导入，也不覆盖
         const taken = new Set(keys);
         const clash = sets.find(s => taken.has(s.set));
         if (clash) throw new Error(`新记录的键已经存在（${clash.set}），为了不覆盖已有数据，没有导入`);
-        if (!sets.length && !plan.global && !plan.cardvarsMerges.length && !plan.highlightMerges.length) return { plan, switchTo: null };
+        if (!sets.length && !plan.global && !plan.cardvarsMerges.length && !plan.highlightMerges.length && !phoneTouched) return { plan, switchTo: null };
 
         // 写：一个事务。并进已有卡的目录、并进已有卡的 cardvars、要并进划线的本机已有存档、旧 global 都在同一个事务里现读。
         // 目录：并进了新存档的卡、并进了划线的存档所在的卡，每张卡一个键（两种都有的卡只读写一次）
@@ -644,7 +698,13 @@ async function doImport(backup, { applySettings, fresh }) {
         const mergeKeys = indexCards.map(indexKey);
         const cvKeys = plan.cardvarsMerges.map(m => cardVarsKey(m.cardId));
         const hlKeys = plan.highlightMerges.map(m => chatKey(m.cardId, m.chatId));
-        const readKeys = [...mergeKeys, ...cvKeys, ...hlKeys, 'global'];
+        // 手机里要「改」的本机记录：'phone'（并进预设 / 表情、换壁纸）、'phoneindex'、并进收藏的会话、换下来的旧壁纸图（删）。
+        // 都在这个事务里现读：和第 1 步的快照不一样（恢复期间被别处改了，按理不会）就中止，什么都不写；读到的值撤销时用
+        const favKeys = pp.favMerges.map(m => sessionKey(m.id));
+        const dropKeys = pp.dropImages.map(imageKey);
+        const phoneKeys = [PHONE_KEY, PHONE_INDEX_KEY, ...favKeys, ...dropKeys];
+        const readKeys = [...mergeKeys, ...cvKeys, ...hlKeys, ...phoneKeys, 'global'];
+        const phoneBase = mergeKeys.length + cvKeys.length + hlKeys.length;
         const cvMerged = new Map();   // cardvars 键 → 合并后的值（读回校验、撤销用）
         const hlMerged = new Map();   // 并进了划线的本机存档的键 → {cardId, chatId, rec（写进去的整条记录）, before（写之前读到的整条记录）}
         let hlAdded = 0, hlFilled = 0;
@@ -683,6 +743,16 @@ async function doImport(backup, { applySettings, fresh }) {
                 const u = unionCardVars(mine, m.value);
                 if (u.added && u.value) { ops.push({ set: cvKeys[i], value: u.value }); cvMerged.set(cvKeys[i], u.value); }
             });
+            // 手机：核对没变，再写
+            if (phoneTouched) {
+                const same = (k, i) => JSON.stringify(values[phoneBase + i] ?? null) === JSON.stringify(snapshot[k] ?? null);
+                const watched = [PHONE_KEY, ...favKeys, ...dropKeys];
+                if (!watched.every(k => same(k, phoneKeys.indexOf(k)))) throw new Error('就在刚才，手机里的数据在别处被改了。为了不覆盖它，没有导入，请重新选择备份文件');
+                if (pp.record) ops.push({ set: PHONE_KEY, value: pp.record });
+                if (pp.index) ops.push({ set: PHONE_INDEX_KEY, value: pp.index });
+                for (const m of pp.favMerges) ops.push({ set: sessionKey(m.id), value: m.session });
+                for (const k of dropKeys) ops.push({ del: k });
+            }
             if (plan.global) ops.push({ set: 'global', value: plan.global });
             return ops;
         });
@@ -704,6 +774,10 @@ async function doImport(backup, { applySettings, fresh }) {
             for (const [k, x] of hlMerged) if (JSON.stringify(await store.get(k)) !== JSON.stringify(x.rec)) throw new Error(`读回校验不一致：${k}`);
             for (const [k, v] of cvMerged) if (JSON.stringify(await store.get(k)) !== JSON.stringify(v)) throw new Error(`读回校验不一致：${k}`);
             if (plan.global && JSON.stringify(await store.get('global')) !== JSON.stringify(plan.global)) throw new Error('读回校验不一致：global');
+            if (pp.record && JSON.stringify(await store.get(PHONE_KEY)) !== JSON.stringify(pp.record)) throw new Error('读回校验不一致：phone');
+            if (pp.index && JSON.stringify(await store.get(PHONE_INDEX_KEY)) !== JSON.stringify(pp.index)) throw new Error('读回校验不一致：phoneindex');
+            for (const m of pp.favMerges) if (JSON.stringify(await store.get(sessionKey(m.id))) !== JSON.stringify(m.session)) throw new Error(`读回校验不一致：${sessionKey(m.id)}`);
+            for (const k of dropKeys) if (await store.get(k) !== undefined) throw new Error(`读回校验不一致：${k}`);
         } catch (e) {
             // 撤掉：删的只有这次新生成 id 的键（不可能是已有的数据），目录、cardvars、并进了划线的存档和 global 还原成写之前读到的
             const undo = sets.map(s => ({ del: s.set }));
@@ -716,6 +790,14 @@ async function doImport(backup, { applySettings, fresh }) {
             // 被改写的本机存档（只动过 highlights）：整条换回写之前事务里读到的那份（写的前提就是它存在，所以不会是 undefined）
             for (const [k, x] of hlMerged) undo.push({ set: k, value: x.before });
             if (wroteGlobal) undo.push(before.at(-1) === undefined ? { del: 'global' } : { set: 'global', value: before.at(-1) });
+            // 手机：改过的 'phone' / 'phoneindex' / 并了收藏的会话 / 删掉的旧壁纸图，全部换回写之前读到的（写之前没有的就删）
+            if (phoneTouched) {
+                const restore = (k, i) => { const old = before[phoneBase + i]; undo.push(old === undefined ? { del: k } : { set: k, value: old }); };
+                if (pp.record) restore(PHONE_KEY, 0);
+                if (pp.index) restore(PHONE_INDEX_KEY, 1);
+                favKeys.forEach(k => restore(k, phoneKeys.indexOf(k)));
+                dropKeys.forEach(k => restore(k, phoneKeys.indexOf(k)));
+            }
             try {
                 await store.batch(undo);
                 outcome = '刚写进去的已经撤掉，原有数据没有动';
@@ -726,7 +808,7 @@ async function doImport(backup, { applySettings, fresh }) {
                 stopSaving();
                 showStoreError('从备份恢复没有完整完成：写进去的内容没能读回核对，撤销也失败了。为了不让这个页面里的旧数据盖掉存储里的内容，'
                     + '已经停止保存（之后在这个页面上的改动都不会保存）。请刷新页面，刷新后看到的就是存储里实际的样子；需要的话可以再恢复一次（重复的会自动跳过）。');
-                outcome = '撤销刚写进去的记录也失败了（详见控制台），已停止保存：请刷新页面。可能多出了一部分导入的卡 / 存档 / 预设和合并进来的人设、世界书、正则、便签、全局变量、划线，原有的内容没有被删掉';
+                outcome = '撤销刚写进去的记录也失败了（详见控制台），已停止保存：请刷新页面。可能多出了一部分导入的卡 / 存档 / 预设和合并进来的人设、世界书、正则、便签、全局变量、划线、手机里的会话 / 预设 / 表情，原有的内容没有被删掉';
             }
             throw e;
         }
@@ -748,6 +830,8 @@ async function doImport(backup, { applySettings, fresh }) {
         if (plan.global) await reloadGlobalFromStore();
         // 并进的正是当前卡的 cardvars：内存里那份是恢复前的，重读（不然下次保存会拿它把合并进来的键盖掉）
         if (plan.cardvarsMerges.some(m => m.cardId === persist.cardId && cvMerged.has(cardVarsKey(m.cardId)))) await reloadCardVars();
+        // 手机的内存缓存（phone-store.js）作废、从存储重读
+        if (phoneTouched) await reloadPhoneFromStore();
         const target = plan.target;
         return { plan, switchTo: !hadCards && target ? target : null };
     } catch (e) {

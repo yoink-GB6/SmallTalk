@@ -787,6 +787,33 @@ export function writeStoredHighlights(edits) {
     return p;
 }
 
+/**
+ * 手机的数据（'phone'、'phonechat:*'、'phoneimg:*'、'phoneindex'，契约见 types.js「手机第一步」）的唯一写入口：ui/phone/phone-store.js 只经这里写。
+ * 一个 IndexedDB readwrite 事务里先读 keys、交给 fn(values)、执行 fn 返回的写 / 删（同 store.transact）。
+ * 和 patchStoredChat 一样【排在写入链 writing 后面】：之前排进去的保存先写完；之后的恢复备份（op 先 flushNow = 等这条链）要等它写完才读快照。
+ * 手机的键和 RP 的保存（buildWrites）没有任何重叠，所以 RP 正在生成、正在保存时照样能写（用户定的：RP 生成中手机照样能发）。
+ * 拒绝（返回被拒的 Promise，什么都不写）：只读标签页、停止保存之后、恢复备份正在写（persist.paused）。
+ *   「正在恢复备份」的完整判断（遮罩盖着、恢复流程已经开始还没暂停保存）在 ui/backup.js restoreActive，phone-store.js 在调这里之前先问它；
+ *   这里的 paused 是最后一道：排队期间恢复开始了，轮到自己时也不会在恢复的读快照和写事务之间插进一次写。
+ * fn 可能被调用不止一次（同一份 values），要写成纯函数。
+ * @param {string[]} keys
+ * @param {(values: any[]) => Array<{set: string, value: any} | {del: string}>} fn
+ * @returns {Promise<boolean>} 是否写了东西
+ */
+export function patchPhone(keys, fn) {
+    const why = () => (persist.readOnly ? '这个标签页是只读的（见页面顶上的说明），手机里的改动不能保存'
+        : persist.stopped ? STOPPED_TEXT : persist.paused ? '正在恢复备份，请稍等' : null);
+    if (why()) return Promise.reject(new Error(why()));
+    const prev = writing;
+    const p = prev.then(() => {
+        // 排队的这段时间里可能开始了恢复 / 停止了保存：轮到自己时再看一次
+        if (why()) throw new Error(why());
+        return store.transact(keys, fn);
+    });
+    writing = p.then(() => prev, () => prev);
+    return p;
+}
+
 // ───────────────────────────── 多预设 ─────────────────────────────
 // 存储：每个预设一个键 'preset:<id>' → PresetRecord；'global' 里只有 activePresetId（规则见 types.js GlobalRecord）。
 // 运行时：state.preset / state.presetName 永远是「当前预设」，别的模块照旧原地改它、调 save()；

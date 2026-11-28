@@ -3,7 +3,7 @@
 
 import { substitute } from '../macros.js';
 import { scanWorldInfo, effectiveWiSettings } from '../worldinfo.js';
-import { isBookActiveFor } from '../books.js';
+import { isBookActiveFor, entriesForCard } from '../books.js';
 import { assemble, resolveContextLimit, messageTokens } from '../assemble.js';
 import { normalizeAuthorNote } from '../author-note.js';
 import { runRegexScripts } from '../regex.js';
@@ -34,7 +34,8 @@ export function allScripts() {
  * 返回的是条目【原对象】（「世界书」页直接改它们）。
  */
 export function allEntries() {
-    return [...(cardBookActive() ? card().worldEntries : []), ...activeBooks().flatMap(b => b.entries)];
+    // 规则在 books.js entriesForCard（手机聊天也用它，两边一定一样）
+    return entriesForCard(card(), persist.cardId, state.books);
 }
 
 /**

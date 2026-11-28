@@ -73,6 +73,22 @@ export function isBookActiveFor(book, cardId) {
 }
 
 /**
+ * 一张卡这次参与拼装的世界书条目：卡自带的那本（没被整本关掉，Card.worldDisabled !== true）+ 对这张卡生效的额外世界书（isBookActiveFor）。
+ * RP 的拼装（ui/pipeline.js allEntries，传当前卡）和手机聊天（ui/phone/phone-gen.js，传会话的卡）都用它，规则只有这一份——
+ * 用户定的：手机聊天的世界书和 RP 是通的，RP 那边开关、绑定一改，手机下一次生成就跟着变。
+ * 返回的是条目【原对象】（「世界书」页直接改它们），顺序：卡自带的在前，额外世界书按 books 的顺序。
+ * @param {import('./types.js').Card|null} card
+ * @param {string|null} cardId
+ * @param {import('./types.js').ExtraBook[]} books
+ * @returns {import('./types.js').WorldEntry[]}
+ */
+export function entriesForCard(card, cardId, books) {
+    const own = card && card.worldDisabled !== true && Array.isArray(card.worldEntries) ? card.worldEntries : [];
+    const extra = (Array.isArray(books) ? books : []).filter(b => isBookActiveFor(b, cardId)).flatMap(b => (Array.isArray(b.entries) ? b.entries : []));
+    return [...own, ...extra];
+}
+
+/**
  * 原地改一本书的开关 / 范围 / 绑定（「世界书」页用：页面上按书对象记展开状态，所以不能换成新对象）。
  * patch 里没给的字段保持原值。写回时照「默认值不写」的规则。返回 book。
  */

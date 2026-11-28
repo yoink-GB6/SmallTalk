@@ -27,6 +27,8 @@ import { storedAuthorNote } from './author-note.js';
 import { storedHighlights, mergeHighlights, chatDoc } from './highlight.js';
 import { cardScripts } from './scripts.js';
 import { CARDVARS_PREFIX, normalizeCardVars, unionCardVars } from './cardvars.js';
+import { isPhoneBackupKey, phoneForBackup, countPhone, phoneSummaryBits, phoneAdded } from './phone-backup.js';
+import { personaSig } from './personas.js';
 
 export const BACKUP_FORMAT = 'smalltalk-backup';
 export const BACKUP_VERSION = 1;
@@ -97,16 +99,19 @@ export function backupFileName(date, { hasKeys = false, encrypted = false } = {}
 /**
  * 把存储里读出来的「键 → 值」整理成备份对象。不导出 meta、index:*（都能重建）和旧版本的 state / state.v1.bak。
  * 记录原样搬运（不认识的字段也带上），只按键名归类；只有 global 去掉「当前在用的选择」（globalForBackup）。
+ * 手机的数据（'phone'、'phonechat:*'、'phoneimg:*'）拼成顶层的 phone 字段（phone-backup.js phoneForBackup）；没用过手机 = 没有这个字段，备份和以前逐字相同。
  * @param {Record<string, any>} entries  键 → 存储里的值
- * @param {{now: Date}} deps
+ * @param {{now: Date, stickers?: boolean}} deps   stickers：带不带表情包（导出框里的勾，默认带）
  * @returns {{backup: Object, orphanChats: number, legacyKeys: string[]}}
  *          orphanChats：找不到所属卡的存档数（界面上本来就看不见，没导出）；legacyKeys：没导出的旧版本数据的键
  */
-export function buildBackup(entries, { now }) {
-    const cards = [], presets = [], chatsByCard = new Map(), legacyKeys = [], varsByCard = new Map();
+export function buildBackup(entries, { now, stickers = true }) {
+    const cards = [], presets = [], chatsByCard = new Map(), legacyKeys = [], varsByCard = new Map(), phoneEntries = {};
     let orphanChats = 0;
     for (const [key, value] of Object.entries(entries)) {
-        if (key.startsWith(CARDVARS_PREFIX)) {
+        if (isPhoneBackupKey(key)) {
+            phoneEntries[key] = value;
+        } else if (key.startsWith(CARDVARS_PREFIX)) {
             // 卡的运行时数据（脚本变量、角色卡变量）：挂在那张卡的那一项上（vars）。规范化后是空的不带；卡不在了的丢掉
             const v = normalizeCardVars(value);
             if (v) varsByCard.set(key.slice(CARDVARS_PREFIX.length), v);
@@ -131,6 +136,7 @@ export function buildBackup(entries, { now }) {
     const cardIds = new Set(cards.map(c => c.id));
     for (const [cardId, list] of chatsByCard) if (!cardIds.has(cardId)) orphanChats += list.length;
     const byTime = (a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? ''));
+    const phone = phoneForBackup(phoneEntries, { stickers });
     return {
         backup: {
             format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt: now.toISOString(),
@@ -138,6 +144,7 @@ export function buildBackup(entries, { now }) {
             global: globalForBackup(entries.global),
             presets: presets.sort(byTime),
             cards: cards.sort(byTime).map(card => ({ card, chats: (chatsByCard.get(card.id) ?? []).sort(byTime), ...(varsByCard.has(card.id) ? { vars: varsByCard.get(card.id) } : {}) })),
+            ...(phone ? { phone } : {}),
         },
         orphanChats, legacyKeys,
     };
@@ -156,7 +163,7 @@ function withoutSensitive(rec) {
 export function countBackup(b) {
     const eps = Array.isArray(b.endpoints) ? b.endpoints : [];
     return { cards: b.cards.length, chats: b.cards.reduce((n, c) => n + (Array.isArray(c.chats) ? c.chats.length : 0), 0), presets: (b.presets ?? []).length, global: !!b.global,
-        endpoints: eps.length, keys: eps.filter(e => typeof e?.apiKey === 'string' && e.apiKey !== '').length };
+        endpoints: eps.length, keys: eps.filter(e => typeof e?.apiKey === 'string' && e.apiKey !== '').length, phone: countPhone(b.phone) };
 }
 
 /**
@@ -166,11 +173,13 @@ export function countBackup(b) {
  *   - 全局设置是出厂默认（migrate.js 的 isPristineGlobal：「选了哪个模型」、还是默认值的上下文上限都不算用户内容）
  *   - 网页版（direct）下还要没有任何用户自己加的接口：那边的接口和 key 存在这个浏览器里，算「已有数据」。
  *     本地服务版的接口在服务端配置文件里，是这台电脑上所有浏览器共用的，不说明这个浏览器里有没有数据，不看。
- * @param {{cardKeys: number, presetKeys: number, liveCard: boolean, global: any, direct: boolean, userEndpoints: number}} f
+ *   - 没有手机的数据（phone：phone-backup.js hasPhoneData——会话、图片，或 'phone' 记录里有聊天预设 / 表情 / 壁纸；只选了模型不算）。
+ *     只有手机数据的浏览器不能当成空的：空浏览器的恢复不问就用备份里的设置（含壁纸）
+ * @param {{cardKeys: number, presetKeys: number, liveCard: boolean, global: any, direct: boolean, userEndpoints: number, phone?: boolean}} f
  */
-export function isEmptyForRestore({ cardKeys, presetKeys, liveCard, global, direct, userEndpoints }) {
+export function isEmptyForRestore({ cardKeys, presetKeys, liveCard, global, direct, userEndpoints, phone = false }) {
     // 「出厂默认」的规则只有 migrate.js isPristineGlobal 一份（接管旧版本页面遗留数据时也用它），这里不另写
-    return cardKeys === 0 && presetKeys === 0 && !liveCard && isPristineGlobal(global) && (!direct || userEndpoints === 0);
+    return cardKeys === 0 && presetKeys === 0 && !liveCard && isPristineGlobal(global) && (!direct || userEndpoints === 0) && !phone;
 }
 
 // ───────────────────────────── 下载前的自检 ─────────────────────────────
@@ -551,7 +560,9 @@ export const SELECTION_KEYS = Object.freeze(['activePresetId', 'activePersonaId'
 export const MEMORY_SELECTION_KEYS = Object.freeze(['modelRef', 'model', 'openaiModel']);
 /** 真正的设置：恢复时只问这三样 */
 export const SETTING_KEYS = Object.freeze(['memory', 'contextLimit', 'wi']);
-const SETTING_LABEL = { memory: '外置记忆设置', contextLimit: '上下文上限', wi: '世界书扫描设置' };
+// phoneWallpaper：手机的两张壁纸。它不在 global 里（在 'phone' 记录里，phone-backup.js），所以不在 SETTING_KEYS 里，
+// 但它也是「设置」：恢复到已有数据时并进同一句问话，答「是」才换（ui/backup.js），摘要里用这个名字
+const SETTING_LABEL = { memory: '外置记忆设置', contextLimit: '上下文上限', wi: '世界书扫描设置', phoneWallpaper: '手机壁纸' };
 
 /**
  * 导出时：存储里的 global → 写进备份的 global（新对象，浅拷贝；不改输入）。去掉「当前在用的选择」，其余原样（不认识的字段照带）。
@@ -890,7 +901,10 @@ export function planBackupImport(backup, existing, { newId, now, fresh = false, 
         personasAdded: 0, personasDup: 0, booksAdded: 0, booksDup: 0, booksRenamed: 0, booksRebound: 0, regexAdded: 0, regexDup: 0, notesAdded: 0, notesDup: 0, varsAdded: 0, varsDup: 0,
         highlightsMerged: 0, highlightNotesFilled: 0, highlightChats: 0,
         settingsApplied: [], renamed: [], skipped: [], notes: [], worldKept: [], worldReenabled: [] };
-    const out = { cards: [], chats: [], presets: [], indexes: [], merges: [], highlightMerges: [], cardvars: [], cardvarsMerges: [], global: null, settingsApplied: summary.settingsApplied, target: null, summary };
+    const out = { cards: [], chats: [], presets: [], indexes: [], merges: [], highlightMerges: [], cardvars: [], cardvarsMerges: [], global: null, settingsApplied: summary.settingsApplied, target: null, summary,
+        // 手机会话里的引用要跟着换算（phone-backup.js planPhoneImport）：cards = 备份里的卡 id → 本机的卡 id（新建的卡是新 id，判重并进的是本机那张）；
+        // personas = 备份里的人设 id → 合并后同一个人设（personaSig 相同）在本机的 id（人设的 id 恢复时会换，只能按内容对）
+        maps: { cards: new Map(), personas: new Map() } };
     const ex = { cards: existing?.cards ?? [], chats: existing?.chats ?? [], presets: existing?.presets ?? [] };
 
     // ── 预设 ──
@@ -945,7 +959,7 @@ export function planBackupImport(backup, existing, { newId, now, fresh = false, 
     const mergeMap = new Map();   // 已有卡 id → 并进去的新存档
     // 备份里的卡 id → 导入后的卡 id（新建的卡是新 id；内容和本机已有的相同而没新建的，指向本机那张）。
     // 额外世界书的绑定（books[].cards）靠它换算；格式不对被跳过的卡不在里面，绑定到它的 id 会被丢掉
-    const cardIdMap = new Map();
+    const cardIdMap = out.maps.cards;
     let best = null;              // 备份里最近使用的那张卡：{usedAt, cardId, activeChatId 映射后的}
 
     backup.cards.forEach((entry, i) => {
@@ -1098,9 +1112,24 @@ export function planBackupImport(backup, existing, { newId, now, fresh = false, 
         changed ||= summary.settingsApplied.length > 0;
     }
     if (changed) out.global = g;
+    out.maps.personas = personaIdMap(backupG, changed ? g : existing?.global);
     // 最终的书列表：写了新 global 就是它的；没写（内容没变化）就是本机原来的
     keepEmbeddedWorlds(out.cards, backup.cards, backupG.books, changed ? g.books : existing?.global?.books, cardIdMap, summary);
     return out;
+}
+
+/**
+ * 备份里的人设 id → 合并后本机里同一个人设（名字 + 描述 + 备注相同，personas.js personaSig）的 id。
+ * 本机合并后没有人设列表（只有一个人设）→ 映射是空的：会话里的 personaId 换算不到就变成 null（跟随当前人设），而本机只有一个人设，结果一样。
+ */
+function personaIdMap(backupG, finalG) {
+    const map = new Map();
+    const theirs = alignPersonas(backupG).personas ?? [];
+    const mine = isObj(finalG) ? alignPersonas(finalG).personas ?? [] : [];
+    const bySig = new Map();
+    for (const p of mine) { const s = personaSig(p); if (!bySig.has(s)) bySig.set(s, p.id); }
+    for (const p of theirs) { const id = bySig.get(personaSig(p)); if (id) map.set(p.id, id); }
+    return map;
 }
 
 /**
@@ -1228,7 +1257,7 @@ export function summaryText(s) {
     const n = k => s[k] ?? 0;
     const added = s.cardsAdded + s.chatsAdded + s.presetsAdded;
     // 划线并进已有存档也算「带进来了东西」，不说「没有新增任何东西」
-    const contentAdded = CONTENT_SUMMARY.reduce((t, [a]) => t + n(a), 0) + n('highlightsMerged') + n('highlightNotesFilled');
+    const contentAdded = CONTENT_SUMMARY.reduce((t, [a]) => t + n(a), 0) + n('highlightsMerged') + n('highlightNotesFilled') + (phoneAdded(s.phone) ? 1 : 0);
     const contentDup = CONTENT_SUMMARY.reduce((t, [, d]) => t + n(d), 0);
     if (added) bits.push(`新增 ${s.cardsAdded} 张卡、${s.chatsAdded} 个存档、${s.presetsAdded} 个预设`);
     else if (!contentAdded) bits.push('没有新增任何东西');
@@ -1239,7 +1268,9 @@ export function summaryText(s) {
     for (const [, d, , say] of CONTENT_SUMMARY) if (n(d)) bits.push(say(n(d)));
     const hl = highlightMergeText(s);
     if (hl) bits.push(hl);
-    if (!added && !contentAdded && (dup || contentDup)) bits[0] = '没有新增任何东西：备份里的内容这里都已经有了';
+    // 手机（会话、聊天预设、表情、壁纸）：ui/backup.js 把 planPhoneImport 的 summary 挂在 s.phone 上
+    bits.push(...phoneSummaryBits(s.phone));
+    if (!added && !contentAdded && (dup || contentDup || s.phone?.sessionsDup || s.phone?.stickersDup || s.phone?.presetsDup)) bits[0] = '没有新增任何东西：备份里的内容这里都已经有了';
     if (s.renamed.length) bits.push(`${s.renamed.length} 个重名，名字后面加了序号：${s.renamed.slice(0, 3).join('、')}${s.renamed.length > 3 ? ' 等' : ''}`);
     if (n('booksRenamed')) bits.push(booksRenamedText(n('booksRenamed')));
     for (const r of s.worldReenabled ?? []) bits.push(worldReenabledText(r));

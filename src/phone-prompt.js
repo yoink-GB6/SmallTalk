@@ -15,7 +15,7 @@ import { substitute } from './macros.js';
 import { scanWorldInfo, effectiveWiSettings } from './worldinfo.js';
 import { messageTokens } from './assemble.js';
 import { estimateTokens as defaultEstimate } from './tokens.js';
-import { normalizeChatPreset, builtinPreset, stickerToken, DEFAULT_REPLY_TOKENS, PHONE_TENTATIVE } from './phone-data.js';
+import { normalizeChatPreset, builtinPreset, stickerToken, DEFAULT_REPLY_TOKENS, PHONE_CHOICES } from './phone-data.js';
 
 const WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
 const pad2 = n => String(n).padStart(2, '0');
@@ -29,7 +29,7 @@ export function phoneTimeText(now) {
 export const squeezeBlankLines = s => String(s ?? '').replace(/\n[ \t]*(\n[ \t]*){2,}/g, '\n\n').trim();
 
 /**
- * 表情列表的文字（{{stickers}} 换成它）。withDesc：带不带描述（问题 8 附带，PHONE_TENTATIVE.stickerDesc）。
+ * 表情列表的文字（{{stickers}} 换成它）。withDesc：带不带描述（PHONE_CHOICES.stickerDesc，用户定的：不发）。
  * @param {{name: string, desc?: string}[]} stickers
  */
 export function stickerListText(stickers, withDesc) {
@@ -57,7 +57,7 @@ export function historyMessages(messages, n, { stickers, userName, charName }) {
 
 /**
  * @type {import('./types.js').BuildPhonePrompt}
- * 额外的可选参数（契约之外、为了好改）：args.stickerDesc（默认 PHONE_TENTATIVE.stickerDesc）。
+ * 额外的可选参数（契约之外、为了好改）：args.stickerDesc（默认 PHONE_CHOICES.stickerDesc）。
  */
 export function buildPhonePrompt(args) {
     const preset = normalizeChatPreset(args.preset) ?? builtinPreset();
@@ -101,7 +101,7 @@ export function buildPhonePrompt(args) {
     if (wiText) parts.push(wiText);
     parts.push(squeezeBlankLines(sub(preset.format.replaceAll('{{maxBubbles}}', String(preset.maxBubbles)))));
     if (preset.stickers && stickers.length) {
-        const withDesc = args.stickerDesc ?? PHONE_TENTATIVE.stickerDesc;
+        const withDesc = args.stickerDesc ?? PHONE_CHOICES.stickerDesc;
         parts.push(squeezeBlankLines(sub(preset.stickerHint.replaceAll('{{stickers}}', stickerListText(stickers, withDesc)))));
     }
     const head = { role: 'system', content: parts.filter(Boolean).join('\n\n') };

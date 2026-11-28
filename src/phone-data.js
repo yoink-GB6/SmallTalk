@@ -11,7 +11,6 @@
 import { textsDoc, storedHighlights, newHighlight, addHighlight, removeHighlight, afterDeleteFloors, afterTruncate, editHighlights, countHighlights } from './highlight.js';
 import { pickParams } from './openai-shared.js';
 import { makeUniqueNamer } from './migrate.js';
-import { isBookActiveFor } from './books.js';
 import { alignPersonas } from './personas.js';
 
 const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -25,23 +24,21 @@ function keepUnknown(out, src, known) {
     return out;
 }
 
-// ═══════════════════════════ 还没定的取舍（暂定值） ═══════════════════════════
+// ═══════════════════════════ 用户定下的取舍 ═══════════════════════════
 //
-// 2026-11-28 交给用户的 8 个问题里，这几条直接影响这里和 phone-prompt.js / phone-reply.js 的行为。
-// 用户答之前一律按「暂定」走；答了之后多半只改这张表（或调用方传的参数），不用动逻辑。
-// 每项后面写着它在报告里的问题编号和「另一个选项」在代码里是什么。
-export const PHONE_TENTATIVE = Object.freeze({
-    /** 问题 2「重新生成」：'replace' = 删掉最后一批再生成（暂定）；'append' = 旧的一批留着、新的一批接在后面（最接近「留候选」又不用做候选界面的写法） */
+// 2026-11-28 用户回答了 8 个问题。其中会影响这里和 phone-prompt.js / phone-reply.js 行为的几条集中在这张表里，
+// 以后要改主意，多半只改这张表（或调用方传的参数），不用动逻辑。另外几条决定写在别处：
+//   删卡后会话留着、只能看（phone-store.js sessionCardsMissing）；壁纸两张、算设置（PhoneRecord.wallpaper、phone-backup.js）；
+//   手机可以另选模型（PhoneRecord.modelRef、phoneModelRef）；RP 生成中手机照样能发（phone-gen.js 的忙碌标记和 ui.busy 分开）；
+//   世界书和 RP 是通的、每次现算（books.js entriesForCard）。
+export const PHONE_CHOICES = Object.freeze({
+    /** 「重新生成」：'replace' = 删掉最后一批再生成（用户定的）；'append' = 旧的一批留着、新的一批接在后面（没用上，留着便于改主意） */
     regenerate: 'replace',
-    /** 问题 3 外置记忆：false = 不做，只发最近 ChatPreset.history 条（暂定）。phone-prompt.js 现在没有记忆的分支，改成 true 之前要先做那一块 */
+    /** 外置记忆：false = 第一版不做，只发最近 ChatPreset.history 条（用户定的）。以后要做见 ChatPreset 的 memory 预留字段 */
     memory: false,
-    /** 问题 4 发送方式：'lines' = 输入框里每一行一个气泡（暂定）；'single' = 整段输入就是一个气泡（换行留在气泡里） */
+    /** 发送方式：'lines' = 输入框里每一行一个气泡（用户定的）；'single' = 整段输入就是一个气泡 */
     sendMode: 'lines',
-    /** 问题 5 壁纸：'setting' = 一张、算「设置」，恢复时问一句（暂定）；'library' = 壁纸库、算内容。B 阶段的备份逻辑看它，这里只登记 */
-    wallpaper: 'setting',
-    /** 问题 8 世界书预勾：'rp' = 照 RP 现在对这张卡生效的预勾（暂定）；'none' = 全不勾 */
-    worldsPrefill: 'rp',
-    /** 问题 8 附带：表情的描述要不要一起发给模型（false = 只发名字，暂定） */
+    /** 表情的描述要不要一起发给模型：false = 只发名字（用户定的） */
     stickerDesc: false,
 });
 
@@ -54,7 +51,8 @@ export const DEFAULT_PRESET_NAME = '默认聊天预设';
 /** 数字字段的范围和默认值（规范化时夹到范围内）。改默认值改这里，DEFAULT_CHAT_PRESET 跟着变 */
 export const PRESET_NUMBERS = Object.freeze({
     maxBubbles: Object.freeze({ min: 1, max: 12, def: 5 }),
-    history: Object.freeze({ min: 0, max: 500, def: 40 }),
+    // 默认 300 个气泡（用户定的：短消息字很少，40 太短；仍受 contextTokens 约束，超了从最老的丢）
+    history: Object.freeze({ min: 0, max: 2000, def: 300 }),
     contextTokens: Object.freeze({ min: 1000, max: 2000000, def: 16000 }),
 });
 
@@ -90,6 +88,9 @@ export const DEFAULT_CHAT_PRESET = Object.freeze({
     params: Object.freeze({ temperature: 0.9, max_tokens: DEFAULT_REPLY_TOKENS }),
 });
 
+// 以后加的字段（现在不做，读到就原样保留——keepUnknown）：
+//   memory：手机聊天的外置记忆（用户的想法：复用 RP 那套，改成「每 10 轮对话压一段」，大概 {enabled, every: 10}）；
+//   proactive / moments / group：主动消息、朋友圈、拉群
 const PRESET_KNOWN = new Set(['id', 'name', 'createdAt', 'updatedAt', 'system', 'format', 'maxBubbles', 'stickers', 'stickerHint', 'history', 'contextTokens', 'timeHint', 'params']);
 
 /** 数字字段：不是有限数 = 默认值；有小数的取整；超范围夹回来 */
@@ -168,12 +169,61 @@ export const builtinPreset = () => ({ ...DEFAULT_CHAT_PRESET, params: { ...DEFAU
 export const STICKER_NAME_MAX = 40;
 export const STICKER_DESC_MAX = 200;
 export const MAX_STICKERS = 500;
-/** 上传时的尺寸规则（界面用；写在这里是为了和契约放在一处）：静态图长边超过 512 缩到 512 存 PNG；GIF 原样；原样存的超过 1 MB 拒收 */
+/** 表情上传时的尺寸规则：静态图长边超过 512 缩到 512 存 PNG（留透明）；动图（GIF、动态 WebP）原样；原样存的超过 1 MB 拒收 */
 export const STICKER_MAX_SIDE = 512;
 export const STICKER_MAX_BYTES = 1024 * 1024;
-/** 壁纸：长边超过 2048 缩到 2048，一律存 JPEG（质量 0.85） */
+/** 壁纸：静态图长边超过 2048 缩到 2048、存 JPEG（质量 0.85）；动图（GIF、动态 WebP）原样存、超过 5 MB 拒收（用户定的：壁纸可以是动图） */
 export const WALLPAPER_MAX_SIDE = 2048;
 export const WALLPAPER_JPEG_QUALITY = 0.85;
+export const WALLPAPER_ANIMATED_MAX_BYTES = 5 * 1024 * 1024;
+/** 静态图原样存时的上限（没超过尺寸、不用缩的那种）：防止一张几十 MB 的 PNG 原样进库、进备份 */
+export const WALLPAPER_STATIC_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * 这张图是不是动图（看文件头，不靠扩展名）。
+ *   GIF：一律当动图处理——单帧 GIF 也原样存，体积本来就小；要分辨单帧多帧得把整个文件解析一遍，不值得。
+ *   WebP：RIFF....WEBP，第一个块是 VP8X 且标志字节里有「动画」位（0x02），或者文件里有 ANIM 块。
+ *   别的（PNG、JPEG……）：不是。APNG（动的 PNG）不认：浏览器缩放时只取第一帧，和静态 PNG 一样处理（不常见，代价是它会变成不动的）。
+ * @param {Uint8Array} bytes
+ */
+export function isAnimatedImage(bytes) {
+    if (!(bytes instanceof Uint8Array) || bytes.length < 12) return false;
+    const ascii = (at, n) => String.fromCharCode(...bytes.subarray(at, at + n));
+    if (ascii(0, 4) === 'GIF8') return true;
+    if (ascii(0, 4) !== 'RIFF' || ascii(8, 4) !== 'WEBP') return false;
+    if (bytes.length >= 21 && ascii(12, 4) === 'VP8X' && (bytes[20] & 0x02)) return true;
+    // 兜底：在前 64 KB 里找 ANIM 块（VP8X 标志写错的文件）
+    const end = Math.min(bytes.length - 4, 65536);
+    for (let i = 12; i < end; i++) if (bytes[i] === 0x41 && bytes[i + 1] === 0x4e && bytes[i + 2] === 0x49 && bytes[i + 3] === 0x4d) return true;
+    return false;
+}
+
+/**
+ * 上传一张图要怎么处理（纯函数：界面先读出字节、量出宽高，按这里的结论去缩放 / 原样存 / 拒收）。
+ *   kind 'sticker'：动图原样（超过 1 MB 拒收）；静态图长边 ≤ 512 原样（超过 1 MB 拒收），超过就缩到 512、存 PNG。
+ *   kind 'wallpaper'：动图原样（超过 5 MB 拒收）；静态图长边 ≤ 2048 原样（超过 8 MB 拒收），超过就缩到 2048、存 JPEG。
+ *   不认识的类型（不是 png / jpeg / webp / gif，比如视频、SVG）拒收。
+ * @param {{kind: 'sticker'|'wallpaper', type: string, bytes: number, w: number, h: number, animated: boolean}} f   type 是文件的 MIME，bytes 是字节数
+ * @returns {{action: 'keep'} | {action: 'resize', w: number, h: number, type: 'image/png'|'image/jpeg', quality?: number} | {action: 'reject', reason: string}}
+ */
+export function imagePlan({ kind, type, bytes, w, h, animated }) {
+    if (!IMAGE_TYPES.includes(type)) return { action: 'reject', reason: '只能用 PNG、JPEG、WebP、GIF 图片' };
+    const sticker = kind === 'sticker';
+    const mb = n => `${Math.round(n / 1024 / 1024 * 10) / 10} MB`;
+    if (animated) {
+        const cap = sticker ? STICKER_MAX_BYTES : WALLPAPER_ANIMATED_MAX_BYTES;
+        return bytes > cap ? { action: 'reject', reason: `动图太大了（${mb(bytes)}），${sticker ? '表情' : '动图壁纸'}最多 ${mb(cap)}` } : { action: 'keep' };
+    }
+    const side = sticker ? STICKER_MAX_SIDE : WALLPAPER_MAX_SIDE;
+    const long = Math.max(w || 0, h || 0);
+    if (long > side) {
+        const s = side / long;
+        return { action: 'resize', w: Math.max(1, Math.round(w * s)), h: Math.max(1, Math.round(h * s)),
+            ...(sticker ? { type: 'image/png' } : { type: 'image/jpeg', quality: WALLPAPER_JPEG_QUALITY }) };
+    }
+    const cap = sticker ? STICKER_MAX_BYTES : WALLPAPER_STATIC_MAX_BYTES;
+    return bytes > cap ? { action: 'reject', reason: `图片太大了（${mb(bytes)}），最多 ${mb(cap)}` } : { action: 'keep' };
+}
 
 // 换行类字符（含 U+0085、U+2028、U+2029）。用 fromCharCode 拼，源码里不直接写看不见的字符（同 personas.js）
 const LINE_BREAKS = new RegExp(`[\\r\\n\\v\\f${String.fromCharCode(0x85, 0x2028, 0x2029)}]+`, 'g');
@@ -327,24 +377,56 @@ export function normalizePhoneRecord(v, { newId }) {
     if (presets.length) out.presets = presets;
     const stickers = normalizeStickers(v.stickers);
     if (stickers.length) out.stickers = stickers;
-    if (isObj(v.wallpaper) && isNonEmptyStr(v.wallpaper.image)) out.wallpaper = { image: v.wallpaper.image };
+    const wp = normalizeWallpaper(v.wallpaper);
+    if (wp) out.wallpaper = wp;
     if (isObj(v.modelRef) && isStr(v.modelRef.endpoint) && isStr(v.modelRef.model)) out.modelRef = { endpoint: v.modelRef.endpoint, model: v.modelRef.model };
     if (isNonEmptyStr(v.lastPresetId)) out.lastPresetId = v.lastPresetId;
     return keepUnknown(out, v, RECORD_KNOWN);
 }
 
+/** 壁纸的两个位置（用户定的：锁屏一张、桌面一张，各自可以没有 = 用主题自带的 CSS 壁纸） */
+export const WALLPAPER_SLOTS = Object.freeze(['lock', 'home']);
+
 /**
- * 'phone' 记录里有没有「内容」（聊天预设、表情、壁纸）。整体备份的「空浏览器」判定用（B 阶段）：
- * 只有当前选择（modelRef、lastPresetId）的记录不算有内容。
+ * PhoneRecord.wallpaper 的规范化：{lock?: 图片 id, home?: 图片 id}，两个都没有 = null（不写这个键）。
+ * 契约草案里的旧形状 {image}（只有一张）读到时当成两个位置共用这一张——那一版没有真正落过盘，这只是容错。
+ */
+export function normalizeWallpaper(w) {
+    if (!isObj(w)) return null;
+    const out = {};
+    for (const slot of WALLPAPER_SLOTS) if (isNonEmptyStr(w[slot])) out[slot] = w[slot];
+    if (!Object.keys(out).length && isNonEmptyStr(w.image)) { out.lock = w.image; out.home = w.image; }
+    return Object.keys(out).length ? out : null;
+}
+
+/**
+ * 'phone' 记录里有没有「内容或设置」（聊天预设、表情、壁纸）。整体备份的「空浏览器」判定用：
+ * 只有当前选择（modelRef、lastPresetId）的记录不算有数据（和 global 里「选了哪个模型不算用户内容」一个道理）。
  */
 export const phoneRecordHasContent = rec => isObj(rec)
-    && ((Array.isArray(rec.presets) && rec.presets.length > 0) || (Array.isArray(rec.stickers) && rec.stickers.length > 0) || isObj(rec.wallpaper));
+    && ((Array.isArray(rec.presets) && rec.presets.length > 0) || (Array.isArray(rec.stickers) && rec.stickers.length > 0) || !!normalizeWallpaper(rec.wallpaper));
 
-/** 孤儿图：'phoneimg:*' 里没有被表情目录或壁纸指着的 id（有写权限的标签页打开手机时删掉） */
+/** 被表情目录或壁纸指着的图片 id */
+export function usedImageIds(rec) {
+    const wp = normalizeWallpaper(rec?.wallpaper) ?? {};
+    return new Set([...(Array.isArray(rec?.stickers) ? rec.stickers : []).map(s => s?.id).filter(isNonEmptyStr), ...WALLPAPER_SLOTS.map(s => wp[s]).filter(Boolean)]);
+}
+
+/**
+ * 孤儿图：'phoneimg:*' 里没有被表情目录或壁纸指着的 id。
+ * 【不自动删】（B 阶段定的）：所有写入都是一个事务里同时写目录和图片，正常不会出现孤儿；真出现了多半是记录读坏了，这时删图就是丢数据。
+ * 只给界面 / 以后的「清理」按钮用。
+ */
 export function orphanImageIds(rec, imageIds) {
-    const used = new Set([...(rec?.stickers ?? []).map(s => s.id), ...(rec?.wallpaper?.image ? [rec.wallpaper.image] : [])]);
+    const used = usedImageIds(rec);
     return [...imageIds].filter(id => !used.has(id));
 }
+
+/**
+ * 手机聊天用哪个「接口 + 模型」（用户定的：可以另选；默认跟 RP 的 state.chatModel）。
+ * PhoneRecord.modelRef 是当前选择：存在这台设备的 'phone' 记录里、不进备份。
+ */
+export const phoneModelRef = (rec, chatModel) => (isObj(rec?.modelRef) ? rec.modelRef : chatModel);
 
 // ═══════════════════════════ 消息（气泡） ═══════════════════════════
 
@@ -383,6 +465,8 @@ export const phoneDoc = messages => textsDoc((Array.isArray(messages) ? messages
 
 // ═══════════════════════════ 会话 ═══════════════════════════
 
+// worlds：契约草案里会话自己勾的世界书。用户定了「世界书和 RP 是通的、每次现算」（books.js entriesForCard），这个字段不再用：
+// 读到旧的丢掉（放进 KNOWN 里就不会被 keepUnknown 原样抄过去）
 const SESSION_KNOWN = new Set(['id', 'cards', 'personaId', 'presetId', 'worlds', 'title', 'createdAt', 'updatedAt', 'readAt', 'messages', 'favorites', 'pinned']);
 const lastAt = msgs => (msgs.length ? msgs[msgs.length - 1].at : 0);
 
@@ -401,9 +485,6 @@ export function normalizeSession(s) {
         personaId: isStr(s.personaId) && s.personaId ? s.personaId : null,
     };
     if (isNonEmptyStr(s.presetId) && s.presetId !== DEFAULT_PRESET_ID) out.presetId = s.presetId;
-    out.worlds = isObj(s.worlds) && typeof s.worlds.card === 'boolean' && Array.isArray(s.worlds.books)
-        ? { card: s.worlds.card, books: [...new Set(s.worlds.books.filter(isNonEmptyStr))] }
-        : { card: true, books: [] };
     if (isNonEmptyStr(s.title)) out.title = s.title;
     out.createdAt = isStr(s.createdAt) ? s.createdAt : '';
     out.updatedAt = isStr(s.updatedAt) ? s.updatedAt : out.createdAt;
@@ -419,51 +500,27 @@ export function normalizeSession(s) {
 }
 
 /**
- * 新建一个会话。worlds 由调用方先算好（prefillWorlds）。presetId 是默认就不写。
- * @param {{id: string, cardId: string, personaId?: string|null, presetId?: string, worlds: {card: boolean, books: string[]}, now: Date}} spec
+ * 新建一个会话。presetId 是默认就不写。世界书不用选：每次生成时按这张卡在 RP 里现在生效的现算。
+ * @param {{id: string, cardId: string, personaId?: string|null, presetId?: string, now: Date}} spec
  */
-export function newSession({ id, cardId, personaId = null, presetId, worlds, now }) {
+export function newSession({ id, cardId, personaId = null, presetId, now }) {
     const iso = now.toISOString();
     const s = { id, cards: [cardId], personaId: personaId || null };
     if (isNonEmptyStr(presetId) && presetId !== DEFAULT_PRESET_ID) s.presetId = presetId;
-    s.worlds = { card: worlds?.card !== false, books: [...new Set((worlds?.books ?? []).filter(isNonEmptyStr))] };
     Object.assign(s, { createdAt: iso, updatedAt: iso, readAt: now.getTime(), messages: [] });
     return s;
 }
 
 /**
- * 新建会话时世界书的预勾（问题 8，PHONE_TENTATIVE.worldsPrefill）：
- *   'rp'   = 卡自带的没被整本关掉就勾；额外世界书里现在对这张卡生效的（books.js isBookActiveFor，和 RP 拼装同一条规则）都勾；
- *   'none' = 全不勾。
- * 之后不再跟着 RP 那边变：存下来的是勾选的结果。
- * @param {import('./types.js').Card|null} card
- * @param {string} cardId
- * @param {import('./types.js').ExtraBook[]} books
+ * 会话引用的卡里有哪些已经不在了（删卡后会话留着、只能看——用户定的）。不落盘，每次按「现在有哪些卡」现算。
+ * 一张都不缺 = []；cards 是空的（坏数据）也算缺（返回 ['']），同样只能看。
+ * @param {{cards: string[]}} session
+ * @param {Set<string>} cardIds   现在存储里有的卡 id
  */
-export function prefillWorlds(card, cardId, books, { mode = PHONE_TENTATIVE.worldsPrefill } = {}) {
-    if (mode === 'none') return { card: false, books: [] };
-    return {
-        card: card?.worldDisabled !== true && Array.isArray(card?.worldEntries) && card.worldEntries.length > 0,
-        books: (Array.isArray(books) ? books : []).filter(b => isObj(b) && isStr(b.name) && isBookActiveFor(b, cardId)).map(b => b.name),
-    };
-}
-
-/**
- * 按 worlds 挑出这次参与扫描的条目（phone-prompt.js 的 worldEntries 参数）：card 为真时卡自带的那本 + books 里还存在的几本。
- * 【不看】书的 enabled / scope：会话里勾了就是要用（RP 那边的开关管的是 RP）。不存在的书名忽略，同时在 missing 里报出来（界面显示「已删除」）。
- * @returns {{entries: import('./types.js').WorldEntry[], missing: string[]}}
- */
-export function pickWorldEntries(worlds, card, books) {
-    const entries = [];
-    if (worlds?.card && Array.isArray(card?.worldEntries)) entries.push(...card.worldEntries);
-    const byName = new Map((Array.isArray(books) ? books : []).filter(b => isObj(b) && isStr(b.name)).map(b => [b.name, b]));
-    const missing = [];
-    for (const name of worlds?.books ?? []) {
-        const b = byName.get(name);
-        if (!b) { missing.push(name); continue; }
-        if (Array.isArray(b.entries)) entries.push(...b.entries);
-    }
-    return { entries, missing };
+export function sessionCardsMissing(session, cardIds) {
+    const cards = Array.isArray(session?.cards) ? session.cards : [];
+    if (!cards.length) return [''];
+    return cards.filter(id => !cardIds.has(id));
 }
 
 /**
@@ -477,14 +534,6 @@ export function resolvePersona(globalLike, personaId) {
     if (!personaId) return { persona: pick(a.persona), missing: false };
     const hit = a.personas?.find(p => p.id === personaId);
     return hit ? { persona: pick(hit), missing: false } : { persona: pick(a.persona), missing: true };
-}
-
-/** 改书名后会话里的引用跟着换（ui/tab-world.js renameBook 成功后，phone-store.js 对每个会话调它）。没变 = 原对象 */
-export function renameBookRef(session, oldName, newName) {
-    const books = session?.worlds?.books;
-    if (!Array.isArray(books) || !books.includes(oldName) || oldName === newName) return session;
-    const next = [...new Set(books.map(n => (n === oldName ? newName : n)))];
-    return { ...session, worlds: { ...session.worlds, books: next } };
 }
 
 /** 未读条数：assistant 的气泡里 at > readAt 的 */
@@ -522,6 +571,8 @@ export function sessionIndexEntry(s) {
     const fav = countHighlights(s.favorites);
     if (fav) e.fav = fav;
     if (s.pinned === true) e.pinned = true;
+    // 用的是哪个聊天预设（不是默认时才写）：删预设时数「有几个会话在用它」不用把会话整条读出来
+    if (s.presetId) e.presetId = s.presetId;
     return e;
 }
 
@@ -560,12 +611,12 @@ export function sortIndex(index) {
 // updatedAt 只在消息变了时更新（参数 now）。
 
 /**
- * 输入框里的文字 → 几个用户气泡的原文（问题 4，PHONE_TENTATIVE.sendMode）：
+ * 输入框里的文字 → 几个用户气泡的原文（PHONE_CHOICES.sendMode）：
  *   'lines'  每行一个，去首尾空白，空行丢掉——和模型「一行一条」对称；
  *   'single' 整段一个（去首尾空白），换行留在气泡里。
  * 空输入 → []（界面据此走「不加气泡、直接让 TA 接着说」）。
  */
-export function splitInput(text, { mode = PHONE_TENTATIVE.sendMode } = {}) {
+export function splitInput(text, { mode = PHONE_CHOICES.sendMode } = {}) {
     const t = isStr(text) ? text : '';
     if (mode === 'single') return t.trim() ? [t.trim()] : [];
     return t.split(/\r\n|\r|\n|\u2028|\u2029/).map(x => x.trim()).filter(Boolean);
@@ -656,13 +707,13 @@ export function lastBatch(messages) {
 }
 
 /**
- * 「重新生成」之前要对会话做什么（问题 2，PHONE_TENTATIVE.regenerate）：
+ * 「重新生成」之前要对会话做什么（PHONE_CHOICES.regenerate）：
  *   'replace' 删掉最后一批（收藏跟着没），再拿剩下的去生成；
  *   'append'  什么都不删，新的一批接在后面（旧回复留着）。
  * 最后一条是用户气泡（或会话是空的）：两种都不删，直接生成。
  * @returns {{session: import('./types.js').PhoneSession, removed: number[]}}   removed：删掉的下标（删之前的编号）
  */
-export function planRegenerate(session, { now, mode = PHONE_TENTATIVE.regenerate }) {
+export function planRegenerate(session, { now, mode = PHONE_CHOICES.regenerate }) {
     const batch = lastBatch(session.messages);
     if (mode !== 'replace' || !batch.length) return { session, removed: [] };
     return { session: deleteMessages(session, batch, { now }).session, removed: batch };
