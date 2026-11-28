@@ -1,19 +1,42 @@
 // 外置记忆的纯逻辑（不碰页面、不碰 state，Node 里可以直接单元测试）：
 //   foldCut           决定聊天记录里哪一段折叠成摘要（「攒一批再滑动」）
-//   invalidateTurnAt  某一楼的原文变了：这一轮的摘要作废
+//   markTurnEdited    某一楼的原文被手动改了（编辑、拼装页就地改、写卡页改第 0 楼、脚本 / 前端卡 setChatMessages）：只打「原文改过」的标记
+//   invalidateTurnAt  这一轮的回复整个换了（换候选、重新生成）：这一轮的摘要作废
 //   invalidateAfterDelete  删掉了任意几楼（前端卡的 deleteChatMessages）：受影响的轮的摘要作废
 // 界面那一侧（压缩、「记忆」页）在 src/ui/memory.js；请求一个个排队发的调度在 src/memory-queue.js。
 //
 // 「一轮」的定义（和 ui/memory.js summarizeTurn 取材的范围一致）：一条 assistant 回复，加上紧挨在它前面的那一串连续的 user 输入。
-// 摘要挂在回复上（ChatMessage.memory）。所以规则只有一条：一轮里任何一部分的原文变了（或这一轮由哪几楼组成变了），
-// 挂在这一轮回复上的摘要就作废，交给 ensureMemories 重压；别的轮不动。
+// 摘要挂在回复上（ChatMessage.memory）。什么时候作废（2026-11-29 用户改的规则）：
+//   - 这一轮的回复整个换了（换候选、重新生成）或这一轮由哪几楼组成变了（删楼）：摘要作废，交给 ensureMemories 重压；别的轮不动。
+//     旧摘要描述的是另一段内容，留着只会误导。
+//   - 手动改了这一轮里某一楼的原文（自己编辑，或卡的脚本 / 前端卡改的）：【不作废、不重压、不发请求】，摘要和合并段原样留着，
+//     只在这一轮的回复上打一个「原文改过」的标记（ChatMessage.memoryStale，见下面「原文改过」）。
+//     用户的理由：都手动改内容了，也不差手动改摘要；想更新就去「记忆」页改那一行，或点那一行的「重压」。
+//     这也是花额度的地方：以前在合并段里改一个字会让整段几十轮全部重压。
+//
+// ───── 原文改过（ChatMessage.memoryStale = true，2026-11-29） ─────
+// 意思：「这一轮压好之后原文又被手动改过，摘要没有跟着更新」。只是给人看的提示：
+//   - 不发给模型（记忆块只有摘要文字），不影响切点（foldCut 不看它），不算「待压缩」（turnPending 不看它），不触发任何请求。
+//   - 挂在哪：这一轮的回复上（和 memory 同一条消息）。改的是用户输入那一楼，也挂在这一轮的回复上（turnReplyIndex）；
+//     这一轮还没有回复，或者改的是旁白（旁白不属于任何一轮的取材，见 turnInputs）：不打。
+//   - 什么时候打（markTurnEdited）：这一轮已经「压好了」才打——有自己的摘要（含写成「-」的：那是对旧原文的判断，原文变了它也可能不对了，
+//     一样提醒），或者已经被一段已换上的合并段覆盖（成员自己的 memory 已删，标记照样挂在这条回复上）。
+//     还没压（待压缩 / 失败 / 整轮隐藏）的不打：到时候压的本来就是新原文。原文改了又改回去也不撤（没存旧原文，没法知道）。
+//   - 合并段：标记挂在成员（回复）上，段本身不动、不作废；「记忆」页那一段只要有一条成员带标记，整段显示「原文改过」。
+//     待换上（wait）的段同理：成员自己的行还在，标记挂在成员上；换上（commitMerged）之后成员变成被覆盖，标记照样合法、照样留着。
+//   - 什么时候清：这一轮的摘要作废（换候选 / 重新生成 / 删楼，dropMemory）；「记忆」页点这一行的「重压」（一点就清：旧摘要那一刻就丢了，
+//     重压失败也只剩失败记录，没有摘要可「过时」）或手动改这一行的摘要（含清空、改成「-」）；
+//     已换上的段被拆（dissolve：「重压」这一段、清空段文字、删楼碰到它）时成员上的标记一起清（成员都没有摘要了）；
+//     改段的文字（不清空）= 用户手动更新了这一段，成员上的标记一起清。待换上的段被拆时成员的标记不清：成员自己的行还在、仍然是旧原文压的。
+//   - 读档（normalizeMerged 末尾的 normalizeStale）：值不是 true 的、挂在一条「没压好」的楼上的（孤儿标记）删掉。
+//   - 默认不写：只有打了标记才有这个键，清掉就删键。没改过原文的存档存储形状和以前逐字相同。
 
 //
 // ───── 隐藏楼层（ChatMessage.hidden，酒馆的 is_system）和记忆（2026-11-23 用户定：隐藏不碰记忆） ─────
 // 规矩：隐藏 / 取消隐藏只决定【这一楼的原文】发不发，完全不碰记忆。
 //   - 不让任何摘要作废，不拆、不改任何合并段，不触发任何压缩 / 合并请求：setHidden 只改标记。
 //   - 一轮的取材（turnInputs）不看隐藏标记：回复 + 紧挨在它前面的那串用户输入，原文是什么就压什么。
-//     所以摘要一旦压好，只有原文真的变了（编辑、换候选、重新生成、前端卡改原文、删楼）才作废。
+//     所以摘要一旦压好，只有回复整个换了（换候选、重新生成）或删楼才作废；手动编辑、前端卡改原文只打「原文改过」的标记（见上面）。
 //   - 已有的摘要照旧留着、照旧进记忆块、照旧发；被合并段覆盖的轮同理（合并段照旧发）。
 //     【隐藏一楼不等于模型完全看不到它】：已经压成摘要的那句还会发。要彻底去掉，得到「记忆」页手动删掉那条记忆（或写成「-」）。
 //     用户知情并接受。
@@ -35,8 +58,9 @@
 //
 // ───── 记忆再压缩：合并段（2026-11-23，设置 memory.mergeEvery = x，默认不写 = 不做） ─────
 // 聊得很长以后，每轮一行的摘要也会越积越多。已经折叠进记忆块的摘要行，从最老的开始每攒够 x 行就合并成一段。
-// 用户定的三条规矩：合并后原来的一行行不留；合并段覆盖的楼里有一楼变了，这段就作废，那些轮回到「待压缩」、各自按原文重压
-// （以后攒够了再重新合并）；「记忆」页的输入框「每 [x] 条记忆再次压缩」，留空或 0 = 不做。
+// 用户定的三条规矩：合并后原来的一行行不留；合并段覆盖的楼里有一轮的回复整个换了（换候选 / 重新生成）或删了楼，这段就作废，
+// 那些轮回到「待压缩」、各自按原文重压（以后攒够了再重新合并）；「记忆」页的输入框「每 [x] 条记忆再次压缩」，留空或 0 = 不做。
+// （2026-11-29 起：段里某一楼被手动编辑 / 被脚本改了原文，段【不作废】，只在那一轮的回复上打「原文改过」，见文件头。）
 //
 // 存储（都挂在 assistant 楼上；不用这个功能的人一个字段都不多）：
 //   段的最后一条回复（锚）：memoryMerged = {text, count, wait?}
@@ -71,13 +95,15 @@
 //
 // 作废（mergedSegments 读出段，dissolve 拆掉）：拆掉已换上的段 = 删 memoryMerged、删成员的 memoryIn，成员都没有摘要了，交给 ensureMemories 逐轮重压；
 //   拆掉待换上的段 = 只删 memoryMerged（成员的行原本就在）。入口：
-//   - invalidateTurnAt（编辑、前端卡改原文、换候选 / 重新生成后由调用方调）：作废的那条回复在哪一段里，就拆那一段；
+//   - invalidateTurnAt（换候选 / 重新生成后由调用方调）：作废的那条回复在哪一段里，就拆那一段；
+//   - 手动编辑、前端卡 / 脚本改原文（markTurnEdited）：【不拆】，只打「原文改过」（见文件头）；
 //   - 隐藏 / 取消隐藏：【不拆】（隐藏不碰记忆，见文件头「隐藏楼层」）；
 //   - invalidateAfterDelete（前端卡单删）：删掉的楼落在某一段的取材范围里（从这一段前面最近的非用户楼起到锚），拆那一段；
 //   - invalidateBeforeTruncate（「删这一楼及之后」）：锚在被删范围里的段（被切进了覆盖范围）拆掉；
 //   - 「记忆」页的「重压」、把段的文字清空：dissolveMerged。
 //   读档时（normalizeMerged，state.js applyCardChat）和 ensureMemories 开始时：形状不对的段、数不出 count 条成员的段、
 //   成员状态对不上的段删掉；不属于任何合法段的 memoryIn（孤儿标记）删掉——被清掉标记的轮没有摘要，回到待压缩。坏数据不会让页面打不开。
+//   最后清掉孤儿的「原文改过」（memoryStale 挂在没压好的楼上，见文件头）。
 //   按旧规矩（成员跳过隐藏的回复）存下的已换上的段先「升级」再判断，见 normalizeMerged 上面的「旧数据」。
 
 /** 这一楼是不是隐藏楼层（只认 true：默认不写这个字段） */
@@ -404,7 +430,14 @@ function upgradeLegacyCommitted(chat, a) {
  * @returns {boolean} 改没改
  */
 export function normalizeMerged(chat) {
-    if (!Array.isArray(chat) || !hasMergeFields(chat)) return false;
+    if (!Array.isArray(chat)) return false;
+    // 合并段先清（清掉坏段会让一些成员变回「没压好」），再清孤儿的「原文改过」
+    const merged = hasMergeFields(chat) ? normalizeSegments(chat) : false;
+    return normalizeStale(chat) || merged;
+}
+
+/** normalizeMerged 的合并段那一半 */
+function normalizeSegments(chat) {
     let changed = false;
     // 删掉一段坏的之后，别的段的判断不受影响（每段只看自己的成员）；保险起见做到不再变化为止
     for (let round = 0; round < 5; round++) {
@@ -422,10 +455,28 @@ export function normalizeMerged(chat) {
     return changed;
 }
 
-/** 拆掉一段（seg 来自 mergedSegments）。已换上的：成员的标记一起删，成员没有摘要了，交给 ensureMemories 逐轮重压 */
+/**
+ * 「原文改过」的读档清洗：值不是 true，或者挂在一条没压好的楼上（turnHasSummary 为假：没有摘要、也没被已换上的段覆盖）的，删掉。
+ * 要在合并段清洗之后做（coveredByMerge 只看标记，靠前面那一步保证结构对）。@returns {boolean} 改没改
+ */
+function normalizeStale(chat) {
+    let changed = false;
+    for (const m of chat) {
+        if (m?.memoryStale === undefined) continue;
+        if (m.memoryStale === true && turnHasSummary(m)) continue;
+        delete m.memoryStale;
+        changed = true;
+    }
+    return changed;
+}
+
+/**
+ * 拆掉一段（seg 来自 mergedSegments）。已换上的：成员的覆盖标记和「原文改过」一起删，成员没有摘要了，交给 ensureMemories 逐轮重压。
+ * 待换上的：只删段，成员自己的行（和行上的「原文改过」）原本就在、照旧有效
+ */
 function dissolve(chat, seg) {
     delete chat[seg.anchor].memoryMerged;
-    if (!seg.pending) for (const k of seg.members) delete chat[k].memoryIn;
+    if (!seg.pending) for (const k of seg.members) { delete chat[k].memoryIn; delete chat[k].memoryStale; }
 }
 
 /** 第 r 条回复所在的段（没有返回 null） */
@@ -518,7 +569,12 @@ export function mergeGroups(chat, memory, every, limit = Infinity) {
     return out;
 }
 
-/** 一组成员的「取材指纹」：合并请求发出去时记下，结果回来时核对（成员的原文、输入、摘要行、范围里有哪些回复都没变才写）。不看隐藏标记 */
+/**
+ * 一组成员的「取材指纹」：合并请求发出去时记下，结果回来时核对（成员的摘要行、每一轮由哪几楼组成、范围里有哪些回复都没变才写）。
+ * 合并的输入只有成员的摘要行（不读原文），所以【不看原文】（2026-11-29 起）：合并请求在路上时手动改了某一楼，结果照样写下，
+ * 那一轮带着「原文改过」的标记，段跟着显示出来——和「编辑不作废合并段」一致，也不会因为一次编辑把这一组合并重发一遍。
+ * 换候选 / 重新生成会删掉那一轮的摘要（摘要行变了），删楼会改变楼层结构，这两种照样认得出来。不看隐藏标记、不看「原文改过」
+ */
 export function mergeFingerprint(chat, members) {
     if (!Array.isArray(chat) || !members.length) return '';
     const lo = members[0], hi = members.at(-1);
@@ -526,7 +582,7 @@ export function mergeFingerprint(chat, members) {
     for (let k = lo; k <= hi && k < chat.length; k++) if (chat[k]?.role === 'assistant') replies.push(k);
     return JSON.stringify([replies, members.map(k => {
         const m = chat[k];
-        return m ? [m.role, m.content, m.memory ?? null, turnInputs(chat, k).map(j => chat[j].content)] : null;
+        return m ? [m.role, m.memory ?? null, turnInputs(chat, k)] : null;
     })]);
 }
 
@@ -568,11 +624,12 @@ export function turnReplyIndex(chat, i) {
     return -1;
 }
 
-/** 把一条回复上的摘要（和压缩失败的记录）去掉，交给 ensureMemories 重压。返回有没有真的去掉什么 */
+/** 把一条回复上的摘要（和压缩失败的记录、「原文改过」的标记）去掉，交给 ensureMemories 重压。返回有没有真的去掉什么 */
 function dropMemory(msg) {
-    if (!msg || (msg.memory === undefined && msg.memoryError === undefined)) return false;
+    if (!msg || (msg.memory === undefined && msg.memoryError === undefined && msg.memoryStale === undefined)) return false;
     delete msg.memory;
     delete msg.memoryError;
+    delete msg.memoryStale;   // 摘要没了，「摘要过时」也就无从说起
     return true;
 }
 
@@ -585,8 +642,47 @@ function dropTurn(chat, r) {
     return dropMemory(chat[r]) || hit;
 }
 
+/** 这一楼带着「原文改过」的标记（只认 true：默认不写这个字段） */
+export const isMemoryStale = m => m?.memoryStale === true;
+
 /**
- * 第 i 楼的原文变了（编辑、前端卡的 setChatMessage……）：这一轮的摘要作废。原地改 chat。
+ * 这条回复这一轮「已经压好了」：有自己的摘要（含写成「-」的），或者被一段已换上的合并段覆盖（锚也算）。
+ * 「原文改过」只打在这样的楼上（文件头「原文改过」）。覆盖只看标记，结构对不对由 normalizeMerged 保证。
+ */
+export const turnHasSummary = m => m?.role === 'assistant'
+    && ((typeof m.memory === 'string' && m.memory !== '') || coveredByMerge(m));
+
+/**
+ * 第 i 楼的原文被手动改了（编辑、拼装页就地改、写卡页改第 0 楼、前端卡 / 脚本的 setChatMessages）：
+ * 【不作废、不发请求】，这一轮已经压好的话在它的回复上打「原文改过」（memoryStale = true）。原地改 chat。
+ * 规则见文件头「原文改过」：只打在 i 所在那一轮的回复上（i 是回复就是它自己；i 是这一轮的输入就是紧跟着的回复）；
+ * 改的是旁白、或这一轮还没有回复、或这一轮还没压好：什么都不做。不碰合并段（段原样留着，界面按成员汇总显示）。
+ * 调用方只在原文真的变了时调（没改内容就点了保存，不该打标记）。
+ * @returns {number} 打了标记的回复的下标；没打返回 -1
+ */
+export function markTurnEdited(chat, i) {
+    if (!Array.isArray(chat)) return -1;
+    const r = turnReplyIndex(chat, i);
+    if (r < 0) return -1;
+    if (r !== i && !turnInputs(chat, r).includes(i)) return -1;   // 旁白（或 i 和回复之间隔着旁白）：不在这一轮的取材里
+    if (!turnHasSummary(chat[r])) return -1;
+    chat[r].memoryStale = true;
+    return r;
+}
+
+/** 一段合并段（来自 mergedSegments）里有没有成员带「原文改过」：「记忆」页据此给整段打标记 */
+export const segmentStale = (chat, seg) => seg.members.some(k => isMemoryStale(chat[k]));
+
+/** 用户手动更新了这一段的文字（「记忆」页改段文字、不清空）：成员上的「原文改过」都清掉。@returns {boolean} 清没清 */
+export function clearSegmentStale(chat, seg) {
+    let n = 0;
+    for (const k of seg.members) if (chat[k]?.memoryStale !== undefined) { delete chat[k].memoryStale; n++; }
+    return n > 0;
+}
+
+/**
+ * 第 r 条回复这一轮的回复整个换了（换候选 / 重新生成：chat.js swipedTurn，以及 app.js 的手动模式）：这一轮的摘要作废。原地改 chat。
+ * 它在合并段里就拆那一段（文件头「合并段」）。【手动编辑不走这里】（走 markTurnEdited，2026-11-29 改的规则）。
  * 取材不看隐藏标记（文件头「隐藏楼层」），所以这一楼属于哪一轮只看结构（turnReplyIndex）。
  * @returns {number} 被作废的那条回复的下标；没有返回 -1
  */

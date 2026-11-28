@@ -71,8 +71,12 @@ export const cardSig = rec => canonical([cardContent(rec?.card), typeof rec?.ava
 // 划线（ChatRecord.highlights）【不算】判重的内容（用户 2026-11-28 定的）：只差划线的两个存档是同一个存档，
 // 恢复时不新增存档，而是把备份里的划线并进本机那个（planBackupImport 的 highlightMerges、highlight.js mergeHighlights）。
 // 所以签名和划线功能出现之前逐字相同。（2026-11-28 第一版曾把划线追加进签名，结果「本机没划线、备份划过线」会多出一个几乎一样的存档。）
+// 外置记忆的「原文改过」（ChatMessage.memoryStale，2026-11-29）同样【不算】：它只是「这条摘要过时了」的提示，不是内容。
+// 只差这个标记的两个存档是同一个，恢复时跳过、本机的标记状态不动。没有这个标记的消息原样参与比较，所以签名和以前逐字相同
+const sigMessage = m => (isObj(m) && m.memoryStale !== undefined ? (({ memoryStale: _s, ...rest }) => rest)(m) : m);
 export const chatSig = rec => {
-    const base = [rec?.name ?? '', rec?.messages ?? [], isObj(rec?.variables) ? rec.variables : {}];
+    const msgs = Array.isArray(rec?.messages) ? rec.messages.map(sigMessage) : (rec?.messages ?? []);
+    const base = [rec?.name ?? '', msgs, isObj(rec?.variables) ? rec.variables : {}];
     const note = storedAuthorNote(rec?.authorNote);
     return canonical(note ? [...base, note] : base);
 };

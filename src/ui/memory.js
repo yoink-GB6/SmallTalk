@@ -3,7 +3,8 @@
 import { substitute } from '../macros.js';
 import { foldCut, memorySystem, MEMORY_SKIP, MEMORY_BATCH_DEFAULT, MEMORY_SUMMARY_LEN_DEFAULT, MEMORY_SUMMARY_LEN_MAX, summaryLenOf, turnInputs, isHidden,
     turnFullyHidden, turnPending, mergeEveryOf, MERGE_EVERY_MIN, MERGE_EVERY_MAX, mergeLenOf, mergeSystem, mergeBody, mergedSegments, segmentStart, coveredByMerge,
-    normalizeMerged, commitMerged, nextMergeGroup, mergeGroups, mergeFingerprint, applyMerge, dissolveMerged } from '../memory-fold.js';
+    normalizeMerged, commitMerged, nextMergeGroup, mergeGroups, mergeFingerprint, applyMerge, dissolveMerged,
+    isMemoryStale, segmentStale, clearSegmentStale } from '../memory-fold.js';
 import { createMemoryQueue, MEMORY_REQUEST_GAP_MS, MEMORY_MAX_FAILS } from '../memory-queue.js';
 import { runRegexScripts } from '../regex.js';
 import { complete, backendKind } from '../llm.js';
@@ -488,6 +489,10 @@ export function renderMemoryTab() {
     const segs = mergedSegments(state.chat).segs;
     const segOf = new Map();
     for (const s of segs) for (const k of s.members) segOf.set(k, s);
+    // 「原文改过」（memory-fold.js 文件头「原文改过」）：这一轮（这一段里有一轮）压好之后原文被手动改过，摘要没跟着更新。
+    // 只是提示，不影响发送、不触发重压；改这一行的摘要或点「重压」就消失。没有标记的行和以前完全一样
+    const staleBadge = what => h('span', { class: 'badge', 'data-fk': 'mem-stale',
+        title: `${what}的原文在压缩之后改过，摘要没有跟着更新；需要的话点「重压」或直接改摘要` }, '原文改过');
     const segRow = s => {
         const anchorMsg = state.chat[s.anchor];
         const redo = () => { const a = state.chat.indexOf(anchorMsg); if (a >= 0) dissolveMerged(state.chat, a); };
@@ -497,13 +502,15 @@ export function renderMemoryTab() {
             onchange: e => {
                 const v = e.target.value.trim();
                 if (!anchorMsg.memoryMerged) return renderMemoryTab();
-                if (v) anchorMsg.memoryMerged = { ...anchorMsg.memoryMerged, text: v };
+                // 改了段的文字 = 用户手动更新了这一段：成员上的「原文改过」一起清掉。清空 = 拆段（已换上的段拆的时候标记一起清，见 dissolve）
+                if (v) { anchorMsg.memoryMerged = { ...anchorMsg.memoryMerged, text: v }; clearSegmentStale(state.chat, s); }
                 else { redo(); setTimeout(() => redoFirst(state.chat[s.members[0]]), 0); }
                 changed();
             } });
         return h('tr', { class: s.pending ? '' : 'hit', 'data-fk': 'mem-merged-row' },
             h('td', { class: 'dim mono' }, `${segmentStart(state.chat, s)}–${s.anchor}`),
-            h('td', null, h('span', { class: 'badge on', title: s.pending ? '已合并，下一批原文换成摘要时一起换上（免得多打断一次缓存）' : `${s.members.length} 轮的摘要已合并成这一段` }, '已合并')),
+            h('td', null, h('span', { class: 'badge on', title: s.pending ? '已合并，下一批原文换成摘要时一起换上（免得多打断一次缓存）' : `${s.members.length} 轮的摘要已合并成这一段` }, '已合并'),
+                segmentStale(state.chat, s) ? staleBadge('这一段里有一轮') : null),
             h('td', { style: 'width:100%' }, input),
             h('td', { class: 'dim' }, `${orig}→${s.text.length}`),
             h('td', null, h('button', { class: 'ghost', 'data-fk': 'mem-merged-redo', title: locked ? lockedTitle : '重压：作废这一段，这几轮回到逐轮压缩', disabled: locked,
@@ -514,7 +521,8 @@ export function renderMemoryTab() {
         const pending = ui.memoryPending === msg;
         const input = h('input', { class: 'mem', value: msg.memory ?? '', placeholder: pending ? '压缩中…' : '（还没有摘要，可以直接手写）',
             title: msg.memory === MEMORY_SKIP ? '「-」表示这一轮没有值得记的内容，不会进记忆块' : '写成「-」可以让这一轮不进记忆块',
-            onchange: e => { const v = e.target.value.trim(); if (v) { msg.memory = v; delete msg.memoryError; } else delete msg.memory; changed(); } });
+            // 手动改了摘要（含清空、改成「-」）：「原文改过」的提示就不用了
+            onchange: e => { const v = e.target.value.trim(); delete msg.memoryStale; if (v) { msg.memory = v; delete msg.memoryError; } else delete msg.memory; changed(); } });
         // 隐藏的楼照常列出它的摘要（隐藏不碰记忆，摘要照发，见 memory-fold.js 文件头「隐藏楼层」），另加一个小小的「已隐藏」。
         // 整轮隐藏、还没压过的：不压、不算待压缩，只显示「已隐藏」；隐藏的回复在切点之后不发原文，不显示「原文发送」
         const hid = isHidden(msg), wholeHidden = turnFullyHidden(state.chat, i);
@@ -524,11 +532,12 @@ export function renderMemoryTab() {
                     : i < cut ? h('span', { class: 'badge on' }, '已折叠') : hid ? null : h('span', { class: 'badge' }, '原文发送');
         return h('tr', { class: [i < cut ? 'hit' : '', hid ? 'mem-hidden-row' : ''].filter(Boolean).join(' ') },
             h('td', { class: 'dim mono' }, `#${i}`),
-            h('td', null, status, hid ? h('span', { class: 'badge', 'data-fk': 'mem-hidden' }, '已隐藏') : null),
+            h('td', null, status, isMemoryStale(msg) ? staleBadge('这一轮') : null, hid ? h('span', { class: 'badge', 'data-fk': 'mem-hidden' }, '已隐藏') : null),
             h('td', { style: 'width:100%' }, input),   // 失败原因不在行里重复，见页顶 mem-fail-summary
             h('td', { class: 'dim' }, `${msg.content.length}→${(msg.memory ?? '').length}`),
             h('td', null, h('button', { class: 'ghost', title: locked ? lockedTitle : wholeHidden ? '整轮都隐藏着：不压缩，取消隐藏后才能重压' : '重新压缩这一轮', disabled: pending || wholeHidden || locked,
-                onclick: () => { delete msg.memory; delete msg.memoryError; changed(); redoFirst(msg); } }, '↻')),
+                // 一点就清「原文改过」：旧摘要这一刻就丢了（重压失败也只剩失败记录，没有摘要可「过时」）
+                onclick: () => { delete msg.memory; delete msg.memoryError; delete msg.memoryStale; changed(); redoFirst(msg); } }, '↻')),
         );
     });
     kids.push(h('table', { class: 'grid' },

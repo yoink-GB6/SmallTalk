@@ -7,7 +7,7 @@ import { $, h, toast } from './dom.js';
 import { state, ui, card, save, preset, persist, STOPPED_TEXT, highlightsAfterEdit, highlightsAfterDelete, highlightsAfterTruncate, clearChatHighlights } from './state.js';
 import { macroContext, permanentRegex, displayText, computePrompt, displayDepth, hiddenSummary } from './pipeline.js';
 import { ensureMemories, renderMemoryIfActive } from './memory.js';
-import { invalidateTurnAt, turnReplyIndex, isHidden, setHidden, invalidateBeforeTruncate } from '../memory-fold.js';
+import { invalidateTurnAt, markTurnEdited, turnReplyIndex, isHidden, setHidden, invalidateBeforeTruncate } from '../memory-fold.js';
 import { restoreActive } from './backup.js';   // 循环依赖（backup.js 经 archive.js 间接导入本文件）：只在函数体里调用
 import { frameHostFor } from './frame-host.js';
 import { readSwipes, swipeTarget, selectSwipe, appendSwipe, ensureSwipes, syncSwipeSlot } from '../chatfile.js';
@@ -263,18 +263,20 @@ function applyMessageEdit(i, text) {
     const before = state.chat[i].content;
     state.chat[i].content = permanentRegex(text, state.chat[i].role, true);
     syncSwipeSlot(state.chat[i]);   // 改的是当前这个候选（酒馆 messageEditDone：mes.swipes[mes.swipe_id] = text）
-    // 原文改了，这一轮的摘要作废重压：改的是回复就是它自己，改的是用户输入就是紧跟着的那条回复（规则见 memory-fold.js）。
-    // 没改内容就点了保存：什么都不作废——这一楼要是在合并段里，作废会把整段拆掉、白白重压几十轮（复核实测 x=20 就是 20 轮）
+    // 原文改了：外置记忆【不作废、不重压、不发请求】（2026-11-29 用户定），这一轮已经压好的话只打一个「原文改过」的标记，
+    // 改的是回复就打在它自己身上，改的是用户输入就打在紧跟着的那条回复上（memory-fold.js markTurnEdited、文件头「原文改过」）。
+    // 想更新摘要，到「记忆」页改那一行或点「重压」。合并段也不动。
+    // 也不再 setTimeout(ensureMemories)：编辑不改 memory / memoryError / 合并段 / 隐藏，没有任何一轮会因此变成「待压缩」。
+    // 没改内容就点了保存：什么都不做（不打标记）
     if (state.chat[i].content !== before) {
-        invalidateTurnAt(state.chat, i);
+        markTurnEdited(state.chat, i);
         // 划线跟着改：改动段之前的不动、之后的平移、交叠的删掉（highlight.js shiftAfterEdit）。新旧原文只在这一刻都在
         highlightsAfterEdit(i, before, state.chat[i].content);
-        setTimeout(ensureMemories, 0);
     }
 }
 
 /**
- * 「拼装」页就地改第 i 楼（prompt-edit.js）：和编辑消息的「保存」一样——改原文、候选同步、摘要作废，然后存盘、重画。
+ * 「拼装」页就地改第 i 楼（prompt-edit.js）：和编辑消息的「保存」一样——改原文、候选同步、记忆打「原文改过」，然后存盘、重画。
  * 拦截条件由调用方先判断（chatWriteBlocked）。i 不是现有的楼时什么都不做，返回 false。
  */
 export function editMessageText(i, text) {
@@ -574,7 +576,8 @@ export function regenerate(i, epoch) {
 
 /**
  * 换了候选（selectSwipe / appendSwipe 之后调）：chatfile.js 那两个函数只删这一楼自己的摘要，不知道合并段；
- * 这里按「这一轮原文变了」走一遍 invalidateTurnAt，它在合并段里的话那一段作废（memory-fold.js 文件头「合并段」）。
+ * 这里按「这一轮的回复整个换了」走一遍 invalidateTurnAt，它在合并段里的话那一段作废（memory-fold.js 文件头「合并段」）；
+ * 「原文改过」的标记也跟着清掉（摘要都作废了）。和手动编辑不同：编辑只打标记、不作废（markTurnEdited）。
  * 也给 app.js 的手动模式用
  * 划线【不动】：每条划线记着自己是哪个候选上的，换候选 / 加候选只改变显示哪些（highlight.js visibleHighlights），不改原文
  */

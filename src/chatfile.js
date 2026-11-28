@@ -110,6 +110,9 @@ function lineToMessage(line) {
         if (typeof ours.memoryError === 'string') { msg.memoryError = ours.memoryError; delete ours.memoryError; }
         if (isObj(ours.memoryMerged)) { msg.memoryMerged = ours.memoryMerged; delete ours.memoryMerged; }
         if (ours.memoryIn === true) { msg.memoryIn = true; delete ours.memoryIn; }
+        // 「原文改过」（memory-fold.js 文件头）：跟着摘要往返，这样导出再导入后「记忆」页还能提醒这条摘要过时了。
+        // 只认 true；别的值丢掉（不留在 st 里，免得导出时原样写回）。挂在没摘要的楼上的，打开存档时 normalizeMerged 清掉
+        if (ours.memoryStale !== undefined) { if (ours.memoryStale === true) msg.memoryStale = true; delete ours.memoryStale; }
         if (!Object.keys(ours).length) delete extra.smalltalk;
     }
     // swipes / swipe_id：形状合法（字符串数组、swipe_id 是范围内的整数）才拆出来；否则原样留在 st 里，
@@ -212,7 +215,7 @@ function messageToLine(msg, sendDateFallback) {
         if (!(typeof line.send_date === 'number' && parseStDate(line.send_date) === msg.sendDate)) line.send_date = msg.sendDate;
     } else if (!imported) line.send_date = sendDateFallback;
     if (!(imported && 'mes' in line && !msg.content)) line.mes = msg.content ?? '';
-    const OURS = ['memory', 'memoryError', 'memoryMerged', 'memoryIn'];   // 挂在 extra.smalltalk 下的（见 lineToMessage）
+    const OURS = ['memory', 'memoryError', 'memoryMerged', 'memoryIn', 'memoryStale'];   // 挂在 extra.smalltalk 下的（见 lineToMessage）
     const hasOurs = OURS.some(k => msg[k] !== undefined);
     const needExtra = !imported || msg.role === 'system' || hasOurs;
     const extra = isObj(line.extra) ? line.extra : needExtra ? (line.extra = {}) : {};
@@ -369,6 +372,7 @@ function loadInfo(msg, info) {
         delete st.extra.smalltalk.memoryError;
         delete st.extra.smalltalk.memoryMerged;
         delete st.extra.smalltalk.memoryIn;
+        delete st.extra.smalltalk.memoryStale;
         if (!Object.keys(st.extra.smalltalk).length) delete st.extra.smalltalk;
     }
 }
@@ -399,6 +403,7 @@ export function selectSwipe(msg, newId) {
     if (msg.st) loadInfo(msg, msg.st.swipe_info[newId]);
     delete msg.memory;
     delete msg.memoryError;
+    delete msg.memoryStale;   // 「原文改过」说的是旧候选的摘要，摘要都没了
     return true;
 }
 
@@ -426,5 +431,6 @@ export function appendSwipe(msg, text, now = new Date().toISOString()) {
     }
     delete msg.memory;
     delete msg.memoryError;
+    delete msg.memoryStale;
     return msg;
 }

@@ -24,7 +24,12 @@ export {};
  *   不用这个功能（memory.mergeEvery 不写）时永远不出现
  * @property {true} [memoryIn]   这条回复已被后面的合并段覆盖（自己的 memory 已删）：不再逐轮压缩。段作废时一起删掉，这一轮回到待压缩。
  *   读档时（memory-fold.js normalizeMerged）数不齐成员的段、孤儿标记都清掉
- * @property {true} [hidden]   隐藏楼层（酒馆的「隐藏消息」，jsonl 里是 is_system: true）：留在记录里、照常显示（变淡）、能编辑能搜，
+ * @property {true} [memoryStale]  「原文改过」（2026-11-29）：这一轮压好之后（有自己的 memory，含「-」；或已被合并段覆盖）原文又被手动编辑 /
+ *   被卡的脚本、前端卡改过，摘要没有跟着更新。挂在这一轮的回复上（和 memory 同一条）；改的是用户输入也挂在这一轮的回复上。
+ *   只是给「记忆」页看的提示：不发给模型、不影响折叠、不算待压缩、不触发请求；脚本和前端卡读不到；chatSig 判重不看它；跟着 .jsonl 的 extra.smalltalk 往返。
+ *   合并段的成员带它时，「记忆」页整段显示。清掉的时机（重压、手改摘要、换候选 / 重新生成、删楼、段被拆或段文字被改）和规则见
+ *   src/memory-fold.js 文件头「原文改过」。默认不写：只有打了标记才有这个键。读档时挂在没压好的楼上的（孤儿）删掉
+ * @property {true} [hidden]  隐藏楼层（酒馆的「隐藏消息」，jsonl 里是 is_system: true）：留在记录里、照常显示（变淡）、能编辑能搜，
  *                              但【原文不发给模型】，也不参与楼层深度、世界书扫描、上下文上限。只在隐藏时写 true，平时不写这个字段。
  *                              【不碰外置记忆】（2026-11-23）：隐藏 / 取消隐藏不作废摘要、不拆合并段、不触发压缩；已有的摘要照旧发。
  *                              整轮（回复和它的输入）都隐藏、还没压过的轮隐藏期间不压。
@@ -922,6 +927,7 @@ export {};
  *                                        导出时只在和 hidden 不一致时改写（取消隐藏会把 st.is_system 改成 false），保证没动过的行往返不变。
  *                                        规则见 src/chatfile.js 文件头。
  *   行.extra.smalltalk.memory / memoryError ↔ ChatMessage.memory / memoryError
+ *   行.extra.smalltalk.memoryStale     ↔ ChatMessage.memoryStale（「原文改过」；只认 true。在酒馆里改了原文再导回来不会自动打上——酒馆不知道这个标记）
  *   行.extra.smalltalk.memoryMerged / memoryIn ↔ ChatMessage.memoryMerged / memoryIn（记忆再压缩；只看形状：对象 / true。
  *                                        在酒馆里删楼、换候选之后导回来，数不齐成员的段在打开存档时被清掉，那几轮重压——不做指纹，同 memory 的已知局限）
  *                                        （放在 extra 下我们自己的命名空间里；酒馆会原样保留 extra 中不认识的键）

@@ -429,7 +429,7 @@ export function setAuthorNote(patch) {
 //   - 用户操作（第二段的界面调）：addChatHighlight / removeChatHighlight / setChatHighlightNote —— 自己 save()。
 //     拦截（只读、生成中、恢复中、停止保存、正在切换）由调用方先判断（chat.js chatWriteBlocked），同 setAuthorNote。
 //   - 原文变了 / 删了楼的钩子：highlightsAfterEdit / highlightsAfterDelete / highlightsAfterTruncate / clearChatHighlights ——
-//     【不】save()，调用方改完聊天自己会存（它们和 invalidateTurnAt 挂在同一批入口上：chat.js、frame-host.js）。
+//     【不】save()，调用方改完聊天自己会存（它们和记忆的 markTurnEdited / invalidate* 挂在同一批入口上：chat.js、frame-host.js）。
 
 /** 当前存档的划线（没有 = []）。不要原地改返回的数组 */
 export const currentHighlights = () => persist.chatMeta?.highlights ?? [];

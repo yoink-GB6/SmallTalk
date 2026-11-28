@@ -127,7 +127,7 @@ export function resolveSource(s) {
             set: text => { setAuthorNote({ prompt: text }); },
         };
     }
-    // 聊天的一楼：同编辑消息的「保存」（chat.js editMessageText：永久改写正则、候选同步、记忆摘要作废、存盘重画）。
+    // 聊天的一楼：同编辑消息的「保存」（chat.js editMessageText：永久改写正则、候选同步、记忆打「原文改过」（不作废）、存盘重画）。
     // 输入框里还没发出去的那一句（楼层号 = 现有楼数）不可改
     if (s.kind === 'chat') {
         const i = Number(s.id);

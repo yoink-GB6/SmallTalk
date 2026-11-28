@@ -28,7 +28,7 @@ import { renderMiscLog } from './tab-misc.js';
 import { ensureMemories } from './memory.js';   // 循环依赖（memory.js 经 pipeline.js 间接导入本文件）：只在函数体里调用
 import { forwardFrameEvent, emitTavernEvent } from './script-host.js';   // 循环依赖：只在函数体里调用
 import { renderScriptLog } from './tab-scripts.js';      // 同上
-import { invalidateTurnAt, invalidateAfterDelete, isHidden, setHidden } from '../memory-fold.js';
+import { markTurnEdited, invalidateAfterDelete, isHidden, setHidden } from '../memory-fold.js';
 import { resolveMessageId } from '../frame-args.js';
 import { parseSlash } from '../slash-parse.js';
 import { varOps } from '../vars-ops.js';
@@ -301,10 +301,11 @@ const hostImpl = {
         }
         for (const { u, i } of list) {
             const m = state.chat[i];
-            // 原文真的变了：这一轮的摘要作废重压（和手动编辑同一条规则，见 memory-fold.js）
+            // 原文真的变了：和手动编辑同一条规则（2026-11-29）——外置记忆不作废、不重压、不发请求，
+            // 这一轮已经压好的话只打「原文改过」（memory-fold.js markTurnEdited）。所以也不用 ensureMemories：没有哪一轮因此变成待压缩
             if (typeof u.message === 'string') {
                 // 划线跟着平移 / 删掉，和界面上的编辑同一条规则（state.js highlightsAfterEdit）
-                if (m.content !== u.message) { const before = m.content; m.content = u.message; invalidateTurnAt(state.chat, i); highlightsAfterEdit(i, before, m.content); setTimeout(ensureMemories, 0); }
+                if (m.content !== u.message) { const before = m.content; m.content = u.message; markTurnEdited(state.chat, i); highlightsAfterEdit(i, before, m.content); }
                 ui.rendered.delete(i);
             }
             // data = 这一楼当前候选的楼层变量（整张换掉；酒馆助手 setChatMessages 也是整张换）。不碰原文，所以不作废记忆
@@ -320,7 +321,8 @@ const hostImpl = {
                 const greeting = [c.firstMes, ...c.alternateGreetings].filter(Boolean)[u.swipe_id];
                 if (greeting != null) {
                     const text = permanentRegex(substitute(greeting, macroContext([], state.variables)), 'assistant');
-                    if (m.content !== text) { const before = m.content; m.content = text; invalidateTurnAt(state.chat, 0); highlightsAfterEdit(0, before, text); setTimeout(ensureMemories, 0); }
+                    // 换开场白也是「脚本改原文」：同上，只打「原文改过」
+                    if (m.content !== text) { const before = m.content; m.content = text; markTurnEdited(state.chat, 0); highlightsAfterEdit(0, before, text); }
                     ui.rendered.delete(0);
                     $('#greeting-select').value = String(u.swipe_id);
                 }
