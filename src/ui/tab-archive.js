@@ -17,9 +17,11 @@ import { detectJsonKind } from '../card.js';
 import { exportCardFile } from './export-st.js';
 import {
     listCards, cardChats, liveChats, openChat, switchCard, newChat, renameChat, deleteChat, exportChat,
-    importChatFile, deleteCard,
+    deleteCard,
 } from './archive.js';
 import { importFiles, importBlockedReason } from './importer.js';   // 循环依赖（importer 导入 archive）：只在函数体里调用
+import { importChatFiles } from './import-chats.js';   // 同上：只在函数体里调用
+import { openImportMenu } from './import-menu.js';
 import { openSearch } from './chat-search.js';   // 「搜索聊天记录」按钮用（只在函数体里调用）
 import { closeDrawer } from './drawer.js';
 import { writerOwnsTab, drawWriter, openWriter, editCard } from './card-writer.js';   // 循环依赖：只在函数体里调用
@@ -53,11 +55,13 @@ let batchBusy = false;        // 批量导出 / 删除正在跑：别重复点
 let batchFmt = 'auto';        // 批量导出的格式：'auto' = 和单张导出一样（有头像 PNG，没有 JSON）；'json' = 全部 JSON
 
 /**
- * 「导入」按钮的文件选择框：只收角色卡（PNG / JSON）和聊天记录（.jsonl，进当前卡的新存档），可多选。
- * 世界书、正则、预设、人设的文件请到各自的页导入。拖文件进页面的总入口（importer.js importFiles）认所有类型，不受这里限制；
- * 这里先按类型挑出合格的，再原样交给 importFiles（阻挡条件、同名卡的询问、提示都在它里面）。
+ * 「导入」按钮点开的菜单有两项，各有一个文件选择框：
+ *   导入角色 → importPicker：只收角色卡（PNG / JSON），可多选。世界书、正则、预设、人设的文件请到各自的页导入。
+ *     拖文件进页面的总入口（importer.js importFiles）认所有类型，不受这里限制；这里先按类型挑出合格的，
+ *     再原样交给 importFiles（阻挡条件、同名卡的询问、提示都在它里面）。
+ *   导入聊天记录 → chatPicker：只收 .jsonl，可多选；每个文件按角色名自动对到卡（import-chats.js）。
  */
-const importPicker = h('input', { type: 'file', id: 'archive-import-input', accept: '.png,.json,.jsonl', multiple: true, hidden: true });
+const importPicker = h('input', { type: 'file', id: 'archive-import-input', accept: '.png,.json', multiple: true, hidden: true });
 importPicker.addEventListener('change', async () => {
     const files = [...importPicker.files];
     importPicker.value = '';
@@ -76,12 +80,11 @@ importPicker.addEventListener('change', async () => {
     if (good.length) await act(() => importFiles(good));
 });
 
-/** 给 .jsonl 导入用的文件选择框（只有一个，点哪张卡的「导入」就把目标卡 id 记在上面） */
-const picker = h('input', { type: 'file', id: 'archive-file-input', accept: '.jsonl', hidden: true });
-picker.addEventListener('change', () => {
-    const file = picker.files[0], cardId = picker.dataset.card;
-    picker.value = '';
-    if (file) act(() => importChatFile(file, cardId));
+const chatPicker = h('input', { type: 'file', id: 'archive-file-input', accept: '.jsonl', multiple: true, hidden: true });
+chatPicker.addEventListener('change', () => {
+    const files = [...chatPicker.files];
+    chatPicker.value = '';
+    if (files.length) act(() => importChatFiles(files));   // 能不能导（只读 / 生成中…）由 importChatFiles 查并提示
 });
 
 // ───────────────────────────── 读和画 ─────────────────────────────
@@ -186,8 +189,11 @@ function draw() {
     // 重画会把按钮换成新的：原来焦点在这一页的哪个按钮上，画完放回去（焦点在别处就不碰）
     const fk = tab.contains(document.activeElement) ? document.activeElement.dataset?.fk : null;
 
-    const importCard = h('button', { class: 'primary', 'data-fk': 'import-card', disabled: ro, title: ro ? RO_TIP : '导入角色卡（PNG / JSON，作为新卡添加）或聊天记录（.jsonl，进当前卡的新存档），可一次选多个。世界书、正则、预设、人设请到各自的页导入；也可以直接把文件拖进页面',
-        onclick: () => importPicker.click() }, '导入');
+    const importCard = h('button', { class: 'primary', 'data-fk': 'import-card', disabled: ro, 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+        title: ro ? RO_TIP : '导入角色（PNG / JSON，作为新卡添加）或聊天记录（.jsonl，按角色名自动放进对应角色卡的新存档），可一次选多个。世界书、正则、预设、人设请到各自的页导入；也可以直接把文件拖进页面',
+        onclick: e => openImportMenu(e.currentTarget, [
+            { label: '导入角色', fk: 'import-menu-card', title: '角色卡（PNG / JSON），作为新卡添加；同名卡会问是否更新', onSelect: () => importPicker.click() },
+            { label: '导入聊天记录', fk: 'import-menu-chat', title: '酒馆的聊天记录（.jsonl），按角色名自动放进对应角色卡的新存档', onSelect: () => chatPicker.click() }]) }, '导入');
     // 聊天内搜索的入口（原来在手机 Settings）：排在这一行最后。窄屏下检查器是盖住聊天区的抽屉，先收起才看得到搜索栏
     const searchBtn = h('button', { id: 'misc-search-btn', 'data-fk': 'misc-search', type: 'button', title: '在当前存档里搜索',
         onclick: () => { closeDrawer(); openSearch(); } }, '搜索聊天记录');
@@ -223,7 +229,7 @@ function draw() {
             h('span', { class: 'dim' }, `${cards.length} 张卡 · ${total} 个存档`)));
         kids.push(...cards.map(c => cardBlock(c, ro)));
     }
-    kids.push(picker, importPicker);
+    kids.push(chatPicker, importPicker);
     // 开场白下拉框 #greeting-select 是全页唯一的常驻元素（别处直接读它的值）：重画前先挪回 index.html 里的停放处，
     // 免得被 replaceChildren 一起丢掉；cardBlock 给当前卡那一行画好后再把它挪进去（做法同人设页的 #persona-fields）
     const sel = $('#greeting-select'), home = $('#greeting-home');
@@ -332,7 +338,6 @@ function cardBlock(c, ro) {
         actionBtn('新对话', `给「${c.name}」新开一个存档并切过去`, `new:${c.id}`, ro, () => act(() => newChat(c.active ? (Number($('#greeting-select').value) || 0) : 0, c.id))),
         // 当前卡这一行的开场白下拉框落脚处（draw 里把 #greeting-select 挪进来；只有一个开场白时它自己是 hidden 的）
         c.active ? h('span', { class: 'arch-greeting-slot' }) : null,
-        actionBtn('导入', `导入酒馆的聊天记录（.jsonl），作为「${c.name}」的新存档并切过去`, `import:${c.id}`, ro, () => { picker.dataset.card = c.id; picker.click(); }),
         // 写卡页改这张卡（card-writer.js editCard：不是当前卡先切过去，聊天区当预览；切换被拒就留在这一页）
         actionBtn('编辑', `在写卡页改「${c.name}」的名字、头像、人设、开场白${c.active ? '' : '（会先切到这张卡）'}`, `edit:${c.id}`, ro, () => act(() => editCard(c.id))),
         // 每卡的导出 / 删除按钮收进了顶上的「批量」。这个位置显示这张卡最后聊天的日期（没有存档记录就不显示）

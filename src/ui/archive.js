@@ -833,11 +833,14 @@ export async function exportChat(cardId = persist.cardId, chatId = persist.chatI
  * 一个 .jsonl 变成某张卡（默认当前卡）下的一个新存档，并切过去。
  * 导进另一张卡（cardId）：同一个 op 里，文件确认能读之后才先切到那张卡（activateCard，和切换卡一样），再照常导入；
  * 文件读不出来就不切。
+ * 一次导好几个文件时（import-chats.js）：quiet = true 不弹每个文件自己的提示（由调用方汇总），结果写进 out：
+ *   成功时 out.chatId / out.count，读不出来时 out.why（人话原因）。
  */
-export const importChatFile = (file, cardId = persist.cardId) => op(async () => {
+export const importChatFile = (file, cardId = persist.cardId, { quiet = false, out = {} } = {}) => op(async () => {
     const parsed = parseChatFile(await file.text());
     if (!parsed.messages.length && !Object.keys(parsed.stHeader).length) {
-        toast(`「${file.name}」里没有读出任何消息，不像酒馆的聊天记录`, 'error');
+        out.why = `「${file.name}」里没有读出任何消息，不像酒馆的聊天记录`;
+        if (!quiet) toast(out.why, 'error');
         return;
     }
     if (cardId && cardId !== persist.cardId) {
@@ -859,6 +862,8 @@ export const importChatFile = (file, cardId = persist.cardId) => op(async () => 
     persist.cardMeta.activeChatId = rec.id;
     await flushNow();
     redraw();
+    out.chatId = rec.id; out.count = parsed.messages.length;
+    if (quiet) return;
 
     const bits = [`已导入 ${parsed.messages.length} 楼`];
     if (parsed.warnings.length) bits.push(`${parsed.warnings.length} 处问题已跳过（详见控制台）`);

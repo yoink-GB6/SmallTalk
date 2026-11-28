@@ -1296,3 +1296,12 @@ details[open] > .scr-head::before { content: '▾'; }
 .cw-pick-list { display: flex; flex-direction: column; gap: 4px; }
 .cw-pick-item { display: flex; align-items: center; gap: 8px; min-width: 0; text-align: left; padding: 6px 8px; }
 .cw-pick-item .arch-name { min-width: 0; }
+
+/* ── 存档页「导入」点开的小菜单（src/ui/import-menu.js）和「这个聊天记录导进哪张卡」选择框（src/ui/import-chats.js），2026-11-28 追加 ── */
+.import-menu { position: fixed; z-index: 26; display: flex; flex-direction: column; min-width: 150px; max-width: calc(100vw - 16px); padding: 4px; background: var(--panel); border: var(--border-width) solid var(--line); border-radius: var(--radius-card); box-shadow: var(--shadow-dialog); }
+.import-menu-item { text-align: left; white-space: nowrap; min-height: 36px; border: 0; background: transparent; }
+.import-menu-item:hover, .import-menu-item:focus-visible { background: var(--panel-2); }
+@media (pointer: coarse) { .import-menu-item { min-height: 44px; } }
+.ic-pick-list { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.ic-pick-item { display: flex; align-items: center; gap: 8px; min-width: 0; text-align: left; padding: 6px 8px; }
+.ic-pick-item .arch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

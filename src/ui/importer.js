@@ -9,11 +9,12 @@ import { cleanPresetBody, cleanRegexList, uniquePresetName } from '../migrate.js
 import { sanitizeNotice } from '../preset-sanitize.js';
 import { replaceBookEntries, cardBookNameOf } from '../books.js';
 import { parseCardScripts, flattenScripts } from '../scripts.js';
-import { addCard, importChatFile } from './archive.js';
+import { addCard } from './archive.js';
 import { renderAll } from './shell.js';
 import { importPersonasJson } from './tab-persona.js';   // 循环依赖：只在函数体里调用
 import { importTavernZip } from './tavern-ui.js';         // 同上：只在函数体里调用
-import { restoreActive } from './backup.js';             // 同上：只在函数体里调用
+import { importChatFiles } from './import-chats.js';   // 同上：只在函数体里调用
+import { restoreActive } from './backup.js';            // 同上：只在函数体里调用
 
 // ───────────────────────────── 导入 ─────────────────────────────
 
@@ -34,6 +35,7 @@ export function importBlockedReason() {
 export async function importFiles(files) {
     const why = importBlockedReason();
     if (why) return void toast(why, 'error');
+    const chatFiles = [];   // .jsonl 聊天记录：其余文件处理完后一起交给 importChatFiles（按角色名对到卡，同名 / 对不上时弹选择框）
     for (const file of files) {
         try {
             // 酒馆的整体备份 .zip：交给手机 Settings 的同一条导入路线（预览、勾选、一个事务写入，见 tavern-ui.js）
@@ -41,9 +43,9 @@ export async function importFiles(files) {
                 await importTavernZip(file);
                 continue;
             }
-            // 酒馆聊天记录：变成当前卡下的一个新存档（按扩展名判断，内容是一行一个 JSON，整体不是合法 JSON）
+            // 酒馆聊天记录：按角色名自动对到卡，变成那张卡的新存档（按扩展名判断，内容是一行一个 JSON，整体不是合法 JSON）
             if (/\.jsonl$/i.test(file.name)) {
-                await importChatFile(file);
+                chatFiles.push(file);
                 continue;
             }
             if (/\.png$/i.test(file.name) || file.type === 'image/png') {
@@ -110,6 +112,7 @@ export async function importFiles(files) {
     ui.rendered.clear();
     save();
     renderAll();
+    if (chatFiles.length) await importChatFiles(chatFiles);
 }
 
 /** 导入角色卡：新增一张卡并切过去（同名时 archive.addCard 会问是更新还是另存），不会覆盖别的卡和存档 */
