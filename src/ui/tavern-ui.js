@@ -1,4 +1,4 @@
-// 「杂项」页的「和酒馆整体互通」：从酒馆的整体备份 zip 导入、把我们的数据导出成酒馆的目录结构（zip）。
+// 手机 Settings 的「和酒馆整体互通」：从酒馆的整体备份 zip 导入、把我们的数据导出成酒馆的目录结构（zip）。
 // 转换是 src/tavern-convert.js 的纯函数；zip 读写在 src/zip.js；目录规则在 src/tavern-backup.js。这里只管弹框、进度、落盘的时机。
 //
 // ── 导入（importTavernZip）── 一共只有一次写入，在最后：
@@ -256,7 +256,7 @@ function resultToast(s, conv) {
 const EMPTY_SUMMARY = { cardsAdded: 0, cardsMerged: 0, chatsAdded: 0, chatsDup: 0, presetsAdded: 0, presetsDup: 0, personasAdded: 0, personasDup: 0,
     booksAdded: 0, booksDup: 0, booksRenamed: 0, booksRebound: 0, regexAdded: 0, regexDup: 0, settingsApplied: [], renamed: [], skipped: [], notes: [], worldKept: [], worldReenabled: [] };
 
-/** 选了一个 .zip（「杂项」页的按钮，或者拖进页面） */
+/** 选了一个 .zip（手机 Settings 的按钮，或者拖进页面） */
 export async function importTavernZip(file) {
     if (busy) return void toast('上一个酒馆导入 / 导出还没做完', 'error');
     const why = restoreBlocked();
@@ -409,7 +409,7 @@ function tavernPicker() {
     return picker;
 }
 
-/** 「杂项」页的「和酒馆整体互通」一节（tab-misc.js 每次重画时调用，放在「整体备份」后面） */
+/** 手机 Settings 的「和酒馆整体互通」一节（tab-misc.js 每次重画时调用，放在「整体备份」后面） */
 export function tavernSection() {
     const ro = persist.readOnly;
     return h('div', { class: 'bkx-section', 'data-fk': 'tavern-section' },

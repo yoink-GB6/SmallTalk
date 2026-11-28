@@ -403,7 +403,7 @@ export function showGenError(message) {
         : /safeguards flagged|usage policy|legal\/aup/i.test(text)
         ? '这是模型一侧拒绝了这次请求的内容，不是程序出错。常见原因是预设里的条目；可以在「预设」页关掉部分条目后重试，或换一个预设。'
         : /找不到 claude|SMALLTALK_CLAUDE/.test(text)
-            ? '模型桥没找到 claude 可执行文件。可以先开「杂项」页里的「手动模式」。'
+            ? '模型桥没找到 claude 可执行文件。可以先开手机 Settings 里的「手动模式」。'
             : /找不到这个接口|还没配置好|没有选择模型/.test(text)
                 ? '到右侧「接口」页检查这个接口（地址 / API Key 是否填全、接口是否还在），再在「接口」页顶部的「聊天用的模型」里重新选一个模型，然后点「重新生成」。'
             : '可以点「重新生成」再试一次；拼好的内容在右侧「拼装」页，也可以用「手动模式」。';

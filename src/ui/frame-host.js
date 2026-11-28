@@ -445,7 +445,7 @@ export function callHost(method, args, ctx) {
  */
 export const hostMethods = Object.fromEntries(HOST_METHOD_NAMES.map(name => [name, (...args) => hostImpl[name](ANON, ...args)]));
 
-/** 日志的总条数上限（前端卡和脚本合在一起；「杂项」页显示最后 120 条，「脚本」页只显示脚本的） */
+/** 日志的总条数上限（前端卡和脚本合在一起；手机 Settings 显示最后 120 条，「脚本」页只显示脚本的） */
 const LOG_LIMIT = 500;
 
 export const frameHost = {

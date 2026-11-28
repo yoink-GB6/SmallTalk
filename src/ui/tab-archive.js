@@ -188,14 +188,14 @@ function draw() {
 
     const importCard = h('button', { class: 'primary', 'data-fk': 'import-card', disabled: ro, title: ro ? RO_TIP : '导入角色卡（PNG / JSON，作为新卡添加）或聊天记录（.jsonl，进当前卡的新存档），可一次选多个。世界书、正则、预设、人设请到各自的页导入；也可以直接把文件拖进页面',
         onclick: () => importPicker.click() }, '导入');
-    // 聊天内搜索的入口（原来在「杂项」页）：排在这一行最后。窄屏下检查器是盖住聊天区的抽屉，先收起才看得到搜索栏
+    // 聊天内搜索的入口（原来在手机 Settings）：排在这一行最后。窄屏下检查器是盖住聊天区的抽屉，先收起才看得到搜索栏
     const searchBtn = h('button', { id: 'misc-search-btn', 'data-fk': 'misc-search', type: 'button', title: '在当前存档里搜索',
         onclick: () => { closeDrawer(); openSearch(); } }, '搜索聊天记录');
     // 「写卡」（card-writer.js）：排在这一行最前面。新建一张空白卡（已经有一张没动过的空白卡就打开它）并进写卡页；改已有的卡用每行的「编辑」。
     // 只读标签页里禁用（写卡页里全是写操作），和这一页别的操作按钮一样
     const writeBtn = h('button', { 'data-fk': 'card-writer', type: 'button', disabled: ro,
         title: ro ? RO_TIP : '写卡：新建一张空白角色卡并打开写卡页（已经有一张没动过的空白卡时直接打开它）', onclick: () => act(openWriter) }, '写卡');
-    // 整体备份 / 恢复在「杂项」页（src/ui/backup.js 的 backupSection），这一页不再有备份那一行
+    // 整体备份 / 恢复在手机 Settings（src/ui/backup.js 的 backupSection），这一页不再有备份那一行
     const kids = [];
     if (!cards.length) {
         kids.push(h('div', { class: 'empty' }, '还没有角色卡。导入一张 PNG / JSON 角色卡后，它和它的聊天存档会按卡列在这里；'

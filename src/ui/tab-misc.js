@@ -1,4 +1,5 @@
-// 检查器「杂项」页：手动模式、变量、前端卡日志、整体备份、清空数据。
+// 手机 Settings 里的内容（原来右侧检查器的「杂项」页，整页搬进了手机，节点是 index.html 的 #tab-misc）：
+// 主题、手动模式、整体备份、酒馆互通、变量、前端卡日志、安装到主屏幕、清空数据。
 // 「手动模式」勾选框是 index.html 里的常驻控件（事件在 src/app.js，值由 shell.js 的 renderTopbar 同步），
 // 这里只画后面那一大段（#misc-rest）。「我叫」和人设描述已经挪到「人设」页（tab-persona.js）。
 
@@ -11,7 +12,7 @@ import { backupSection } from './backup.js';   // 「整体备份」一节（备
 import { tavernSection } from './tavern-ui.js'; // 「和酒馆整体互通」一节（酒馆整体备份 zip 的导入 / 导出成酒馆目录结构；逻辑都在 tavern-ui.js）
 import { pwaSection } from './pwa-ui.js';       // 「安装到主屏幕」一节（只在网页版显示；逻辑在 pwa-ui.js / src/pwa.js）
 
-// ───────────────────────────── 检查器：杂项 ─────────────────────────────
+// ───────────────────────────── 手机 Settings（原「杂项」页） ─────────────────────────────
 
 export function renderMiscTab() {
     const vars = ui.preview?.variables ?? state.variables;

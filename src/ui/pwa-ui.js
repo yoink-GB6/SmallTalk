@@ -1,4 +1,4 @@
-// 「杂项」页的「安装到主屏幕」一节 + "有新版本"的常驻提示。状态和浏览器接口都在 src/pwa.js，这里只画界面、守住数据。
+// 手机 Settings 的「安装到主屏幕」一节 + "有新版本"的常驻提示。状态和浏览器接口都在 src/pwa.js，这里只画界面、守住数据。
 // 只在网页版（direct 后端）显示；本地版这一节是空的、隐藏的。
 //
 // 重载（切换到新版本）时数据是怎么保住的——确认过的事实：
@@ -57,7 +57,7 @@ function restoreDraft() {
     }
 }
 
-/** 用户点"更新到新版本"（「杂项」页的按钮或常驻提示） */
+/** 用户点"更新到新版本"（手机 Settings 的按钮或常驻提示） */
 async function startUpdate() {
     const why = reloadBlocker();
     if (why) { toast(why, 'error'); return; }
@@ -79,7 +79,7 @@ function paintBanner(s) {
     document.body.classList.toggle('pwa-has-update', show);
 }
 
-// ───────────────────────────── 「杂项」页那一节 ─────────────────────────────
+// ───────────────────────────── 手机 Settings 那一节 ─────────────────────────────
 
 /** 给 tab-misc.js 用：返回这一节的容器（同步返回，内容按当前状态画；状态变了自己重画） */
 export function pwaSection() {
@@ -141,7 +141,7 @@ async function onPersist() {
     await requestPersist();   // 结果记在状态里，'change' 事件会把这一节重画出来
 }
 
-/** 状态变了：重画常驻提示，以及「杂项」页里这一节（如果它正挂在页面上） */
+/** 状态变了：重画常驻提示，以及手机 Settings 里这一节（如果它正挂在页面上） */
 function repaint() {
     const s = getPwaState();
     paintBanner(s);

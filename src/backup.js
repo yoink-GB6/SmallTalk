@@ -10,7 +10,7 @@
 // 重复导入同一个文件要幂等：内容相同的东西认出来就跳过（判定规则见下面的 cardSig / chatSig / presetSig）。
 
 //
-// 「整体备份」（「杂项」页）：导出就是全部，没有勾选。备份里带 API key（只有网页版能带）时整个文件必须加密，
+// 「整体备份」（手机 Settings）：导出就是全部，没有勾选。备份里带 API key（只有网页版能带）时整个文件必须加密，
 // 加密在 src/backup-crypto.js；这里只负责「明文的备份对象」以及识别「这是一个加密的备份」。
 
 import { normalizeCard, makeUniqueNamer, buildIndex, indexEntry, isLegacyGlobal, isPristineGlobal, NON_GLOBAL_KEYS, UNSAFE_KEYS, cleanBooks, cleanRegexList, cleanPresetBody } from './migrate.js';

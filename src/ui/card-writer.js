@@ -418,13 +418,15 @@ let previewChat = false;
 function schedulePreview(chat) {
     clearTimeout(previewTimer);
     previewChat ||= chat;
-    const cardId = persist.cardId;
+    const cardId = persist.cardId, epoch = persist.epoch;
     previewTimer = setTimeout(() => {
         const doChat = previewChat;
         previewChat = false;
         if (persist.cardId !== cardId || !state.card) return;
         let updated = false;
-        if (doChat) {
+        // 到点时已经换了存档（同一张卡的另一个存档）：不去重建那个存档的第 0 楼——这次改动是在原来那个存档上做的预览，
+        // 不该落到切过去的存档上（和 commitFloor0 核对 epoch 是一个道理）；顶栏、下拉框照常重画
+        if (doChat && persist.epoch === epoch) {
             const slot = trackedSlot();
             const list = greetingList(state.card);
             const fi = slot === 'auto' ? (list.some(Boolean) ? 0 : -1) : slot === null ? -1 : filteredIndex(list, slot);

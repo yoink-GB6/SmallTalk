@@ -13,6 +13,7 @@ import { renderScriptsTab } from './tab-scripts.js';
 import { renderMemoryTab } from './memory.js';
 import { renderExcerptsTab } from './tab-excerpts.js';
 import { renderMiscTab } from './tab-misc.js';
+import { isSettingsShown } from './phone/phone.js';
 import { renderPersonaTab } from './tab-persona.js';
 import { renderProviderTab, refreshHealth, paintChatWarn } from './tab-provider.js';
 import { renderModelPicker } from './model-picker.js';
@@ -26,7 +27,7 @@ export function renderTopbar() {
     $('#card-chip').replaceChildren(
         ...[state.avatar ? h('img', { src: state.avatar, alt: '' }) : null,
             h('span', { class: state.card ? 'chip-name' : 'chip-name dim' }, state.card ? c.name : '未导入角色卡')].filter(Boolean));
-    // 「我叫」输入框在「人设」页、「手动模式」勾选框在「杂项」页（index.html 里都是常驻的，不随页签重画）；这里只负责把值同步进去。
+    // 「我叫」输入框在「人设」页、「手动模式」勾选框在手机的 Settings 里（index.html 里都是常驻的，不随页签重画）；这里只负责把值同步进去。
     // 正在输入时不覆盖：后台触发的 renderAll 会把用户打到一半的名字冲掉
     const nameInput = $('#persona-name');
     if (document.activeElement !== nameInput) nameInput.value = state.persona.name;
@@ -56,6 +57,9 @@ export function paintManualBadge() {
 
 /** @param {boolean} [force]  只对「接口」页有意义：它平时不跟着后台重画走（见 tab-provider.js），force 才重建 */
 export function renderInspector(force = false) {
+    // 手机里的 Settings（原来的「杂项」页）：开着才重画（不可见时白画没意义；打开时 phone.js 的 onPhoneView 会补一次，不会读到旧内容）。
+    // 它的内容不是文本框（备份的密码框在页内弹框里），但变量框等会被后台状态变化刷新，所以和别的页一样每次都画
+    if (isSettingsShown()) renderMiscTab();
     const active = $('#tabs button.active')?.dataset.tab ?? 'archive';
     // 正在这一页的文本框里打字时不要整页重画：重画会把文本框换成新的，光标就丢了。
     // 只更新变量显示；等焦点离开文本框后（见 bind 里的 focusout）再补一次完整重画。
@@ -66,7 +70,7 @@ export function renderInspector(force = false) {
         return;
     }
     ({ prompt: renderPromptTab, world: renderWorldTab, persona: renderPersonaTab, archive: renderArchiveTab, preset: renderPresetTab, regex: f => { renderRegexTab(f); renderScriptsTab(f); },   // 脚本区并在「正则」页下面（各画各的容器）
-         memory: renderMemoryTab, excerpts: renderExcerptsTab, provider: renderProviderTab, misc: renderMiscTab })[active](force === true);
+         memory: renderMemoryTab, excerpts: renderExcerptsTab, provider: renderProviderTab })[active](force === true);
 }
 
 export function renderAll() {

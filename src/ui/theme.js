@@ -1,4 +1,4 @@
-// 主题切换：「杂项」页最上面的下拉框 #theme-select。
+// 主题切换：手机 Settings（原来的「杂项」页）最上面的下拉框 #theme-select。只有这一个下拉框。
 //
 // 机制：<html data-theme="…">。「默认」= 不设这个属性，用 style.css :root 里的值；别的主题是 style.css 里的 `:root[data-theme="xxx"] { …覆盖变量… }`。
 // 选了哪个记在 localStorage['smalltalk.theme']：这是「这台设备的界面偏好」，不进 IndexedDB、不进整体备份（登记见 src/data-inventory.js 末尾）。
@@ -24,13 +24,10 @@ export function applyTheme(id) {
 /** 当前生效的主题 id（以 <html> 上的属性为准；没有就是默认） */
 export const currentTheme = () => themeOrDefault(document.documentElement.getAttribute('data-theme') ?? DEFAULT_THEME);
 
-/** 所有主题下拉框：「杂项」页的 #theme-select，加上用 bindThemeSelect 登记过的（手机 Settings 里那个）。它们永远同步 */
-const themeSelects = () => document.querySelectorAll('#theme-select, select[data-theme-select]');
-
-/** 按清单（重新）填所有主题下拉框并选中当前主题。清单变了（测试里临时加一项）可以再调一次 */
+/** 按清单（重新）填主题下拉框并选中当前主题。清单变了（测试里临时加一项）可以再调一次 */
 export function fillThemeSelect() {
-    const cur = currentTheme();
-    for (const sel of themeSelects()) fillOne(sel, cur);
+    const sel = document.querySelector('#theme-select');
+    if (sel) fillOne(sel, currentTheme());
 }
 function fillOne(sel, cur) {
     sel.replaceChildren(...THEMES.map(t => {
@@ -81,11 +78,4 @@ function chooseTheme(value) {
     applyTheme(next);
     writeStored(next);
     fillThemeSelect();
-}
-
-/** 把另一个下拉框也接上同一套主题逻辑（手机的 Settings 用）：填选项、选了就走 chooseTheme；之后和「杂项」页那个互相同步 */
-export function bindThemeSelect(sel) {
-    sel.dataset.themeSelect = '1';
-    fillOne(sel, currentTheme());
-    sel.addEventListener('change', () => chooseTheme(sel.value));
 }

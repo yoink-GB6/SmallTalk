@@ -15,7 +15,8 @@ import { refreshEndpoints } from './ui/tab-provider.js';
 import { initArchive, bindArchive, newChat } from './ui/archive.js';
 import { initDrawer } from './ui/drawer.js';
 import { initTheme } from './ui/theme.js';
-import { initPhone } from './ui/phone/phone.js';
+import { initPhone, openSettings, onPhoneView } from './ui/phone/phone.js';
+import { renderMiscTab } from './ui/tab-misc.js';
 import { bindPersonaTab } from './ui/tab-persona.js';
 import { initPwaUi } from './ui/pwa-ui.js';
 import { bindChatSearch } from './ui/chat-search.js';
@@ -58,7 +59,7 @@ function bind() {
     $('#manual-mode').addEventListener('change', e => { state.manual = e.target.checked; save(); paintManualBadge(); });
     // 几个「点一下去某一页」的小入口（窄屏下 drawer.js 会顺带把抽屉打开）
     const gotoTab = name => () => document.querySelector(`#tabs button[data-tab="${name}"]`).click();
-    $('#manual-badge').addEventListener('click', gotoTab('misc'));
+    $('#manual-badge').addEventListener('click', () => openSettings('#misc-manual'));   // 手动模式开关在手机的 Settings 里：打开手机、滚到「手动模式」那一节
     $('#chat-warn').addEventListener('click', gotoTab('provider'));
     $('#chat-empty-archive').addEventListener('click', gotoTab('archive'));
 
@@ -106,8 +107,9 @@ function bind() {
 await initArchive();
 bind();
 initDrawer();
-initPhone();          // 手机壳（空壳，只有外观和导航；顶栏的手机图标接在这里）
-initTheme();          // 「杂项」页最上面的主题下拉框（<html data-theme> 的首屏设置在 index.html 的内联脚本里）
+initPhone();          // 手机壳（顶栏的手机图标接在这里；Settings 应用里装着原来的「杂项」页）
+onPhoneView(v => { if (v === 'settings') renderMiscTab(); });   // 每次进入 Settings 都重画一遍，保证不是旧内容
+initTheme();          // Settings 里的主题下拉框（<html data-theme> 的首屏设置在 index.html 的内联脚本里）
 bindArchive();
 bindChatSearch();     // 聊天区工具栏的「搜索」
 bindHighlights();      // 划线：选中文字出按钮、画高亮、点高亮出备注浮层（src/ui/highlight-ui.js）
