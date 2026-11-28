@@ -16,6 +16,7 @@ import { chatKey } from '../migrate.js';
 import { parseChatFile } from '../chatfile.js';
 import { matchChatToCards, summarizeChatImport } from '../chat-match.js';
 import { listCards, importChatFile, openChat } from './archive.js';
+import { closePhone } from './phone/phone.js';
 import { importBlockedReason } from './importer.js';   // 循环依赖（importer 导入本文件）：只在函数体里调用
 
 let running = false;   // 一批还没做完（选择框开着也算）：不接第二批
@@ -103,6 +104,7 @@ export async function importChatFiles(files) {
                 if (gate) { r.failed.push({ file: file.name, why: gate }); if (!multi) toast(gate, 'error'); continue; }
                 const out = {};
                 const ok = await importChatFile(file, cardId, { quiet: multi, out });
+                if (ok && out.chatId && !multi) closePhone();   // 切到了新存档：收起手机，露出新的聊天（多个文件不切，留在 Meetup 看汇总）
                 if (ok && out.chatId) {
                     const c = cards.find(x => x.id === cardId);
                     const cur = r.imported.get(cardId) ?? { name: c?.name ?? '?', n: 0 };

@@ -9,13 +9,14 @@
 import { h } from '../dom.js';
 import { icon } from './icons.js';
 
-/** kind: 'view' = 点了进它自己的画面；'exit' = 点了收起手机、露出后面原来的 RP 画面（Meetup） */
+/** kind: 'view' = 点了进它自己的画面；'exit' = 点了直接收起手机、露出后面的 RP 画面（现在没有应用用它，留着备用） */
 export const APPS = [
     { id: 'settings', name: 'Settings', icon: 'settings', kind: 'view' },
     { id: 'chat', name: 'Chat', icon: 'chat', kind: 'view' },
     { id: 'music', name: 'Music', icon: 'music', kind: 'view' },
     { id: 'reading', name: 'Reading', icon: 'reading', kind: 'view' },
-    { id: 'meetup', name: 'Meetup', icon: 'meetup', kind: 'exit' },
+    { id: 'meetup', name: 'Meetup', icon: 'meetup', kind: 'view' },        // 原来的「存档」页：在这里选角色 / 存档，再进入 RP
+    { id: 'clippings', name: 'Clippings', icon: 'clippings', kind: 'view' },   // 原来的「摘抄」页
 ];
 
 /** 空白应用画面里的那句话（简短自然就行，以后换成真内容时整段删掉） */
@@ -47,6 +48,16 @@ export function buildAppView(app, goHome) {
                 h('div', { class: 'ph-set-list ph-wall-row' },
                     h('div', { class: 'ph-set-row ph-set-todo' }, h('span', { class: 'ph-set-name' }, '壁纸'), h('span', { class: 'dim' }, '以后在这里换'))));
             body.append(misc);
+        }
+    } else if (app.id === 'meetup' || app.id === 'clippings') {
+        // 和 Settings 同一个做法：把右侧面板里原来的页（#tab-archive「存档」/ #tab-excerpts「摘抄」）的节点本身挪进来，id / data-fk 一律不变，
+        // 渲染函数（tab-archive.js renderArchiveTab / tab-excerpts.js renderExcerptsTab）一行没改，认的还是这个节点。
+        // class 'tab' 是右侧面板「一次显示一页」的机制，搬进来后去掉；加 ph-settings（让页内按钮保持页面通用的样子，不被手机的按钮重置规则抹掉）和 ph-page。
+        const page = document.querySelector(app.id === 'meetup' ? '#tab-archive' : '#tab-excerpts');
+        if (page) {
+            page.classList.remove('tab', 'active');
+            page.classList.add('ph-settings', 'ph-page');
+            body.append(page);
         }
     } else {
         body.append(h('div', { class: 'ph-empty' }, icon(app.icon), h('p', null, PLACEHOLDER[app.id] ?? '还没做。')));

@@ -39,9 +39,9 @@
 <!-- 顶栏 #top-bar、聊天区 #sheld：酒馆的名字（2026-11-27 从 #topbar / #chat-pane 改的，「允许直接操作页面」的美化 CSS / 脚本按这些名字找元素） -->
 <header id="top-bar">
   <!-- 标题：兼开合右侧面板的按钮（窄屏开合抽屉，宽屏收起 / 展开面板；role / tabindex / aria-expanded / title 由 src/ui/drawer.js 加，
-       前面的 ☰ 图标是 CSS 伪元素，所以 textContent 仍是干净的 "SmallTalk"）。id 沿用 drawer-toggle -->
-  <div id="drawer-toggle" class="brand">SmallTalk</div>
-  <button id="card-chip" class="chip-card" type="button" title="当前角色卡：点这里打开「存档」页，切换 / 管理角色卡和存档"></button>
+       现在只剩一个 ☰（CSS 伪元素画的，所以没有文字；aria-label / title 说明用途）。id 沿用 drawer-toggle。
+       顶栏上原来的「当前卡片名」去掉了：切换角色 / 存档去手机里的 Meetup -->
+  <div id="drawer-toggle" class="brand" aria-label="打开 / 收起右侧面板"></div>
   <span class="spacer"></span>
   <!-- 只在聊天用的模型有问题时出现（见 tab-provider.js 的 paintChatWarn），点它去「接口」页 -->
   <button id="chat-warn" class="mp-warn" type="button" hidden></button>
@@ -73,7 +73,7 @@
       <button id="chat-search-close" class="ghost" type="button" title="关闭（Esc）">✕</button>
     </div>
     <!-- 一张卡都没有、也还没聊过时的引导（src/ui/chat.js 的 renderChatEmpty 控制显示）。放在 #chat 外面：#chat 的子节点是按楼层下标一一对应的 -->
-    <div id="chat-empty" class="empty" hidden>还没有角色卡。把角色卡（PNG / JSON）拖进这个页面，或者打开「<button id="chat-empty-archive" class="linkbtn" type="button">存档</button>」页点「导入」。也可以直接在下面发消息，和 Assistant 聊。</div>
+    <div id="chat-empty" class="empty" hidden>还没有角色卡。把角色卡（PNG / JSON）拖进这个页面，或者打开手机里的「<button id="chat-empty-archive" class="linkbtn" type="button">Meetup</button>」点「导入」。也可以直接在下面发消息，和 Assistant 聊。</div>
     <div id="chat"></div>
     <div id="gen-error" hidden>
       <div class="gen-error-head"><b>这次生成失败了</b><span class="spacer"></span><button id="gen-error-close" class="ghost" title="关闭">✕</button></div>
@@ -105,9 +105,7 @@
 
   <section id="inspector">
     <nav id="tabs">
-      <button data-tab="archive" class="active">存档</button>
-      <button data-tab="memory">记忆</button>
-      <button data-tab="excerpts">摘抄</button>
+      <button data-tab="memory" class="active">记忆</button>
       <button data-tab="persona">人设</button>
       <button data-tab="world">世界书</button>
       <button data-tab="preset">预设</button>
@@ -115,9 +113,10 @@
       <button data-tab="provider">接口</button>
       <button data-tab="prompt">拼装</button>
     </nav>
-    <div id="tab-archive" class="tab active"></div>
-    <div id="tab-memory" class="tab"></div>
-    <!-- 「摘抄」页（src/ui/tab-excerpts.js）：划过的文字，按卡 / 存档分组，每次打开重画 -->
+    <!-- #tab-archive（原「存档」页，现在是手机里的 Meetup）和 #tab-excerpts（原「摘抄」页，现在是手机里的 Highlights）：节点还写在这里，
+         phone/apps.js 启动时把它们挪进手机的对应应用里（和 Settings 的 #tab-misc 一样），所以它们不在右侧面板的页签里了 -->
+    <div id="tab-archive" class="tab"></div>
+    <div id="tab-memory" class="tab active"></div>
     <div id="tab-excerpts" class="tab"></div>
     <!-- 人设页（tab-persona.js）：首行工具条 #persona-bar 和人设列表 #persona-list 每次打开重画；每个人设是一个可折叠的框。
          当前人设的三个输入框 #persona-fields（名字 #persona-name、备注 #persona-remark、描述 #persona-desc）是常驻控件：

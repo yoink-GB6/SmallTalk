@@ -215,7 +215,7 @@ let selTimer = 0;
 
 function ensureBtn() {
     if (btn) return btn;
-    btn = h('button', { class: 'hl-btn', 'data-fk': 'hl-btn', type: 'button', hidden: true, title: '把选中的文字划线（可以加备注，之后在「摘抄」页集中看）' }, '划线');
+    btn = h('button', { class: 'hl-btn', 'data-fk': 'hl-btn', type: 'button', hidden: true, title: '把选中的文字划线（可以加备注，之后在手机里的 Clippings 集中看）' }, '划线');
     // 点按钮不能让选区塌掉：鼠标 / 触摸的「按下」默认会清选区，拦掉；真正的动作在 click 里，用存下的选区副本
     btn.addEventListener('mousedown', e => e.preventDefault());
     btn.addEventListener('touchstart', e => { pressing = true; e.preventDefault(); }, { passive: false });
@@ -322,7 +322,7 @@ function commitSelection() {
     repaintHighlights();
     if (!supported() && !commitSelection.warned) {
         commitSelection.warned = true;
-        toast('已划线。这个浏览器不支持画高亮（需要较新的浏览器），划过的内容可以在「摘抄」页看', 'ok');
+        toast('已划线。这个浏览器不支持画高亮（需要较新的浏览器），划过的内容可以在手机里的 Clippings 看', 'ok');
     }
 }
 

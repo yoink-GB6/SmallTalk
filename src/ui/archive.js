@@ -24,7 +24,7 @@ import {
 import { unbindCardFromBooks } from '../books.js';
 import { startChat, scrollChatToEnd } from './chat.js';
 import { noteChatOpened, emitTavernEvent, forgetTrust } from './script-host.js';   // 循环依赖：只在函数体里调用（酒馆事件：CHAT_CHANGED / CHAT_CREATED / CHAT_DELETED，见 script-host.js syncEpoch）
-import { renderAll, renderTopbar } from './shell.js';
+import { renderAll } from './shell.js';
 import { invalidateArchiveTab } from './tab-archive.js';
 import { askRegexFate, moveAndFlush, undoMove, refreshRegexViews, moveSummary } from './regex-delete.js';
 import { enabledScripts } from '../regex-move.js';
@@ -879,19 +879,9 @@ export const importChatFile = (file, cardId = persist.cardId, { quiet = false, o
 
 // ───────────────────────────── 界面 ─────────────────────────────
 
-/** 切到检查器的「存档」页 */
-export function openArchiveTab() {
-    $('#tabs button[data-tab="archive"]').click();
-}
-
 export function bindArchive() {
-    $('#card-chip').addEventListener('click', openArchiveTab);
     // 存档写完后：「存档」页里的楼数 / 名字跟着刷新（楼数只在写完时更新，生成中的每个 token 不重画整页）
-    // 没卡状态下第一次保存时会建出 Assistant 占位卡：顶栏的卡名也跟着更新（只在需要时重画顶栏，免得打断别处的输入）
-    persist.onFlushed = () => {
-        invalidateArchiveTab();
-        if (state.card && $('#card-chip').textContent !== state.card.name) renderTopbar();
-    };
+    persist.onFlushed = () => { invalidateArchiveTab(); };
     // 关页面前把还在防抖里的改动写下去。pagehide 里发起的 IndexedDB 写入浏览器一般会让它做完，
     // 但不是规范保证（比如进程被直接杀掉）；所以平时的防抖只有 400 ms，最多丢这么一小段。
     addEventListener('pagehide', () => { flushNow(); });

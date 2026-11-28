@@ -32,6 +32,7 @@ import {
 } from '../card-writer.js';
 import { parseCardScripts, flattenScripts } from '../scripts.js';
 import { openBlankCard, switchCard, newChat, refreshGreetingInPlace, chatUntouched, listCards } from './archive.js';   // 循环依赖：只在函数体里调用
+import { closePhoneIfNarrow } from './phone/phone.js';
 import { renderArchiveTab } from './tab-archive.js';                     // 同上
 import { chatWriteBlocked, editMessageText } from './chat.js';           // 同上
 import { macroContext, permanentRegex } from './pipeline.js';            // 同上
@@ -102,7 +103,7 @@ function blocked(act = false) {
 
 const HINTS = {
     name: '角色叫什么。提示词、开场白、世界书里的 {{char}} 都会换成它。改名不会回头改已有存档的名字和已经发出的楼层。',
-    avatar: '可选。顶栏和「存档」页显示用；导出时有头像就导出成 PNG 卡（数据写在这张图里），没有就是 JSON。'
+    avatar: '可选。「Meetup」页的卡列表显示用；导出时有头像就导出成 PNG 卡（数据写在这张图里），没有就是 JSON。'
         + `不裁剪；长边超过 ${AVATAR_MAX_SIDE} 像素的图会等比缩小。`,
     description: '角色是谁：外貌、性格、说话方式、背景、和 {{user}} 的关系。对应酒馆卡的「描述」（description），每次都会发给模型。',
     extras: '按关键词才出现的设定（地点、人物、物品……）放世界书；美化（把回复里的标记换成好看的样子）是这张卡自带的正则。'
@@ -140,13 +141,13 @@ export function drawWriter(tab) {
 }
 
 function buildPage(cardId) {
-    const back = h('button', { 'data-fk': 'cw-back', type: 'button', title: '回到「存档」页', onclick: closeWriter }, '← 返回');
+    const back = h('button', { 'data-fk': 'cw-back', type: 'button', title: '回到 Meetup 的卡列表', onclick: closeWriter }, '← 返回');
     const head = h('div', { class: 'summary cw-bar' }, back, h('b', null, '写卡'), h('span', { class: 'spacer' }));
     const why = h('div', { class: 'dim cw-why', 'data-fk': 'cw-why', hidden: true });
 
     // 正常进不到这里（「写卡」会先建好卡）：写卡页开着时当前卡被删光了之类
     if (!cardId) {
-        const root = h('div', { class: 'cw', 'data-card': '' }, head, why, h('div', { class: 'empty' }, '现在没有当前卡。点「← 返回」回到「存档」页。'));
+        const root = h('div', { class: 'cw', 'data-card': '' }, head, why, h('div', { class: 'empty' }, '现在没有当前卡。点「← 返回」回到 Meetup 的卡列表。'));
         return { root, cardId, greetRows: [], els: { why } };
     }
 
@@ -167,8 +168,8 @@ function buildPage(cardId) {
     const newChatBtn = h('button', { 'data-fk': 'cw-new-chat', type: 'button', title: '给这张卡新开一个存档，用勾着「当前」的那个开场白（没有勾着的就用第一个非空的），从头再聊',
         onclick: startNewChat }, '新对话');
     const greetNote = h('div', { class: 'dim cw-note', 'data-fk': 'cw-greet-note' });
-    const worldBtn = h('button', { 'data-fk': 'cw-world', type: 'button', onclick: () => $('#tabs button[data-tab="world"]')?.click() }, '编辑世界书');
-    const regexBtn = h('button', { 'data-fk': 'cw-regex', type: 'button', onclick: () => $('#tabs button[data-tab="regex"]')?.click() }, '编辑美化（正则）');
+    const worldBtn = h('button', { 'data-fk': 'cw-world', type: 'button', onclick: () => { closePhoneIfNarrow(); $('#tabs button[data-tab="world"]')?.click(); } }, '编辑世界书');
+    const regexBtn = h('button', { 'data-fk': 'cw-regex', type: 'button', onclick: () => { closePhoneIfNarrow(); $('#tabs button[data-tab="regex"]')?.click(); } }, '编辑美化（正则）');
 
     const field = (label, hint, ...kids) => h('div', { class: 'cw-field' },
         h('div', { class: 'cw-label' }, label), hint ? h('div', { class: 'dim cw-hint' }, hint) : null, ...kids);
@@ -431,7 +432,7 @@ function schedulePreview(chat) {
             const list = greetingList(state.card);
             const fi = slot === 'auto' ? (list.some(Boolean) ? 0 : -1) : slot === null ? -1 : filteredIndex(list, slot);
             if (!chatUntouched()) { /* 聊过的存档：改开场白走 commitFloor0；改名不回头改已发出的楼层 */ }
-            else if (slot === null) greetingNote = '这个存档开头用的那个开场白已经删掉了：聊天区先不动，点「存档」页的「新对话」会按新的列表开。';
+            else if (slot === null) greetingNote = '这个存档开头用的那个开场白已经删掉了：聊天区先不动，点 Meetup 里的「新对话」会按新的列表开。';
             else if (fi < 0) greetingNote = slot === 'auto' ? '' : '这个存档开头用的那个开场白现在是空的：聊天区先不动，写上内容后会接着跟着变。';
             else {
                 const r = refreshGreetingInPlace(fi);   // 'updated' 时它自己已经 startChat → renderAll

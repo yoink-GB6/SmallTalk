@@ -15,8 +15,10 @@ import { refreshEndpoints } from './ui/tab-provider.js';
 import { initArchive, bindArchive, newChat } from './ui/archive.js';
 import { initDrawer } from './ui/drawer.js';
 import { initTheme } from './ui/theme.js';
-import { initPhone, openSettings, onPhoneView } from './ui/phone/phone.js';
+import { initPhone, openSettings, onPhoneView, openMeetup } from './ui/phone/phone.js';
 import { renderMiscTab } from './ui/tab-misc.js';
+import { renderArchiveTab } from './ui/tab-archive.js';
+import { renderExcerptsTab } from './ui/tab-excerpts.js';
 import { bindPersonaTab } from './ui/tab-persona.js';
 import { initPwaUi } from './ui/pwa-ui.js';
 import { bindChatSearch } from './ui/chat-search.js';
@@ -61,7 +63,7 @@ function bind() {
     const gotoTab = name => () => document.querySelector(`#tabs button[data-tab="${name}"]`).click();
     $('#manual-badge').addEventListener('click', () => openSettings('#misc-manual'));   // 手动模式开关在手机的 Settings 里：打开手机、滚到「手动模式」那一节
     $('#chat-warn').addEventListener('click', gotoTab('provider'));
-    $('#chat-empty-archive').addEventListener('click', gotoTab('archive'));
+    $('#chat-empty-archive').addEventListener('click', openMeetup);   // 「存档」页现在是手机里的 Meetup
 
     $('#manual-ok').addEventListener('click', () => {
         if (ui.switching) return;   // 正在切换存档：这条回复不知道该进哪个存档（切换完面板会被收起）
@@ -108,7 +110,11 @@ await initArchive();
 bind();
 initDrawer();
 initPhone();          // 手机壳（顶栏的手机图标接在这里；Settings 应用里装着原来的「杂项」页）
-onPhoneView(v => { if (v === 'settings') renderMiscTab(); });   // 每次进入 Settings 都重画一遍，保证不是旧内容
+onPhoneView(v => {   // 每次进入 Settings / Meetup / Clippings 都重画一遍（Meetup 重读存储），保证不是旧内容
+    if (v === 'settings') renderMiscTab();
+    else if (v === 'meetup') renderArchiveTab(true);
+    else if (v === 'clippings') renderExcerptsTab(true);
+});
 initTheme();          // Settings 里的主题下拉框（<html data-theme> 的首屏设置在 index.html 的内联脚本里）
 bindArchive();
 bindChatSearch();     // 聊天区工具栏的「搜索」

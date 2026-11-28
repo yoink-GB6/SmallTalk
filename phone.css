@@ -259,3 +259,21 @@
     border: var(--border-width) solid rgb(236 230 217 / .16); border-radius: 50%;
   }
 }
+
+/* ── Meetup（原「存档」页）和 Clippings（原「摘抄」页）：整页节点挪进手机的应用里（phone/apps.js）。2026-11-28 追加 ──
+   这两页原来在右侧面板里，现在画在手机屏幕内：宽度 = 手机窗口宽度，所以让一切都能收窄、不撑出横向滚动 */
+.ph-page { min-width: 0; font-size: var(--font-size-md); }
+.ph-page .row, .ph-page .summary { flex-wrap: wrap; }
+.ph-page img, .ph-page textarea, .ph-page input[type="text"], .ph-page input:not([type]), .ph-page select { max-width: 100%; box-sizing: border-box; }
+.ph-page textarea, .ph-page input[type="text"], .ph-page input:not([type]) { width: 100%; }   /* 写卡页的各输入框：撑满手机宽度 */
+.ph-page .dim, .ph-page .empty, .ph-page pre { overflow-wrap: anywhere; }
+.ph-page pre { max-width: 100%; overflow-x: auto; }
+/* 手机窗口很窄（电脑上约 340px 宽，窄屏全屏 390px）：每张卡那一行放不下，允许换行（和 style.css 里 900px 以下抽屉里的那几条一样，只是这里按手机窗口宽度而不是视口宽度），
+   名字占第一行，按钮落到第二行；存档行同理，不出现横向滚动条 */
+.ph-page .arch-card > header.arch-head { flex-wrap: wrap; row-gap: 2px; }
+.ph-page .arch-card > header.arch-head > .arch-main { flex: 1 1 9em; }
+.ph-page .arch-card > header.arch-head > .arch-last { display: none; }
+.ph-page .arch-card > .body { padding-left: 12px; }
+.ph-page .arch-chat > header { flex-wrap: wrap; row-gap: 2px; }
+.ph-page .arch-chat > header > .arch-main { flex: 1 1 8em; }
+.ph-page .pitem { overflow-x: hidden; }
